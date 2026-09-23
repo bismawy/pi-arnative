@@ -133,10 +133,10 @@ export default function (pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					let loc = `📁 ${cwd}`;
+					let loc = `\uf07b ${cwd}`;
 					if (git) {
-						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "clean";
-						loc = `📁 ${cwd} | ${git.branch} | ${git.tag} | ${gitState}`;
+						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "\uf172 clean";
+						loc = `\uf07b ${cwd} | \uf126 ${git.branch} | \uf02b ${git.tag} | ${gitState}`;
 					}
 					const right1Text = formatModelName(currentModel, currentThinkingLevel);
 					const left1 = theme.fg("dim", loc);
@@ -147,10 +147,20 @@ export default function (pi: ExtensionAPI) {
 					const statuses = footerData.getExtensionStatuses();
 					const rawCache = statuses.get("pi-cache-stats");
 					const segs: string[] = [];
+					const cleanStatus = (s: string) => {
+						let res = s.replace(/^[^\w\s\d○⚡·]+/u, "").trim();
+						if (res.startsWith("MCP:")) {
+							res = `\uf233 ${res}`;
+						} else if (res.includes("ponytail:")) {
+							res = res.replace("ponytail:", "\uef04 ponytail:");
+						}
+						return res;
+					};
+
 					const mcp = statuses.get("mcp");
-					if (mcp !== undefined) segs.push(mcp);
+					if (mcp !== undefined) segs.push(cleanStatus(mcp));
 					for (const [k, s] of statuses) {
-						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(s);
+						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
 					}
 					const left2 = theme.fg("dim", segs.join(" | "));
 
