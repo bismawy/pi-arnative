@@ -17,6 +17,8 @@ let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 
+let sessionStartMs: number = Date.now();
+
 // Telemetri kecepatan token streaming murni (tok/s)
 let assistantStartMs: number | null = null;
 let assistantChars = 0;
@@ -71,6 +73,17 @@ function formatModelName(
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1) : "";
 	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${tint(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${acc(name)}${provStr}`;
+}
+
+function formatDuration(ms: number): string {
+	if (!ms || ms <= 0) return "-";
+	const totalSec = Math.floor(ms / 1000);
+	const h = Math.floor(totalSec / 3600);
+	const m = Math.floor((totalSec % 3600) / 60);
+	const s = totalSec % 60;
+	if (h > 0) return `${h}h ${m}m`;
+	if (m > 0) return `${m}m ${s}s`;
+	return `${s}s`;
 }
 
 function formatTokens(n: number): string {
@@ -132,6 +145,7 @@ function poke(): void {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
+		sessionStartMs = Date.now();
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
 		const cwd = ctx.cwd;
@@ -154,7 +168,9 @@ export default function (pi: ExtensionAPI) {
 					const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
 					const sep = dim(" | ");
 
-					let left1 = `${acc("\uf07b")} ${dim(cwd)}`;
+					const durationStr = formatDuration(Date.now() - sessionStartMs);
+					const pDuration = `${acc("\uf017")} ${tint(durationStr)}`;
+					let left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}`;
 					if (git) {
 						const gitIcon = acc("\uf172");
 						const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
@@ -162,7 +178,7 @@ export default function (pi: ExtensionAPI) {
 						const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
 						const pState = `${gitIcon}  ${gitText}`;
 						const pSpeed = latestSpeed !== null && latestSpeed > 0 ? `${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pBranch}${sep}${pTag}${sep}${pState}${pSpeed}`;
+						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}${pSpeed}`;
 					} else if (latestSpeed !== null && latestSpeed > 0) {
 						left1 = `${left1}${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`;
 					}
@@ -255,7 +271,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("message_end", async (event, ctx) => {
+	pi.on("message_end", async (event) => {
 		if (event.message.role === "assistant" && assistantStartMs !== null) {
 			const elapsed = (Date.now() - assistantStartMs) / 1000;
 			assistantStartMs = null;
@@ -265,12 +281,10 @@ export default function (pi: ExtensionAPI) {
 				latestSpeed = finalTokens / elapsed;
 			}
 		}
-		updateTokens(ctx);
 		poke();
 	});
 
-	pi.on("turn_end", async (_event, ctx) => {
-		updateTokens(ctx);
+	pi.on("turn_end", async () => {
 		poke();
 	});
 
