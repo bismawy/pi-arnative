@@ -17,6 +17,10 @@ let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 
+// Telemetri kecepatan token (tok/s)
+let turnStartMs: number | null = null;
+let latestSpeed: number | null = null;
+
 function run(cmd: string, args: string[], cwd: string): Promise<string> {
 	return new Promise((resolve) => {
 		execFile(cmd, args, { cwd, timeout: 5000 }, (err, stdout) => {
@@ -189,6 +193,9 @@ export default function (pi: ExtensionAPI) {
 					for (const [k, s] of statuses) {
 						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
 					}
+					if (latestSpeed !== null && latestSpeed > 0) {
+						segs.push(`${acc("⚡")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`);
+					}
 					const left2 = segs.join(sep);
 
 					const opt = parseOptimizer(rawCache);
@@ -217,11 +224,35 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", async (_event, ctx) => {
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
+		turnStartMs = Date.now();
 		await refreshGit(ctx.cwd);
 		poke();
 	});
 
-	pi.on("turn_end", async () => {
+	pi.on("turn_end", async (_event, ctx) => {
+		if (turnStartMs !== null) {
+			const elapsed = (Date.now() - turnStartMs) / 1000;
+			turnStartMs = null;
+			// Ambil output token turn terakhir dari pesan asisten paling akhir
+			let lastOutTokens = 0;
+			const branch = ctx.sessionManager.getBranch();
+			for (let i = branch.length - 1; i >= 0; i--) {
+				const e = branch[i];
+				if (e && typeof e === "object" && "type" in e && e.type === "message") {
+					const msg = (e as { message?: unknown }).message;
+					if (msg && typeof msg === "object" && "role" in msg && msg.role === "assistant" && "usage" in msg) {
+						const u = (msg as AssistantMessage).usage;
+						if (u && u.output > 0) {
+							lastOutTokens = u.output;
+							break;
+						}
+					}
+				}
+			}
+			if (lastOutTokens > 0 && elapsed > 0.1) {
+				latestSpeed = lastOutTokens / elapsed;
+			}
+		}
 		poke();
 	});
 
