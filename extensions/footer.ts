@@ -44,16 +44,19 @@ async function refreshGit(cwd: string): Promise<void> {
 function formatModelName(model: { id: string; name?: string; provider?: string } | undefined, thinkingLevel?: string): string {
 	if (!model) return "No Model";
 	let name = model.name || model.id;
+	const provider = model.provider ? model.provider.charAt(0).toUpperCase() + model.provider.slice(1) : "";
 	if (name === model.id) {
 		name = name
 			.split(/[-_]/)
 			.map((w) => (w.length > 0 ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
 			.join(" ");
 	}
-	const provider = model.provider ? model.provider.charAt(0).toUpperCase() + model.provider.slice(1) : "";
+	if (provider && name.toLowerCase().endsWith(`(${provider.toLowerCase()})`)) {
+		name = name.slice(0, name.lastIndexOf("(")).trim();
+	}
 	const provStr = provider ? ` (${provider})` : "";
-	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? ` | ${thinkingLevel}` : "";
-	return `${name}${provStr}${thinkStr}`;
+	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? `${thinkingLevel} | ` : "";
+	return `${thinkStr}${name}${provStr}`;
 }
 
 function poke(): void {
@@ -129,6 +132,11 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("model_select", async (event) => {
 		currentModelDisplay = formatModelName(event.model);
+		poke();
+	});
+
+	pi.on("thinking_level_select", async (event, ctx) => {
+		currentModelDisplay = formatModelName(ctx.model, event.level);
 		poke();
 	});
 
