@@ -43,8 +43,14 @@ async function refreshGit(cwd: string): Promise<void> {
 	};
 }
 
-function formatModelName(model: { id: string; name?: string; provider?: string } | undefined, thinkingLevel?: string): string {
-	if (!model) return "No Model";
+function formatModelName(
+	model: { id: string; name?: string; provider?: string } | undefined,
+	thinkingLevel: string | undefined,
+	acc: (t: string) => string,
+	tint: (t: string) => string,
+	dim: (t: string) => string,
+): string {
+	if (!model) return dim("No Model");
 	let name = model.name || model.id;
 	const provider = model.provider ? model.provider.charAt(0).toUpperCase() + model.provider.slice(1) : "";
 	if (name === model.id) {
@@ -56,10 +62,10 @@ function formatModelName(model: { id: string; name?: string; provider?: string }
 	if (provider && name.toLowerCase().endsWith(`(${provider.toLowerCase()})`)) {
 		name = name.slice(0, name.lastIndexOf("(")).trim();
 	}
-	const provStr = provider ? ` (${provider})` : "";
+	const provStr = provider ? ` ${dim(`(${provider})`)}` : "";
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1) : "";
-	const thinkStr = capThinking ? `\udb80\udf35 ${capThinking} | ` : "";
-	return `${thinkStr}${name}${provStr}`;
+	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${tint(capThinking)} ${tint("·")} ` : "";
+	return `${thinkStr}${acc(name)}${provStr}`;
 }
 
 function formatTokens(n: number): string {
@@ -79,7 +85,11 @@ function parseOptimizer(raw: string | undefined): string | null {
 	return m ? `${m[1]} ${m[2]} (${m[3]})` : null;
 }
 
-function getUsage(ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined }): string {
+function getUsage(
+	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
+	acc: (t: string) => string,
+	tint: (t: string) => string,
+): string {
 	let inp = 0;
 	let out = 0;
 	let read = 0;
@@ -97,12 +107,12 @@ function getUsage(ctx: { sessionManager: { getBranch(): readonly unknown[] }; ge
 		}
 	}
 	const parts: string[] = [];
-	if (inp > 0) parts.push(`↑${formatTokens(inp)}`);
-	if (out > 0) parts.push(`↓${formatTokens(out)}`);
-	if (read > 0) parts.push(` ${formatTokens(read)}`);
+	if (inp > 0) parts.push(`${acc("↑")}${tint(formatTokens(inp))}`);
+	if (out > 0) parts.push(`${acc("↓")}${tint(formatTokens(out))}`);
+	if (read > 0) parts.push(`${acc("\uf49b")} ${tint(formatTokens(read))}`);
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
-		parts.push(`\udb81\udfaf ${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`);
+		parts.push(`${acc("\udb81\udfaf")} ${tint(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	return parts.join(" ");
 }
@@ -148,8 +158,7 @@ export default function (pi: ExtensionAPI) {
 						const pState = `${gitIcon}  ${gitText}`;
 						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 					}
-					const right1Text = formatModelName(currentModel, currentThinkingLevel);
-					const right1 = theme.fg("accent", right1Text);
+					const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
 					const lines = [truncateToWidth(left1 + pad1 + right1, width)];
 
@@ -183,18 +192,19 @@ export default function (pi: ExtensionAPI) {
 					const left2 = segs.join(sep);
 
 					const opt = parseOptimizer(rawCache);
-					const usageStr = getUsage(ctx);
-					let right2Text = "";
+					const usageStr = getUsage(ctx, acc, tint);
+					let right2 = "";
 					if (opt && usageStr) {
-						right2Text = `${opt} · ${usageStr}`;
-					} else {
-						right2Text = opt || usageStr;
+						right2 = `${tint(opt)} ${tint("·")} ${usageStr}`;
+					} else if (opt) {
+						right2 = tint(opt);
+					} else if (usageStr) {
+						right2 = usageStr;
 					}
 
-					if (!right2Text) {
+					if (!right2) {
 						lines.push(truncateToWidth(left2, width));
 					} else {
-						const right2 = theme.fg("dim", right2Text);
 						const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
 						lines.push(truncateToWidth(left2 + pad2 + right2, width));
 					}
