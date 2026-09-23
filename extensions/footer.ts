@@ -160,7 +160,10 @@ export default function (pi: ExtensionAPI) {
 						const pBranch = `${acc("\uf126")} ${tint(git.branch)}`;
 						const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
 						const pState = `${gitIcon}  ${gitText}`;
-						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
+						const pSpeed = latestSpeed !== null && latestSpeed > 0 ? `${sep}${acc("⚡")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pBranch}${sep}${pTag}${sep}${pState}${pSpeed}`;
+					} else if (latestSpeed !== null && latestSpeed > 0) {
+						left1 = `${left1}${sep}${acc("⚡")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`;
 					}
 					const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
@@ -192,9 +195,6 @@ export default function (pi: ExtensionAPI) {
 					if (mcp !== undefined) segs.push(cleanStatus(mcp));
 					for (const [k, s] of statuses) {
 						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
-					}
-					if (latestSpeed !== null && latestSpeed > 0) {
-						segs.push(`${acc("⚡")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`);
 					}
 					const left2 = segs.join(sep);
 
