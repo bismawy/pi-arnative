@@ -135,14 +135,16 @@ export default function (pi: ExtensionAPI) {
 				render(width: number): string[] {
 					const acc = (text: string) => theme.fg("accent", text);
 					const dim = (text: string) => theme.fg("dim", text);
+					// Tint aksen cyan lembut (terbaca jelas, tidak pudar flat seperti dim biasa)
+					const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
 					const sep = dim(" | ");
 
 					let left1 = `${acc("\uf07b")} ${dim(cwd)}`;
 					if (git) {
 						const gitIcon = acc("\uf172");
-						const gitText = git.uncommitted > 0 ? dim(`~${git.uncommitted}`) : dim("clean");
-						const pBranch = `${acc("\uf126")} ${dim(git.branch)}`;
-						const pTag = `${acc("\uf02b")} ${dim(git.tag)}`;
+						const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
+						const pBranch = `${acc("\uf126")} ${tint(git.branch)}`;
+						const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
 						const pState = `${gitIcon}  ${gitText}`;
 						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 					}
@@ -157,7 +159,7 @@ export default function (pi: ExtensionAPI) {
 					const cleanStatus = (s: string) => {
 						if (s.includes("MCP:")) {
 							const m = s.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-							if (m) return `${acc("\uf233")} ${dim(m[0])}`;
+							if (m) return `${acc("\uf233")} ${tint(m[0])}`;
 						}
 						if (s.includes("ponytail")) {
 							const isActive = s.includes("●");
@@ -166,11 +168,11 @@ export default function (pi: ExtensionAPI) {
 							if (/LITE/i.test(s)) mode = "LITE";
 							else if (/ULTRA/i.test(s)) mode = "ULTRA";
 							else if (/FULL/i.test(s)) mode = "FULL";
-							return `${bullet} ${acc("\uef04")}  ${dim(`ponytail: ${mode}`)}`;
+							return `${acc("\uef04")}  ${tint("ponytail:")} ${bullet} ${tint(mode)}`;
 						}
 						let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
 						clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-						return dim(clean.trim());
+						return tint(clean.trim());
 					};
 
 					const mcp = statuses.get("mcp");
