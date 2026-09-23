@@ -133,13 +133,20 @@ export default function (pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					let loc = `\uf07b ${cwd}`;
+					const acc = (text: string) => theme.fg("accent", text);
+					const dim = (text: string) => theme.fg("dim", text);
+					const sep = dim(" | ");
+
+					let left1 = `${acc("\uf07b")} ${dim(cwd)}`;
 					if (git) {
-						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "\uf172  clean";
-						loc = `\uf07b ${cwd} | \uf126 ${git.branch} | \uf02b ${git.tag} | ${gitState}`;
+						const gitIcon = git.uncommitted > 0 ? acc("~") : acc("\uf172");
+						const gitText = git.uncommitted > 0 ? dim(String(git.uncommitted)) : dim("clean");
+						const pBranch = `${acc("\uf126")} ${dim(git.branch)}`;
+						const pTag = `${acc("\uf02b")} ${dim(git.tag)}`;
+						const pState = `${gitIcon}  ${gitText}`;
+						left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 					}
 					const right1Text = formatModelName(currentModel, currentThinkingLevel);
-					const left1 = theme.fg("dim", loc);
 					const right1 = theme.fg("accent", right1Text);
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
 					const lines = [truncateToWidth(left1 + pad1 + right1, width)];
@@ -152,14 +159,14 @@ export default function (pi: ExtensionAPI) {
 						clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
 						if (clean.includes("MCP:")) {
 							const m = clean.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-							if (m) return `\uf233 ${m[0]}`;
+							if (m) return `${acc("\uf233")} ${dim(m[0])}`;
 						}
 						if (clean.includes("ponytail:")) {
-							const bullet = clean.includes("○") ? "○ " : "";
+							const bullet = clean.includes("○") ? `${dim("○")} ` : "";
 							const p = clean.replace(/.*ponytail:\s*/, "").replace(/⚡\s+FULL/g, "⚡FULL");
-							return `${bullet}\uef04  ponytail: ${p.trim()}`;
+							return `${bullet}${acc("\uef04")}  ${dim(`ponytail: ${p.trim()}`)}`;
 						}
-						return clean.trim();
+						return dim(clean.trim());
 					};
 
 					const mcp = statuses.get("mcp");
@@ -167,7 +174,7 @@ export default function (pi: ExtensionAPI) {
 					for (const [k, s] of statuses) {
 						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
 					}
-					const left2 = theme.fg("dim", segs.join(" | "));
+					const left2 = segs.join(sep);
 
 					const opt = parseOptimizer(rawCache);
 					const usageStr = getUsage(ctx);
