@@ -139,8 +139,8 @@ export default function (pi: ExtensionAPI) {
 
 					let left1 = `${acc("\uf07b")} ${dim(cwd)}`;
 					if (git) {
-						const gitIcon = git.uncommitted > 0 ? acc("~") : acc("\uf172");
-						const gitText = git.uncommitted > 0 ? dim(String(git.uncommitted)) : dim("clean");
+						const gitIcon = acc("\uf172");
+						const gitText = git.uncommitted > 0 ? dim(`~${git.uncommitted}`) : dim("clean");
 						const pBranch = `${acc("\uf126")} ${dim(git.branch)}`;
 						const pTag = `${acc("\uf02b")} ${dim(git.tag)}`;
 						const pState = `${gitIcon}  ${gitText}`;
@@ -155,17 +155,21 @@ export default function (pi: ExtensionAPI) {
 					const rawCache = statuses.get("pi-cache-stats");
 					const segs: string[] = [];
 					const cleanStatus = (s: string) => {
-						let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
-						clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-						if (clean.includes("MCP:")) {
-							const m = clean.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
+						if (s.includes("MCP:")) {
+							const m = s.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
 							if (m) return `${acc("\uf233")} ${dim(m[0])}`;
 						}
-						if (clean.includes("ponytail:")) {
-							const bullet = clean.includes("○") ? `${dim("○")} ` : "";
-							const p = clean.replace(/.*ponytail:\s*/, "").replace(/⚡\s+FULL/g, "⚡FULL");
-							return `${bullet}${acc("\uef04")}  ${dim(`ponytail: ${p.trim()}`)}`;
+						if (s.includes("ponytail")) {
+							const isActive = s.includes("●");
+							const bullet = isActive ? acc("●") : dim("○");
+							let mode = "FULL";
+							if (/LITE/i.test(s)) mode = "LITE";
+							else if (/ULTRA/i.test(s)) mode = "ULTRA";
+							else if (/FULL/i.test(s)) mode = "FULL";
+							return `${bullet} ${acc("\uef04")}  ${dim(`ponytail: ${mode}`)}`;
 						}
+						let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
+						clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
 						return dim(clean.trim());
 					};
 
