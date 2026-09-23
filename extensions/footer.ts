@@ -5,6 +5,7 @@
  * Git via exec langsung, tampil hanya di repo. Render baca cache,
  * disegarkan tiap turn, pesan, dan ganti model agar status hidup.
  */
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
@@ -12,7 +13,8 @@ import { execFile } from "node:child_process";
 type GitInfo = { branch: string; tag: string; uncommitted: number } | null;
 
 let git: GitInfo = null;
-let currentModelDisplay = "No Model";
+let currentThinkingLevel: string | undefined = undefined;
+let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 
 function run(cmd: string, args: string[], cwd: string): Promise<string> {
@@ -55,8 +57,53 @@ function formatModelName(model: { id: string; name?: string; provider?: string }
 		name = name.slice(0, name.lastIndexOf("(")).trim();
 	}
 	const provStr = provider ? ` (${provider})` : "";
-	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? `${thinkingLevel} | ` : "";
+	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? `⚡ ${thinkingLevel} | ` : "";
 	return `${thinkStr}${name}${provStr}`;
+}
+
+function formatTokens(n: number): string {
+	if (!n || n <= 0) return "0";
+	if (n < 1000) return String(n);
+	if (n < 1_000_000) {
+		const k = n / 1000;
+		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
+	}
+	const m = n / 1_000_000;
+	return `${m.toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+function parseOptimizer(raw: string | undefined): string | null {
+	if (!raw) return null;
+	const m = raw.match(/([A-Za-z0-9_-]+)\s+cache\s+(\d+\/\d+)·[^\s]+\s+([\d.]+%)/);
+	return m ? `${m[1]} ${m[2]} (${m[3]})` : null;
+}
+
+function getUsage(ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined }): string {
+	let inp = 0;
+	let out = 0;
+	let read = 0;
+	for (const e of ctx.sessionManager.getBranch()) {
+		if (e && typeof e === "object" && "type" in e && e.type === "message") {
+			const m = (e as { message?: unknown }).message;
+			if (m && typeof m === "object" && "role" in m && m.role === "assistant" && "usage" in m) {
+				const u = (m as AssistantMessage).usage;
+				if (u) {
+					inp += u.input || 0;
+					out += u.output || 0;
+					read += u.cacheRead || 0;
+				}
+			}
+		}
+	}
+	const parts: string[] = [];
+	if (inp > 0) parts.push(`↑${formatTokens(inp)}`);
+	if (out > 0) parts.push(`↓${formatTokens(out)}`);
+	if (read > 0) parts.push(` ${formatTokens(read)}`);
+	const u = ctx.getContextUsage();
+	if (u && u.percent !== null && u.tokens !== null) {
+		parts.push(`⚡ ${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`);
+	}
+	return parts.join(" ");
 }
 
 function poke(): void {
@@ -69,7 +116,8 @@ function poke(): void {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
-		currentModelDisplay = formatModelName(ctx.model, ctx.thinkingLevel);
+		currentModel = ctx.model;
+		currentThinkingLevel = ctx.thinkingLevel;
 		const cwd = ctx.cwd;
 		await refreshGit(cwd);
 		ctx.ui.setFooter((tui, theme, footerData) => {
@@ -89,13 +137,14 @@ export default function (pi: ExtensionAPI) {
 						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "clean";
 						loc = `📁 ${cwd} | ${git.branch} | ${git.tag} | ${gitState}`;
 					}
+					const right1Text = formatModelName(currentModel, currentThinkingLevel);
 					const left1 = theme.fg("dim", loc);
-					const right1 = theme.fg("accent", currentModelDisplay);
+					const right1 = theme.fg("accent", right1Text);
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
 					const lines = [truncateToWidth(left1 + pad1 + right1, width)];
 
 					const statuses = footerData.getExtensionStatuses();
-					const cache = statuses.get("pi-cache-stats");
+					const rawCache = statuses.get("pi-cache-stats");
 					const segs: string[] = [];
 					const mcp = statuses.get("mcp");
 					if (mcp !== undefined) segs.push(mcp);
@@ -103,10 +152,20 @@ export default function (pi: ExtensionAPI) {
 						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(s);
 					}
 					const left2 = theme.fg("dim", segs.join(" | "));
-					if (cache === undefined) {
+
+					const opt = parseOptimizer(rawCache);
+					const usageStr = getUsage(ctx);
+					let right2Text = "";
+					if (opt && usageStr) {
+						right2Text = `${opt} · ${usageStr}`;
+					} else {
+						right2Text = opt || usageStr;
+					}
+
+					if (!right2Text) {
 						lines.push(truncateToWidth(left2, width));
 					} else {
-						const right2 = theme.fg("dim", cache);
+						const right2 = theme.fg("dim", right2Text);
 						const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
 						lines.push(truncateToWidth(left2 + pad2 + right2, width));
 					}
@@ -117,7 +176,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		currentModelDisplay = formatModelName(ctx.model, ctx.thinkingLevel);
+		currentModel = ctx.model;
+		currentThinkingLevel = ctx.thinkingLevel;
 		await refreshGit(ctx.cwd);
 		poke();
 	});
@@ -131,12 +191,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (event) => {
-		currentModelDisplay = formatModelName(event.model);
+		currentModel = event.model;
 		poke();
 	});
 
-	pi.on("thinking_level_select", async (event, ctx) => {
-		currentModelDisplay = formatModelName(ctx.model, event.level);
+	pi.on("thinking_level_select", async (event) => {
+		currentThinkingLevel = event.level;
 		poke();
 	});
 
