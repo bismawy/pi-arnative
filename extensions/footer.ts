@@ -135,7 +135,7 @@ export default function (pi: ExtensionAPI) {
 				render(width: number): string[] {
 					let loc = `\uf07b ${cwd}`;
 					if (git) {
-						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "\uf172 clean";
+						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "\uf172  clean";
 						loc = `\uf07b ${cwd} | \uf126 ${git.branch} | \uf02b ${git.tag} | ${gitState}`;
 					}
 					const right1Text = formatModelName(currentModel, currentThinkingLevel);
@@ -148,13 +148,18 @@ export default function (pi: ExtensionAPI) {
 					const rawCache = statuses.get("pi-cache-stats");
 					const segs: string[] = [];
 					const cleanStatus = (s: string) => {
-						let res = s.replace(/^[^\w\s\d○⚡·]+/u, "").trim();
-						if (res.startsWith("MCP:")) {
-							res = `\uf233 ${res}`;
-						} else if (res.includes("ponytail:")) {
-							res = res.replace("ponytail:", "\uef04 ponytail:");
+						let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
+						clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
+						if (clean.includes("MCP:")) {
+							const m = clean.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
+							if (m) return `\uf233 ${m[0]}`;
 						}
-						return res;
+						if (clean.includes("ponytail:")) {
+							const bullet = clean.includes("○") ? "○ " : "";
+							const p = clean.replace(/.*ponytail:\s*/, "").replace(/⚡\s+FULL/g, "⚡FULL");
+							return `${bullet}\uef04  ponytail: ${p.trim()}`;
+						}
+						return clean.trim();
 					};
 
 					const mcp = statuses.get("mcp");
