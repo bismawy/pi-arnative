@@ -9,10 +9,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 
-type GitInfo = { branch: string; tag: string } | null;
+type GitInfo = { branch: string; tag: string; uncommitted: number } | null;
 
 let git: GitInfo = null;
-let modelId = "no-model";
+let currentModelDisplay = "No Model";
 let rerender: (() => void) | null = null;
 
 function run(cmd: string, args: string[], cwd: string): Promise<string> {
@@ -29,8 +29,31 @@ async function refreshGit(cwd: string): Promise<void> {
 		git = null;
 		return;
 	}
-	const t = await run("git", ["describe", "--tags", "--abbrev=0"], cwd);
-	git = { branch, tag: t || "-" };
+	const [tag, status] = await Promise.all([
+		run("git", ["describe", "--tags", "--abbrev=0"], cwd),
+		run("git", ["status", "--porcelain"], cwd),
+	]);
+	const uncommitted = status ? status.split("\n").filter((l) => l.trim().length > 0).length : 0;
+	git = {
+		branch,
+		tag: tag || "-",
+		uncommitted,
+	};
+}
+
+function formatModelName(model: { id: string; name?: string; provider?: string } | undefined, thinkingLevel?: string): string {
+	if (!model) return "No Model";
+	let name = model.name || model.id;
+	if (name === model.id) {
+		name = name
+			.split(/[-_]/)
+			.map((w) => (w.length > 0 ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
+			.join(" ");
+	}
+	const provider = model.provider ? model.provider.charAt(0).toUpperCase() + model.provider.slice(1) : "";
+	const provStr = provider ? ` (${provider})` : "";
+	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? ` | ${thinkingLevel}` : "";
+	return `${name}${provStr}${thinkStr}`;
 }
 
 function poke(): void {
@@ -43,7 +66,7 @@ function poke(): void {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
-		if (ctx.model) modelId = ctx.model.id;
+		currentModelDisplay = formatModelName(ctx.model, ctx.thinkingLevel);
 		const cwd = ctx.cwd;
 		await refreshGit(cwd);
 		ctx.ui.setFooter((tui, theme, footerData) => {
@@ -58,9 +81,13 @@ export default function (pi: ExtensionAPI) {
 				},
 				invalidate() {},
 				render(width: number): string[] {
-					const loc = git ? `📁 ${cwd} | ${git.branch} | ${git.tag}` : `📁 ${cwd}`;
+					let loc = `📁 ${cwd}`;
+					if (git) {
+						const gitState = git.uncommitted > 0 ? `~${git.uncommitted}` : "clean";
+						loc = `📁 ${cwd} | ${git.branch} | ${git.tag} | ${gitState}`;
+					}
 					const left1 = theme.fg("dim", loc);
-					const right1 = theme.fg("accent", modelId);
+					const right1 = theme.fg("accent", currentModelDisplay);
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
 					const lines = [truncateToWidth(left1 + pad1 + right1, width)];
 
@@ -87,6 +114,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
+		currentModelDisplay = formatModelName(ctx.model, ctx.thinkingLevel);
 		await refreshGit(ctx.cwd);
 		poke();
 	});
@@ -100,7 +128,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("model_select", async (event) => {
-		modelId = event.model.id;
+		currentModelDisplay = formatModelName(event.model);
 		poke();
 	});
 
