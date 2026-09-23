@@ -57,7 +57,8 @@ function formatModelName(model: { id: string; name?: string; provider?: string }
 		name = name.slice(0, name.lastIndexOf("(")).trim();
 	}
 	const provStr = provider ? ` (${provider})` : "";
-	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? `\udb80\udf35 ${thinkingLevel} | ` : "";
+	const capThinking = thinkingLevel && thinkingLevel !== "off" ? thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1) : "";
+	const thinkStr = capThinking ? `\udb80\udf35 ${capThinking} | ` : "";
 	return `${thinkStr}${name}${provStr}`;
 }
 
