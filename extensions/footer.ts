@@ -17,8 +17,9 @@ let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 
-// Telemetri kecepatan token (tok/s)
-let turnStartMs: number | null = null;
+// Telemetri kecepatan token streaming murni (tok/s)
+let assistantStartMs: number | null = null;
+let assistantChars = 0;
 let latestSpeed: number | null = null;
 
 function run(cmd: string, args: string[], cwd: string): Promise<string> {
@@ -224,39 +225,52 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", async (_event, ctx) => {
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
-		turnStartMs = Date.now();
 		await refreshGit(ctx.cwd);
 		poke();
 	});
 
-	pi.on("turn_end", async (_event, ctx) => {
-		if (turnStartMs !== null) {
-			const elapsed = (Date.now() - turnStartMs) / 1000;
-			turnStartMs = null;
-			// Ambil output token turn terakhir dari pesan asisten paling akhir
-			let lastOutTokens = 0;
-			const branch = ctx.sessionManager.getBranch();
-			for (let i = branch.length - 1; i >= 0; i--) {
-				const e = branch[i];
-				if (e && typeof e === "object" && "type" in e && e.type === "message") {
-					const msg = (e as { message?: unknown }).message;
-					if (msg && typeof msg === "object" && "role" in msg && msg.role === "assistant" && "usage" in msg) {
-						const u = (msg as AssistantMessage).usage;
-						if (u && u.output > 0) {
-							lastOutTokens = u.output;
-							break;
-						}
-					}
+	pi.on("message_start", async (event) => {
+		if (event.message.role === "assistant") {
+			assistantStartMs = Date.now();
+			assistantChars = 0;
+		}
+	});
+
+	pi.on("message_update", async (event) => {
+		if (event.message.role === "assistant" && assistantStartMs !== null) {
+			const streamEvent = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
+			if (streamEvent?.delta) {
+				assistantChars += streamEvent.delta.length;
+			}
+			const elapsed = (Date.now() - assistantStartMs) / 1000;
+			if (elapsed >= 0.3) {
+				// Perkiraan token dari karakter (1 token ≈ 3.8-4 char) atau usage jika tersedia
+				const usageOut = (event.message as AssistantMessage).usage?.output;
+				const currentTokens = typeof usageOut === "number" && usageOut > 0 ? usageOut : Math.ceil(assistantChars / 3.8);
+				if (currentTokens > 0) {
+					latestSpeed = currentTokens / elapsed;
+					poke();
 				}
 			}
-			if (lastOutTokens > 0 && elapsed > 0.1) {
-				latestSpeed = lastOutTokens / elapsed;
+		}
+	});
+
+	pi.on("message_end", async (event, ctx) => {
+		if (event.message.role === "assistant" && assistantStartMs !== null) {
+			const elapsed = (Date.now() - assistantStartMs) / 1000;
+			assistantStartMs = null;
+			const usageOut = (event.message as AssistantMessage).usage?.output;
+			const finalTokens = typeof usageOut === "number" && usageOut > 0 ? usageOut : Math.ceil(assistantChars / 3.8);
+			if (finalTokens > 0 && elapsed > 0.2) {
+				latestSpeed = finalTokens / elapsed;
 			}
 		}
+		updateTokens(ctx);
 		poke();
 	});
 
-	pi.on("message_end", async () => {
+	pi.on("turn_end", async (_event, ctx) => {
+		updateTokens(ctx);
 		poke();
 	});
 
