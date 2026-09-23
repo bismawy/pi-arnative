@@ -57,7 +57,7 @@ function formatModelName(model: { id: string; name?: string; provider?: string }
 		name = name.slice(0, name.lastIndexOf("(")).trim();
 	}
 	const provStr = provider ? ` (${provider})` : "";
-	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? `⚡ ${thinkingLevel} | ` : "";
+	const thinkStr = thinkingLevel && thinkingLevel !== "off" ? `\udb80\udf35 ${thinkingLevel} | ` : "";
 	return `${thinkStr}${name}${provStr}`;
 }
 
@@ -101,7 +101,7 @@ function getUsage(ctx: { sessionManager: { getBranch(): readonly unknown[] }; ge
 	if (read > 0) parts.push(` ${formatTokens(read)}`);
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
-		parts.push(`⚡ ${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`);
+		parts.push(`\udb81\udfaf ${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`);
 	}
 	return parts.join(" ");
 }
