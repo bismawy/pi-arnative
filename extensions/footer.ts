@@ -64,7 +64,7 @@ function formatModelName(
 	}
 	const provStr = provider ? ` ${dim(`(${provider})`)}` : "";
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1) : "";
-	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${tint(capThinking)} ${tint("·")} ` : "";
+	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${tint(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${acc(name)}${provStr}`;
 }
 
@@ -195,7 +195,7 @@ export default function (pi: ExtensionAPI) {
 					const usageStr = getUsage(ctx, acc, tint);
 					let right2 = "";
 					if (opt && usageStr) {
-						right2 = `${tint(opt)} ${tint("·")} ${usageStr}`;
+						right2 = `${tint(opt)} ${dim("·")} ${usageStr}`;
 					} else if (opt) {
 						right2 = tint(opt);
 					} else if (usageStr) {
