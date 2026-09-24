@@ -217,7 +217,7 @@ function minimal(
 				const inner = Math.max(8, width - 4);
 				const rows = titleRow(
 					theme,
-					theme.fg("warning", "󰔟"),
+					theme.fg("warning", spinIcon()),
 					name(theme, tint),
 					call(args, theme, tint, false),
 					inner,
