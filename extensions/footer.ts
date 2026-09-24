@@ -35,6 +35,25 @@ if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean
 const USER_TIMESTAMPS_MAP = new Map<string, number>();
 let activeThemeProxy: { fg(color: string, text: string): string } | null = null;
 
+// Sembunyikan box "Reloading keybindings, extensions, skills..." bawaan pi
+// (hardcoded di handleReloadCommand, tak ada auto-hide). Patch render Container
+// via rantai prototype (Container tak diekspor); drop seluruh box saat match.
+export function shouldHideReloadBox(lines: readonly string[]): boolean {
+	return lines.some((l) => l.includes("Reloading keybindings"));
+}
+const RELOAD_BOX_KEY = Symbol.for("pi-arnative.reloadBoxHidden");
+if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[RELOAD_BOX_KEY]) {
+	(globalThis as Record<symbol, boolean>)[RELOAD_BOX_KEY] = true;
+	const containerProto = Object.getPrototypeOf(UserMessageComponent.prototype) as { render?: (width: number) => string[] };
+	if (typeof containerProto?.render === "function") {
+		const origContainerRender = containerProto.render;
+		containerProto.render = function (width: number): string[] {
+			const lines = origContainerRender.call(this, width);
+			return shouldHideReloadBox(lines) ? [] : lines;
+		};
+	}
+}
+
 function formatClock(timestamp?: number): string {
 	const d = timestamp && timestamp > 0 ? new Date(timestamp) : new Date();
 	const h = String(d.getHours()).padStart(2, "0");
@@ -664,6 +683,10 @@ if (isMain) {
 		bubbleBgOpen({ bg: (_c, t) => `\x1b[48;2;52;53;61m${t}\x1b[49m` }) === "\x1b[48;2;52;53;61m",
 		"bgOpen terambil dari probe tema",
 	);
+
+	// Box reload bawaan pi tersembunyi penuh (bukan baris demi baris)
+	assert(shouldHideReloadBox(["┌──┐", "│ Reloading keybindings, extensions, skills... │"]) === true, "box reload terdeteksi");
+	assert(shouldHideReloadBox(["hello", "world"]) === false, "baris biasa lolos");
 
 	// Teks panjang: sliceByColumn tidak merusak lebar
 	const longLine = "a".repeat(40);
