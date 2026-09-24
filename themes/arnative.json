@@ -14,11 +14,11 @@
 		"accent": "#00d7ff",
 		"softCyan": "#7db9cd",
 		"selectedBg": "#3a3a4a",
-		"userMsgBg": "#35322c",
-		"toolPendingBg": "#2a2722",
+		"userMsgBg": "#364648",
+		"toolPendingBg": "#2e3839",
 		"toolSuccessBg": "#283228",
 		"toolErrorBg": "#3c2828",
-		"customMsgBg": "#2e2b25"
+		"customMsgBg": "#344244"
 	},
 	"colors": {
 		"accent": "accent",
