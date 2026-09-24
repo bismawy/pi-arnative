@@ -285,7 +285,8 @@ function poke(): void {
 export default function (pi: ExtensionAPI) {
 	let runtimeGen = 0;
 
-	// Catat timestamp pesan user ke map agar UserMessageComponent bisa menampilkan waktu aslinya
+	// Catat timestamp pesan user ke map agar UserMessageComponent bisa menampilkan waktu aslinya;
+	// asisten: mulai timer kecepatan token. Satu handler (dulu dua - duplikat).
 	pi.on("message_start", async (event) => {
 		if (event.message.role === "user") {
 			const text = typeof event.message.content === "string"
@@ -294,6 +295,9 @@ export default function (pi: ExtensionAPI) {
 			if (text.trim()) {
 				USER_TIMESTAMPS_MAP.set(text.trim(), event.message.timestamp || Date.now());
 			}
+		} else if (event.message.role === "assistant") {
+			assistantStartMs = Date.now();
+			assistantChars = 0;
 		}
 	});
 
@@ -486,13 +490,6 @@ export default function (pi: ExtensionAPI) {
 		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
 		(globalThis as Record<symbol, any>)[CWD_KEY] = ctx.cwd;
 		void refreshGit(ctx.cwd).then(() => poke());
-	});
-
-	pi.on("message_start", async (event) => {
-		if (event.message.role === "assistant") {
-			assistantStartMs = Date.now();
-			assistantChars = 0;
-		}
 	});
 
 	pi.on("message_update", async (event) => {
