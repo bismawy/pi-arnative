@@ -11,11 +11,13 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 
 type GitInfo = { branch: string; tag: string; uncommitted: number } | null;
+let gitRefreshInFlight = false;
 
 let git: GitInfo = null;
 let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
+let lastPokeMs = 0;
 
 let sessionStartMs: number = Date.now();
 
@@ -26,16 +28,19 @@ let latestSpeed: number | null = null;
 
 function run(cmd: string, args: string[], cwd: string): Promise<string> {
 	return new Promise((resolve) => {
-		execFile(cmd, args, { cwd, timeout: 5000 }, (err, stdout) => {
+		execFile(cmd, args, { cwd, timeout: 2000 }, (err, stdout) => {
 			resolve(err ? "" : String(stdout).trim());
 		});
 	});
 }
 
 async function refreshGit(cwd: string): Promise<void> {
+	if (gitRefreshInFlight) return;
+	gitRefreshInFlight = true;
 	const branch = await run("git", ["branch", "--show-current"], cwd);
 	if (!branch) {
 		git = null;
+		gitRefreshInFlight = false;
 		return;
 	}
 	const [tag, status] = await Promise.all([
@@ -48,6 +53,7 @@ async function refreshGit(cwd: string): Promise<void> {
 		tag: tag || "-",
 		uncommitted,
 	};
+	gitRefreshInFlight = false;
 }
 
 function formatModelName(
@@ -149,7 +155,7 @@ export default function (pi: ExtensionAPI) {
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
 		const cwd = ctx.cwd;
-		await refreshGit(cwd);
+		// Footer custom didaftar dulu agar langsung tampil; git menyusul di background.
 		ctx.ui.setFooter((tui, theme, footerData) => {
 			rerender = () => tui.requestRender();
 			const unsub = footerData.onBranchChange(() => {
@@ -236,13 +242,14 @@ export default function (pi: ExtensionAPI) {
 				},
 			};
 		});
+		// Git di background: dulu await sebelum setFooter → footer bawaan sempat tampil + start terasa berat.
+		void refreshGit(cwd).then(() => poke());
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
-		await refreshGit(ctx.cwd);
-		poke();
+		void refreshGit(ctx.cwd).then(() => poke());
 	});
 
 	pi.on("message_start", async (event) => {
@@ -265,7 +272,12 @@ export default function (pi: ExtensionAPI) {
 				const currentTokens = typeof usageOut === "number" && usageOut > 0 ? usageOut : Math.ceil(assistantChars / 3.8);
 				if (currentTokens > 0) {
 					latestSpeed = currentTokens / elapsed;
-					poke();
+					// render storm per-delta streaming: batasi requestRender 2Hz
+					const now = Date.now();
+					if (now - lastPokeMs >= 500) {
+						lastPokeMs = now;
+						poke();
+					}
 				}
 			}
 		}
