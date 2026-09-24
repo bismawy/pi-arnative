@@ -4,7 +4,7 @@ Paket Pi: tema aksen cyan plus footer jam dan model yang dipakai.
 
 ## Isi
 
-- `themes/arnative-cyan.json` — salinan tema dark, satu-satunya ubahan `vars.accent` jadi `#00d7ff`.
+- `themes/arnative.json` — salinan tema dark; ubahan: `vars.accent` jadi `#00d7ff` plus slot `tint` (`vars.softCyan` `#7db9cd`) untuk teks nilai yang lembut.
 - `extensions/footer.ts` — footer `jam | model-id`, tanpa timer. Jam dibaca saat render dan disegarkan tiap perubahan branch.
 
 ## Coba langsung
@@ -21,7 +21,7 @@ Dari direktori induk paket ini:
 pi install ./pi-arnative
 ```
 
-Lalu pilih tema lewat `/settings` > Theme > `arnative-cyan`.
+Lalu pilih tema lewat `/settings` > Theme > `arnative`.
 Footer aktif otomatis tiap sesi dimulai.
 
 ## Struktur
@@ -30,6 +30,6 @@ Footer aktif otomatis tiap sesi dimulai.
 pi-arnative/
 ├── package.json          # manifest pi: extensions/*.ts, themes/*.json
 ├── extensions/footer.ts
-├── themes/arnative-cyan.json
+├── themes/arnative.json
 └── README.md
 ```

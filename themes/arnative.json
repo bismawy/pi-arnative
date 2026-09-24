@@ -1,6 +1,6 @@
 {
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
-	"name": "arnative-cyan",
+	"name": "arnative",
 	"vars": {
 		"cyan": "#00d7ff",
 		"blue": "#5f87ff",
@@ -12,6 +12,7 @@
 		"dimGray": "#666666",
 		"darkGray": "#505050",
 		"accent": "#00d7ff",
+		"softCyan": "#7db9cd",
 		"selectedBg": "#3a3a4a",
 		"userMsgBg": "#343541",
 		"toolPendingBg": "#282832",
@@ -21,6 +22,7 @@
 	},
 	"colors": {
 		"accent": "accent",
+		"tint": "softCyan",
 		"border": "blue",
 		"borderAccent": "cyan",
 		"borderMuted": "darkGray",

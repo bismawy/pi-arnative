@@ -264,7 +264,7 @@ export default function (pi: ExtensionAPI) {
 						render(width: number): string[] {
 							const acc = (text: string) => theme.fg("accent", text);
 							const dim = (text: string) => theme.fg("dim", text);
-							// Slot "tint" (lembut) hanya didefinisikan arnative-cyan; tema
+							// Slot "tint" (lembut) hanya didefinisikan tema arnative; tema
 							// lain tidak punya -> jatuh kembali ke aksen penuh. Probe sekali
 							// per render karena theme.fg melempar untuk warna tak dikenal.
 							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
