@@ -510,7 +510,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			});
 
-			class InputBgEditor extends CustomEditor {
+			class ArnativeEditor extends CustomEditor {
 				constructor(tui: any, editorTheme: any, keybindings: any, options?: any) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
 				}
@@ -554,23 +554,8 @@ export default function (pi: ExtensionAPI) {
 					this.applyFixedIndicatorColors((this as any).workingStatusIndicator);
 					return super.renderTopBorder(width, hiddenLineCount);
 				}
-
-				render(width: number): string[] {
-					const lines = super.render(width);
-					let bgOpen: string;
-					try {
-						const th = this.getActiveTheme();
-						const probe = th ? th.bg("userMessageBg", "") : "";
-						const reset = "\x1b[49m";
-						bgOpen = probe.endsWith(reset) ? probe.slice(0, -reset.length) : probe;
-					} catch {
-						return lines;
-					}
-					if (!bgOpen) return lines;
-					return lines.map((l) => `${bgOpen}${l.split("\x1b[0m").join(`\x1b[0m${bgOpen}`)}\x1b[49m`);
-				}
 			}
-			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new InputBgEditor(tui, editorTheme, keybindings));
+			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
 		} catch {
 			// fallback
 		}
