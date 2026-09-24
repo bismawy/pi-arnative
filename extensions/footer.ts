@@ -515,24 +515,31 @@ export default function (pi: ExtensionAPI) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
 				}
 
+				private getActiveTheme() {
+					return ctx.ui?.theme ?? activeThemeProxy;
+				}
+
 				private applyFixedIndicatorColors(indicator: any) {
 					if (!indicator) return;
 					indicator.spinnerColorFn = (text: string) => {
 						try {
-							return ctx.theme.fg("accent", text);
+							const th = this.getActiveTheme();
+							return th ? th.fg("accent", text) : text;
 						} catch {
 							return text;
 						}
 					};
 					indicator.messageColorFn = (text: string) => {
 						try {
-							return ctx.theme.fg("tint", text);
-						} catch {
+							const th = this.getActiveTheme();
+							if (!th) return text;
 							try {
-								return ctx.theme.fg("muted", text);
+								return th.fg("tint", text);
 							} catch {
-								return text;
+								return th.fg("muted", text);
 							}
+						} catch {
+							return text;
 						}
 					};
 				}
@@ -552,7 +559,8 @@ export default function (pi: ExtensionAPI) {
 					const lines = super.render(width);
 					let bgOpen: string;
 					try {
-						const probe = ctx.theme.bg("userMessageBg", "");
+						const th = this.getActiveTheme();
+						const probe = th ? th.bg("userMessageBg", "") : "";
 						const reset = "\x1b[49m";
 						bgOpen = probe.endsWith(reset) ? probe.slice(0, -reset.length) : probe;
 					} catch {
