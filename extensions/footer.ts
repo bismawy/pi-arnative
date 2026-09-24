@@ -224,108 +224,132 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		try {
-			ctx.ui.setFooter((tui, theme, footerData) => {
-				rerender = () => tui.requestRender();
-				const unsub = footerData.onBranchChange(() => {
-					void refreshGit(cwd).then(() => tui.requestRender());
-				});
-				return {
-					dispose() {
-						rerender = null;
-						unsub();
-					},
-					invalidate() {},
-					render(width: number): string[] {
-						const acc = (text: string) => theme.fg("accent", text);
-						const dim = (text: string) => theme.fg("dim", text);
-						// Tint aksen cyan lembut (terbaca jelas, tidak pudar flat seperti dim biasa)
-						const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
-						const sep = dim(" | ");
+			let renderLogged = false;
+			const installFooter = (): void => {
+				ctx.ui.setFooter((tui, theme, footerData) => {
+					if (!renderLogged) {
+						renderLogged = true;
+						dlog(rid, "render-first");
+					}
+					rerender = () => tui.requestRender();
+					const unsub = footerData.onBranchChange(() => {
+						void refreshGit(cwd).then(() => tui.requestRender());
+					});
+					return {
+						dispose() {
+							dlog(rid, "footer-disposed");
+							rerender = null;
+							unsub();
+						},
+						invalidate() {},
+						render(width: number): string[] {
+							const acc = (text: string) => theme.fg("accent", text);
+							const dim = (text: string) => theme.fg("dim", text);
+							// Tint aksen cyan lembut (terbaca jelas, tidak pudar flat seperti dim biasa)
+							const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
+							const sep = dim(" | ");
 
-						const durationStr = formatDuration(Date.now() - sessionStartMs);
-						const pDuration = `${acc("\uf017")} ${tint(durationStr)}`;
-						let left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}`;
-						if (git) {
-							const gitIcon = acc("\uf172");
-							const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
-							const pBranch = `${acc("\uf126")} ${tint(git.branch)}${git.ahead > 0 ? ` ${tint(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${tint(`↓${git.behind}`)}` : ""}`;
-							const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
-							const pState = `${gitIcon}  ${gitText}`;
-							const pSpeed = latestSpeed !== null && latestSpeed > 0 ? `${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-							left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}${pSpeed}`;
-						} else if (latestSpeed !== null && latestSpeed > 0) {
-							left1 = `${left1}${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`;
-						}
-						const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
-						const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
-						const lines = [truncateToWidth(left1 + pad1 + right1, width)];
-
-						const statuses: ReadonlyMap<string, string> = (() => {
-							try {
-								return footerData.getExtensionStatuses();
-							} catch {
-								return new Map<string, string>();
+							const durationStr = formatDuration(Date.now() - sessionStartMs);
+							const pDuration = `${acc("\uf017")} ${tint(durationStr)}`;
+							let left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}`;
+							if (git) {
+								const gitIcon = acc("\uf172");
+								const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
+								const pBranch = `${acc("\uf126")} ${tint(git.branch)}${git.ahead > 0 ? ` ${tint(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${tint(`↓${git.behind}`)}` : ""}`;
+								const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
+								const pState = `${gitIcon}  ${gitText}`;
+								const pSpeed = latestSpeed !== null && latestSpeed > 0 ? `${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+								left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}${pSpeed}`;
+							} else if (latestSpeed !== null && latestSpeed > 0) {
+								left1 = `${left1}${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`;
 							}
-						})();
-						const rawCache = statuses.get("pi-cache-stats");
-						const segs: string[] = [];
-						const cleanStatus = (s: string) => {
-							if (s.includes("MCP:")) {
+							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
+							const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
+							const lines = [truncateToWidth(left1 + pad1 + right1, width)];
+
+							const statuses: ReadonlyMap<string, string> = (() => {
+								try {
+									return footerData.getExtensionStatuses();
+								} catch {
+									return new Map<string, string>();
+								}
+							})();
+							const rawCache = statuses.get("pi-cache-stats");
+							const segs: string[] = [];
+							const cleanStatus = (s: string) => {
+								if (s.includes("MCP:")) {
+									let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
+									const idx = clean.indexOf("MCP:");
+									let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
+									// buang emoji/spinner reconnecting, ikon tetap sama (\uf233)
+									rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
+									const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
+									return `${acc("\uf233")} ${tint(m ? m[0] : rest || "MCP")}`;
+								}
+								if (s.includes("ponytail")) {
+									const isActive = s.includes("●");
+									const bullet = isActive ? acc("●") : dim("○");
+									let mode = "FULL";
+									if (/LITE/i.test(s)) mode = "LITE";
+									else if (/ULTRA/i.test(s)) mode = "ULTRA";
+									else if (/FULL/i.test(s)) mode = "FULL";
+									return `${acc("\uef04")}  ${tint("ponytail:")} ${bullet} ${tint(mode)}`;
+								}
 								let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
-								const idx = clean.indexOf("MCP:");
-								let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
-								// buang emoji/spinner reconnecting, ikon tetap sama (\uf233)
-								rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
-								const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-								return `${acc("\uf233")} ${tint(m ? m[0] : rest || "MCP")}`;
+								clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
+								return tint(clean.trim());
+							};
+
+							const mcp = statuses.get("mcp");
+							if (mcp !== undefined) segs.push(cleanStatus(mcp));
+							for (const [k, s] of statuses) {
+								if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
 							}
-							if (s.includes("ponytail")) {
-								const isActive = s.includes("●");
-								const bullet = isActive ? acc("●") : dim("○");
-								let mode = "FULL";
-								if (/LITE/i.test(s)) mode = "LITE";
-								else if (/ULTRA/i.test(s)) mode = "ULTRA";
-								else if (/FULL/i.test(s)) mode = "FULL";
-								return `${acc("\uef04")}  ${tint("ponytail:")} ${bullet} ${tint(mode)}`;
+							const left2 = segs.join(sep);
+
+							const opt = parseOptimizer(rawCache);
+							let usageStr = "";
+							try {
+								usageStr = getUsage(ctx, acc, tint);
+							} catch {
+								// ctx basi di jeda reload/new: tampil tanpa usage
 							}
-							let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
-							clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-							return tint(clean.trim());
-						};
+							let right2 = "";
+							if (opt && usageStr) {
+								right2 = `${tint(opt)} ${dim("·")} ${usageStr}`;
+							} else if (opt) {
+								right2 = tint(opt);
+							} else if (usageStr) {
+								right2 = usageStr;
+							}
 
-						const mcp = statuses.get("mcp");
-						if (mcp !== undefined) segs.push(cleanStatus(mcp));
-						for (const [k, s] of statuses) {
-							if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
-						}
-						const left2 = segs.join(sep);
-
-						const opt = parseOptimizer(rawCache);
-						let usageStr = "";
-						try {
-							usageStr = getUsage(ctx, acc, tint);
-						} catch {
-							// ctx basi di jeda reload/new: tampil tanpa usage
-						}
-						let right2 = "";
-						if (opt && usageStr) {
-							right2 = `${tint(opt)} ${dim("·")} ${usageStr}`;
-						} else if (opt) {
-							right2 = tint(opt);
-						} else if (usageStr) {
-							right2 = usageStr;
-						}
-
-						if (!right2) {
-							lines.push(truncateToWidth(left2, width));
-						} else {
-							const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
-							lines.push(truncateToWidth(left2 + pad2 + right2, width));
-						}
-						return lines;
-					},
-				};
-			});
+							if (!right2) {
+								lines.push(truncateToWidth(left2, width));
+							} else {
+								const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
+								lines.push(truncateToWidth(left2 + pad2 + right2, width));
+							}
+							return lines;
+						},
+					};
+				});
+			};
+			installFooter();
+			dlog(rid, "installed");
+			for (const ms of [1200, 3000]) {
+				setTimeout(() => {
+					if (myGen !== footerGen) {
+						dlog(rid, "reassert-skipped-stale", `${ms}ms`);
+						return;
+					}
+					try {
+						installFooter();
+						dlog(rid, "reasserted", `${ms}ms`);
+					} catch (e) {
+						dlog(rid, "reassert-throw", String(e));
+					}
+				}, ms);
+			}
 		} catch (e) {
 			dlog(rid, "setFooter-throw", String(e));
 		}
