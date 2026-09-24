@@ -7,7 +7,7 @@
  * Disegarkan tiap turn, pesan, dan ganti model agar status hidup.
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 
@@ -222,8 +222,18 @@ export default function (pi: ExtensionAPI) {
 					render(width: number): string[] {
 						const acc = (text: string) => theme.fg("accent", text);
 						const dim = (text: string) => theme.fg("dim", text);
-						// Tint aksen cyan lembut (terbaca jelas, tidak pudar flat seperti dim biasa)
-						const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
+						// Slot "tint" (lembut) hanya didefinisikan tema arnative; tema
+						// lain tidak punya -> jatuh kembali ke aksen penuh. Probe sekali
+						// per render karena theme.fg melempar untuk warna tak dikenal.
+						const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
+						let tintName = "accent";
+						try {
+							fgAny("tint", "");
+							tintName = "tint";
+						} catch {
+							// tema tanpa slot tint: tetap aksen
+						}
+						const tint = (text: string) => fgAny(tintName, text);
 						const sep = dim(" | ");
 
 							const durationStr = formatDuration(Date.now() - sessionStartMs);
@@ -310,7 +320,28 @@ export default function (pi: ExtensionAPI) {
 						},
 					};
 				});
-			});
+				// Kotak input: background senada bubble user agar draft terlihat seperti
+				// pesan yang akan terkirim. Subclass CustomEditor didukung resmi -
+				// setCustomEditorComponent menyalin handler/autocomplete via duck typing.
+				// ctx.theme adalah live-proxy: ganti tema langsung diikuti tanpa reload.
+				class InputBgEditor extends CustomEditor {
+					render(width: number): string[] {
+						const lines = super.render(width);
+						let bgOpen: string;
+						try {
+							const probe = ctx.theme.bg("userMessageBg", "");
+							const reset = "\x1b[49m";
+							bgOpen = probe.endsWith(reset) ? probe.slice(0, -reset.length) : probe;
+						} catch {
+							return lines;
+						}
+						if (!bgOpen) return lines;
+						// Sel kursor memakai \x1b[0m yang mereset bg: pasang ulang bg
+						// setelah tiap reset agar sebaris tetap terisi penuh.
+						return lines.map((l) => `${bgOpen}${l.split("\x1b[0m").join(`\x1b[0m${bgOpen}`)}\x1b[49m`);
+					}
+				}
+				ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new InputBgEditor(tui, editorTheme, keybindings));
 		} catch {
 			// ctx basi setelah reload/new susulan: biarkan footer default.
 		}
