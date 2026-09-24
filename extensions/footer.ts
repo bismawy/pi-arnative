@@ -225,7 +225,7 @@ export default function (pi: ExtensionAPI) {
 
 		try {
 			let renderLogged = false;
-			const installFooter = (): void => {
+			const installFooter = (attempt = 0): void => {
 				ctx.ui.setFooter((tui, theme, footerData) => {
 					if (!renderLogged) {
 						renderLogged = true;
@@ -237,16 +237,32 @@ export default function (pi: ExtensionAPI) {
 					});
 					return {
 						dispose() {
-							dlog(rid, "footer-disposed");
+							dlog(rid, "footer-disposed", `attempt=${attempt}`);
 							rerender = null;
 							unsub();
+							// Sembuh otomatis: Pi/ekstensi lain me-reset UI -> pasang lagi
+							// selama runtime ini masih pemilik footer. Dibatasi 8x.
+							if (attempt < 8) {
+								setTimeout(() => {
+									if (myGen !== footerGen) {
+										dlog(rid, "heal-skipped-stale");
+										return;
+									}
+									try {
+										installFooter(attempt + 1);
+										dlog(rid, "healed", `attempt=${attempt + 1}`);
+									} catch (e) {
+										dlog(rid, "heal-throw", String(e));
+									}
+								}, 400);
+							}
 						},
 						invalidate() {},
 						render(width: number): string[] {
 							const acc = (text: string) => theme.fg("accent", text);
 							const dim = (text: string) => theme.fg("dim", text);
-							// Tint aksen cyan lembut (terbaca jelas, tidak pudar flat seperti dim biasa)
-							const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
+							// Ikut tema aktif (dulu RGB cyan hard-code #7DB9CD -> nyangkut saat ganti tema).
+							const tint = (text: string) => theme.fg("accent", text);
 							const sep = dim(" | ");
 
 							const durationStr = formatDuration(Date.now() - sessionStartMs);
@@ -336,20 +352,17 @@ export default function (pi: ExtensionAPI) {
 			};
 			installFooter();
 			dlog(rid, "installed");
-			for (const ms of [1200, 3000]) {
-				setTimeout(() => {
-					if (myGen !== footerGen) {
-						dlog(rid, "reassert-skipped-stale", `${ms}ms`);
-						return;
-					}
-					try {
-						installFooter();
-						dlog(rid, "reasserted", `${ms}ms`);
-					} catch (e) {
-						dlog(rid, "reassert-throw", String(e));
-					}
-				}, ms);
-			}
+			// Pengaman: bila setFooter diabaikan diam-diam (tanpa render/dispose),
+			// tegaskan sekali setelah 2 detik.
+			setTimeout(() => {
+				if (renderLogged || myGen !== footerGen) return;
+				try {
+					installFooter(0);
+					dlog(rid, "watchdog-installed");
+				} catch (e) {
+					dlog(rid, "watchdog-throw", String(e));
+				}
+			}, 2000);
 		} catch (e) {
 			dlog(rid, "setFooter-throw", String(e));
 		}
