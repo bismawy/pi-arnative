@@ -1,7 +1,8 @@
 /**
  * Arnative footer.
- * Baris 1: 📁 cwd [| branch | tag] ...... model.
- * Baris 2: status extension lain (mcp dulu) ...... cache optimizer.
+ * Baris 1: 📁 cwd [| branch ↑↓ | tag] ...... model.
+ * Baris 2 (bila ada): cache optimizer ...... usage. Mandiri penuh, tanpa
+ * membaca status extension lain.
  * Git via exec langsung, tampil hanya di repo. Render baca cache,
  * disegarkan tiap turn, pesan, dan ganti model agar status hidup.
  */
@@ -200,40 +201,14 @@ export default function (pi: ExtensionAPI) {
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
 					const lines = [truncateToWidth(left1 + pad1 + right1, width)];
 
-					const statuses: ReadonlyMap<string, string> = (() => {
-						try {
-							return footerData.getExtensionStatuses();
-						} catch {
-							return new Map<string, string>();
-						}
-					})();
-					const rawCache = statuses.get("pi-cache-stats");
-					const segs: string[] = [];
-					const cleanStatus = (s: string) => {
-						if (s.includes("MCP:")) {
-							const m = s.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-							if (m) return `${acc("\uf233")} ${tint(m[0])}`;
-						}
-						if (s.includes("ponytail")) {
-							const isActive = s.includes("●");
-							const bullet = isActive ? acc("●") : dim("○");
-							let mode = "FULL";
-							if (/LITE/i.test(s)) mode = "LITE";
-							else if (/ULTRA/i.test(s)) mode = "ULTRA";
-							else if (/FULL/i.test(s)) mode = "FULL";
-							return `${acc("\uef04")}  ${tint("ponytail:")} ${bullet} ${tint(mode)}`;
-						}
-						let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
-						clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-						return tint(clean.trim());
-					};
-
-					const mcp = statuses.get("mcp");
-					if (mcp !== undefined) segs.push(cleanStatus(mcp));
-					for (const [k, s] of statuses) {
-						if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
+					let rawCache: string | undefined;
+					try {
+						rawCache = footerData.getExtensionStatuses().get("pi-cache-stats");
+					} catch {
+						// ctx basi di jeda reload/new: tampil tanpa optimizer
 					}
-					const left2 = segs.join(sep);
+					// Segmen status extension lain sengaja dibuang: footer pi-arnative mandiri.
+					const left2 = "";
 
 					const opt = parseOptimizer(rawCache);
 					let usageStr = "";
@@ -252,7 +227,7 @@ export default function (pi: ExtensionAPI) {
 					}
 
 					if (!right2) {
-						lines.push(truncateToWidth(left2, width));
+						if (left2) lines.push(truncateToWidth(left2, width));
 					} else {
 						const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
 						lines.push(truncateToWidth(left2 + pad2 + right2, width));
