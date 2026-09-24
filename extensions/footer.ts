@@ -76,23 +76,25 @@ export function repairBubbleBg(line: string, bgOpen: string): string {
 }
 
 /**
- * Tempel jam di ujung kanan sebuah baris.
- * Jika `stripBg` true, background baris dibuang khusus di area jam sehingga
- * jam tampil dengan warna teks polos (tanpa background bubble).
+ * Tempel jam di ujung kanan sebuah baris dengan margin 1 kolom dari tepi kanan.
+ * Jika `bgOpen` disediakan (misal untuk chat user), area padding dan jam
+ * menggunakan background bubble tersebut sehingga tidak ada block hitam/kotak terpotong.
  */
 export function placeTimeAtRight(
 	line: string,
 	width: number,
 	timeBadge: string,
 	timeW: number,
-	stripBg = false,
+	bgOpen = "",
 ): string {
-	const targetCol = Math.max(0, width - timeW);
+	const margin = 1;
+	const targetCol = Math.max(0, width - timeW - margin);
 	const leftPart = sliceByColumn(line, 0, targetCol, true);
 	const leftW = visibleWidth(leftPart);
 	const pad = " ".repeat(Math.max(0, targetCol - leftW));
-	const reset = stripBg ? "\x1b[49m" : "";
-	return `${leftPart}${pad}${reset}${timeBadge}${reset}`;
+	const bg = bgOpen ? bgOpen : "";
+	const reset = bgOpen ? "\x1b[49m" : "";
+	return `${leftPart}${bg}${pad}${timeBadge} ${reset}`;
 }
 
 const CHAT_TIMESTAMP_PATCHED = Symbol.for("pi-arnative.chatTimestampPatched");
@@ -123,13 +125,13 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			const minGap = 2;
 
 			if (contentW + minGap + timeW <= width) {
-				// Muat di baris teks pertama: tempel rata kanan persis, tanpa memotong konten
-				lines[1] = placeTimeAtRight(contentLine, width, badge, timeW, true);
+				// Muat di baris teks pertama: tempel rata kanan persis dengan margin 1 spasi
+				lines[1] = placeTimeAtRight(contentLine, width, badge, timeW, bgOpen);
 			} else {
 				// Baris teks pertama terlalu panjang: JANGAN potong konten!
 				// Pindahkan jam ke baris padding bawah bubble (selalu ada dan kosong)
 				const lastIdx = lines.length - 1;
-				lines[lastIdx] = placeTimeAtRight(lines[lastIdx], width, badge, timeW, true);
+				lines[lastIdx] = placeTimeAtRight(lines[lastIdx], width, badge, timeW, bgOpen);
 			}
 			return lines;
 		};
@@ -178,7 +180,7 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 				const minGap = 2;
 
 				if (textW + minGap + timeW <= width) {
-					lines[targetIdx] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, false)}`;
+					lines[targetIdx] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, "")}`;
 				}
 			}
 			return lines;
@@ -648,15 +650,16 @@ if (isMain) {
 	const badge = "\x1b[36m17:09\x1b[39m";
 	const badgeW = 5;
 
-	// Penempatan jam persis rata kanan
-	const res1 = placeTimeAtRight("Short text", 30, badge, badgeW, false);
+	// Penempatan jam persis rata kanan dengan margin 1 spasi
+	const res1 = placeTimeAtRight("Short text", 30, badge, badgeW, "");
 	assert(visibleWidth(res1) === 30, "panjang baris pas selebar terminal");
-	assert(res1.endsWith(badge), "badge di ujung kanan");
+	assert(res1.endsWith(badge + " "), "badge berjarak 1 spasi dari ujung kanan");
 
-	// Dengan stripBg (untuk bubble user)
+	// Dengan background bubble user
 	const bg = "\x1b[48;2;52;53;61m";
-	const res2 = placeTimeAtRight(`${bg}Short text`, 30, badge, badgeW, true);
-	assert(res2.includes("\x1b[49m" + badge + "\x1b[49m"), "background di-reset di area jam");
+	const res2 = placeTimeAtRight(`${bg}Short text`, 30, badge, badgeW, bg);
+	assert(res2.includes(badge + " \x1b[49m"), "jam diikuti spasi margin lalu reset bg");
+	assert(res2.endsWith("\x1b[49m"), "background ditutup di akhir baris");
 	assert(visibleWidth(res2) === 30, "panjang baris tetap pas lebar");
 
 	// repair bg bubble: spasi setelah [0m] wajib ber-bg, baris ditutup [49m]
