@@ -147,10 +147,13 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 				// Muat di baris teks pertama: tempel rata kanan persis dengan margin 1 spasi
 				lines[1] = placeTimeAtRight(contentLine, width, badge, timeW, bgOpen);
 			} else {
-				// Baris teks pertama terlalu panjang: JANGAN potong konten!
-				// Pindahkan jam ke baris padding bawah bubble (selalu ada dan kosong)
-				const lastIdx = lines.length - 1;
-				lines[lastIdx] = placeTimeAtRight(lines[lastIdx], width, badge, timeW, bgOpen);
+				// Baris teks pertama penuh: JANGAN potong konten!
+				// Jam ke baris padding ATAS (selalu kosong, barisan pertama bubble)
+				const topLine = lines[0];
+				const oscMatch = topLine.match(/^(\x1b\]133;[A-Z]\x07)+/);
+				const prefix = oscMatch ? oscMatch[0] : "";
+				const rest = topLine.slice(prefix.length);
+				lines[0] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, bgOpen)}`;
 			}
 			return lines;
 		};
