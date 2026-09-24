@@ -508,6 +508,10 @@ export default function (pi: ExtensionAPI) {
 			});
 
 			class InputBgEditor extends CustomEditor {
+				constructor(tui: any, editorTheme: any, keybindings: any, options?: any) {
+					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
+				}
+
 				render(width: number): string[] {
 					const lines = super.render(width);
 					let bgOpen: string;
