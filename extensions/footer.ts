@@ -53,6 +53,28 @@ export function formatTimeBadge(timeStr: string, th: { fg(color: string, text: s
 	return `\x1b[36m${timeStr}\x1b[39m`;
 }
 
+// Kode pembuka bg bubble user (tanpa reset penutup) - probe dari tema aktif.
+export function bubbleBgOpen(th: { bg?(c: string, t: string): string } | null): string {
+	if (!th?.bg) return "";
+	try {
+		const probe = th.bg("userMessageBg", "");
+		const reset = "\x1b[49m";
+		return probe.endsWith(reset) ? probe.slice(0, -reset.length) : probe;
+	} catch {
+		return "";
+	}
+}
+
+// Akar "block hitam" saat chat penuh: teks Markdown membawa \x1b[0m (reset semua)
+// di dalam baris -> spasi padding SETELAH reset kehilangan bg bubble dan tampil
+// gelap selebar sisa baris. Pasang ulang bg bubble setelah tiap reset, tutup bg
+// di akhir baris agar tidak bocor. Pola sama InputBgEditor di bawah.
+export function repairBubbleBg(line: string, bgOpen: string): string {
+	if (!bgOpen) return line;
+	const patched = line.split("\x1b[0m").join(`\x1b[0m${bgOpen}`).split("\x1b[49m").join(`\x1b[49m${bgOpen}`);
+	return patched.endsWith(bgOpen) ? `${patched}\x1b[49m` : patched;
+}
+
 /**
  * Tempel jam di ujung kanan sebuah baris.
  * Jika `stripBg` true, background baris dibuang khusus di area jam sehingga
@@ -82,6 +104,11 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 		UserMessageComponent.prototype.render = function (width: number): string[] {
 			const lines = origRender.call(this, width);
 			if (lines.length < 2) return lines;
+
+			// Perbaiki bg bubble dulu (baris Markdown ber-reset bikin padding gelap),
+			// baru tempel jam (yang sengaja membuang bg di area badge).
+			const bgOpen = bubbleBgOpen(activeThemeProxy);
+			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i], bgOpen);
 
 			const textKey = (this as { text?: string }).text?.trim() ?? "";
 			const ts = (this as { _arnativeTimestamp?: number })._arnativeTimestamp ?? USER_TIMESTAMPS_MAP.get(textKey);
@@ -594,9 +621,22 @@ if (isMain) {
 	assert(res1.endsWith(badge), "badge di ujung kanan");
 
 	// Dengan stripBg (untuk bubble user)
-	const res2 = placeTimeAtRight("\x1b[48;5;17mShort text", 30, badge, badgeW, true);
+	const bg = "\x1b[48;2;52;53;61m";
+	const res2 = placeTimeAtRight(`${bg}Short text`, 30, badge, badgeW, true);
 	assert(res2.includes("\x1b[49m" + badge + "\x1b[49m"), "background di-reset di area jam");
 	assert(visibleWidth(res2) === 30, "panjang baris tetap pas lebar");
+
+	// repair bg bubble: spasi setelah [0m] wajib ber-bg, baris ditutup [49m]
+	const dirty = `${bg}Hello\x1b[0m${" ".repeat(5)}\x1b[49m`;
+	const clean = repairBubbleBg(dirty, bg);
+	assert(clean.includes(`\x1b[0m${bg}`), "bg dipasang ulang setelah reset");
+	assert(clean.endsWith("\x1b[49m"), "bg bubble ditutup di akhir baris");
+	assert(repairBubbleBg("plain", "") === "plain", "tanpa bgOpen: tanpa perubahan");
+	assert(bubbleBgOpen(null) === "", "tanpa tema: bgOpen kosong");
+	assert(
+		bubbleBgOpen({ bg: (_c, t) => `\x1b[48;2;52;53;61m${t}\x1b[49m` }) === "\x1b[48;2;52;53;61m",
+		"bgOpen terambil dari probe tema",
+	);
 
 	// Teks panjang: sliceByColumn tidak merusak lebar
 	const longLine = "a".repeat(40);
