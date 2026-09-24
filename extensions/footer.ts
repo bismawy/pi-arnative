@@ -7,10 +7,21 @@
  * Disegarkan tiap turn, pesan, dan ganti model agar status hidup.
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
-import { appendFileSync } from "node:fs";
+
+// Intercept built-in FooterComponent agar murni 2 baris (tidak pernah memunculkan
+// baris ke-3 status ekstensi default saat bootstrap / reload / status bertambah).
+const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
+if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[PATCHED_KEY]) {
+	(globalThis as Record<symbol, boolean>)[PATCHED_KEY] = true;
+	const origRender = FooterComponent.prototype.render;
+	FooterComponent.prototype.render = function (width: number): string[] {
+		const lines = origRender.call(this, width);
+		return lines.length > 2 ? lines.slice(0, 2) : lines;
+	};
+}
 
 type GitInfo = { branch: string; tag: string; uncommitted: number; ahead: number; behind: number } | null;
 let gitRefreshInFlight = false;
@@ -29,26 +40,9 @@ const MODEL_KEY = Symbol.for("pi-arnative.currentModel");
 const THINKING_KEY = Symbol.for("pi-arnative.currentThinking");
 const CWD_KEY = Symbol.for("pi-arnative.lastCwd");
 const GIT_KEY = Symbol.for("pi-arnative.lastGit");
-// Generasi pemasangan footer: reload/new beruntun membatalkan jadwal lama
-// agar yang tampil murni default dulu, lalu sekali switch ke pi-arnative.
+// Generasi pemasangan footer: reload/new beruntun membatalkan jadwal lama.
 const GEN_KEY = Symbol.for("pi-arnative.footerGen");
 let footerGen = (globalThis as Record<symbol, number>)[GEN_KEY] || 0;
-
-// Jeda sebelum pasang footer kustom (riwayat: 250ms di 238ca81).
-// 50ms: cukup 1-3 frame agar default sempat tampil, tapi lebih cepat dari
-// datangnya status ekstensi (itu yang membentuk frame-3-baris mentah).
-// 0 = tanpa kedip default; naikkan hanya bila frame mentah kembali muncul.
-const FOOTER_DELAY_MS = 50;
-
-// ponytail: log debug sementara, hapus setelah verifikasi /reload.
-const LOG_PATH = "/tmp/pi-arnative-footer.log";
-function dlog(...parts: unknown[]): void {
-	try {
-		appendFileSync(LOG_PATH, `${new Date().toISOString()} ${parts.map(String).join(" ")}\n`);
-	} catch {
-		// abaikan
-	}
-}
 
 // Telemetri kecepatan token streaming murni (tok/s)
 let assistantStartMs: number | null = null;
@@ -187,10 +181,7 @@ function poke(): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	// Generasi milik runtime ini: shutdown lama tidak boleh membatalkan start baru.
 	let runtimeGen = 0;
-	const rid = Math.random().toString(36).slice(2, 7);
-	dlog(rid, "factory-load");
 	pi.on("session_start", async (event, ctx) => {
 		// reload = sesi yang sama lanjut -> timer jangan reset; new/resume/fork/startup = sesi baru
 		if (event.reason !== "reload") {
@@ -213,70 +204,27 @@ export default function (pi: ExtensionAPI) {
 			: ctx.cwd;
 		(globalThis as Record<symbol, any>)[CWD_KEY] = cwd;
 
-		// Default murni dulu (sekedip), lalu langsung pi-arnative: pasang cepat,
-		// git menyusul via background refresh agar jendela default-mentah singkat.
 		runtimeGen = ++footerGen;
 		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
-		const myGen = runtimeGen;
-		dlog(rid, "start", event.reason, `myGen=${myGen}`);
-		await new Promise((r) => setTimeout(r, FOOTER_DELAY_MS));
-		dlog(rid, "wake", `myGen=${myGen}`, `cur=${footerGen}`);
-		if (myGen !== footerGen) {
-			dlog(rid, "cancelled-stale");
-			return;
-		}
 
 		try {
-			let renderLogged = false;
-			const installFooter = (attempt = 0): void => {
-				ctx.ui.setFooter((tui, theme, footerData) => {
-					if (!renderLogged) {
-						renderLogged = true;
-						dlog(rid, "render-first");
-					}
-					rerender = () => tui.requestRender();
-					const unsub = footerData.onBranchChange(() => {
-						void refreshGit(cwd).then(() => tui.requestRender());
-					});
-					return {
-						dispose() {
-							dlog(rid, "footer-disposed", `attempt=${attempt}`);
-							rerender = null;
-							unsub();
-							// Sembuh otomatis: Pi/ekstensi lain me-reset UI -> pasang lagi
-							// selama runtime ini masih pemilik footer. Dibatasi 8x.
-							if (attempt < 8) {
-								setTimeout(() => {
-									if (myGen !== footerGen) {
-										dlog(rid, "heal-skipped-stale");
-										return;
-									}
-									try {
-										installFooter(attempt + 1);
-										dlog(rid, "healed", `attempt=${attempt + 1}`);
-									} catch (e) {
-										dlog(rid, "heal-throw", String(e));
-									}
-								}, 400);
-							}
-						},
-						invalidate() {},
-						render(width: number): string[] {
-							const acc = (text: string) => theme.fg("accent", text);
-							const dim = (text: string) => theme.fg("dim", text);
-							// Slot "tint" (lembut) hanya didefinisikan tema arnative; tema
-							// lain tidak punya -> jatuh kembali ke aksen penuh. Probe sekali
-							// per render karena theme.fg melempar untuk warna tak dikenal.
-							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-							let tintName = "accent";
-							try {
-								fgAny("tint", "");
-								tintName = "tint";
-							} catch {
-								// tema tanpa slot tint: tetap aksen
-							}
-							const tint = (text: string) => fgAny(tintName, text);
-							const sep = dim(" | ");
+			ctx.ui.setFooter((tui, theme, footerData) => {
+				rerender = () => tui.requestRender();
+				const unsub = footerData.onBranchChange(() => {
+					void refreshGit(cwd).then(() => tui.requestRender());
+				});
+				return {
+					dispose() {
+						rerender = null;
+						unsub();
+					},
+					invalidate() {},
+					render(width: number): string[] {
+						const acc = (text: string) => theme.fg("accent", text);
+						const dim = (text: string) => theme.fg("dim", text);
+						// Tint aksen cyan lembut (terbaca jelas, tidak pudar flat seperti dim biasa)
+						const tint = (text: string) => `\x1b[38;2;125;185;205m${text}\x1b[39m`;
+						const sep = dim(" | ");
 
 							const durationStr = formatDuration(Date.now() - sessionStartMs);
 							const pDuration = `${acc("\uf017")} ${tint(durationStr)}`;
@@ -362,25 +310,11 @@ export default function (pi: ExtensionAPI) {
 						},
 					};
 				});
-			};
-			installFooter();
-			dlog(rid, "installed");
-			// Pengaman: bila setFooter diabaikan diam-diam (tanpa render/dispose),
-			// tegaskan sekali setelah 2 detik.
-			setTimeout(() => {
-				if (renderLogged || myGen !== footerGen) return;
-				try {
-					installFooter(0);
-					dlog(rid, "watchdog-installed");
-				} catch (e) {
-					dlog(rid, "watchdog-throw", String(e));
-				}
-			}, 2000);
-		} catch (e) {
-			dlog(rid, "setFooter-throw", String(e));
+			});
+		} catch {
+			// ctx basi setelah reload/new susulan: biarkan footer default.
 		}
 		void refreshGit(cwd).then(() => {
-			dlog(rid, "git-ready");
 			poke();
 		});
 	});
@@ -455,17 +389,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
-		// Hanya runtime terakhir boleh mereset: shutdown lama yang datang
-		// setelah start baru tidak boleh membatalkan/menghapus footer baru.
 		rerender = null;
 		const cur = ((globalThis as Record<symbol, number>)[GEN_KEY] ?? 0);
-		if (cur !== runtimeGen) {
-			dlog(rid, "shutdown-skip", `cur=${cur}`, `own=${runtimeGen}`);
-			return;
-		}
+		if (cur !== runtimeGen) return;
 		footerGen++;
 		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
-		dlog(rid, "shutdown-reset");
 		try {
 			(ctx as unknown as { ui?: { setFooter?: (f?: undefined) => void } }).ui?.setFooter?.(undefined);
 		} catch {
