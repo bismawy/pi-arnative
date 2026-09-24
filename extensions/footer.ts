@@ -7,8 +7,14 @@
  * Disegarkan tiap turn, pesan, dan ganti model agar status hidup.
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	AssistantMessageComponent,
+	CustomEditor,
+	FooterComponent,
+	UserMessageComponent,
+	type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { Spacer, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 
 // Intercept built-in FooterComponent agar murni 2 baris (tidak pernah memunculkan
@@ -21,6 +27,102 @@ if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean
 		const lines = origRender.call(this, width);
 		return lines.length > 2 ? lines.slice(0, 2) : lines;
 	};
+}
+
+const USER_TIMESTAMPS_MAP = new Map<string, number>();
+
+function formatClock(timestamp?: number): string {
+	const d = timestamp && timestamp > 0 ? new Date(timestamp) : new Date();
+	const h = String(d.getHours()).padStart(2, "0");
+	const m = String(d.getMinutes()).padStart(2, "0");
+	return `${h}:${m}`;
+}
+
+// Intercept bubble chat transcript (user & assistant) agar menampilkan timestamp jam [HH:mm] sejajar di ujung kanan baris pertama/judul.
+// Ringan & zero-dependency: tanpa baris baru, tanpa entry baru di session jsonl, murni inline header visual.
+const CHAT_TIMESTAMP_PATCHED = Symbol.for("pi-arnative.chatTimestampPatched");
+if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
+	(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED] = true;
+
+	if (UserMessageComponent?.prototype?.render) {
+		const origRender = UserMessageComponent.prototype.render;
+		UserMessageComponent.prototype.render = function (width: number): string[] {
+			const lines = origRender.call(this, width);
+			if (lines.length < 2) return lines;
+
+			const textKey = (this as { text?: string }).text?.trim() ?? "";
+			const ts = (this as { _arnativeTimestamp?: number })._arnativeTimestamp ?? USER_TIMESTAMPS_MAP.get(textKey);
+			const timeStr = formatClock(ts);
+			const timeW = visibleWidth(timeStr);
+
+			// Baris konten user pertama ada di index 1 (antara padding atas index 0 dan padding bawah)
+			const targetLine = lines[1];
+			const bgMatch = targetLine.match(/(\x1b\[48;[0-9;]+m)/);
+			const bg = bgMatch ? bgMatch[1] : "";
+
+			const stripped = targetLine.replace(/\x1b\[49m$/, "").replace(/\s+$/, "");
+			const leftW = visibleWidth(stripped);
+			const padRight = 1;
+			const minGap = 2;
+
+			let finalContent = stripped;
+			if (leftW + minGap + timeW + padRight > width) {
+				finalContent = truncateToWidth(stripped, width - timeW - minGap - padRight, "...");
+			}
+			const actualLeftW = visibleWidth(finalContent);
+			const gap = Math.max(1, width - actualLeftW - timeW - padRight);
+			lines[1] = `${finalContent}${" ".repeat(gap)}\x1b[2m${timeStr}\x1b[22m ${bg ? "\x1b[49m" : ""}`;
+			return lines;
+		};
+	}
+
+	if (AssistantMessageComponent?.prototype?.render) {
+		const origRender = AssistantMessageComponent.prototype.render;
+		AssistantMessageComponent.prototype.render = function (width: number): string[] {
+			const lines = origRender.call(this, width);
+			const lastMsg = (this as { lastMessage?: AssistantMessage }).lastMessage;
+			const hasVisibleContent = lastMsg?.content?.some(
+				(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+			);
+			if (!hasVisibleContent || lines.length === 0) return lines;
+
+			const timeStr = formatClock(lastMsg?.timestamp);
+			const timeW = visibleWidth(timeStr);
+
+			// Temukan baris teks pertama (judul / baris pembuka balasan)
+			let targetIdx = -1;
+			for (let i = 0; i < lines.length; i++) {
+				const cleaned = lines[i].replace(/^(\x1b\]133;[A-Z]\x07)+/, "").trim();
+				if (cleaned.length > 0) {
+					targetIdx = i;
+					break;
+				}
+			}
+
+			if (targetIdx !== -1) {
+				let prefix = "";
+				let rest = lines[targetIdx];
+				const oscMatch = rest.match(/^(\x1b\]133;[A-Z]\x07)+/);
+				if (oscMatch) {
+					prefix = oscMatch[0];
+					rest = rest.slice(prefix.length);
+				}
+
+				const stripped = rest.replace(/\s+$/, "");
+				const leftW = visibleWidth(stripped);
+				const padRight = 3; // spasi kanan ekstra agar tidak mepet scrollbar dan lebih lega
+				const minGap = 2;
+				let finalContent = stripped;
+				if (leftW + minGap + timeW + padRight > width) {
+					finalContent = truncateToWidth(stripped, width - timeW - minGap - padRight, "...");
+				}
+				const actualLeftW = visibleWidth(finalContent);
+				const gap = Math.max(1, width - actualLeftW - timeW - padRight);
+				lines[targetIdx] = `${prefix}${finalContent}${" ".repeat(gap)}\x1b[2m${timeStr}\x1b[22m${" ".repeat(padRight)}`;
+			}
+			return lines;
+		};
+	}
 }
 
 type GitInfo = { branch: string; tag: string; uncommitted: number; ahead: number; behind: number } | null;
@@ -182,6 +284,19 @@ function poke(): void {
 
 export default function (pi: ExtensionAPI) {
 	let runtimeGen = 0;
+
+	// Catat timestamp pesan user ke map agar UserMessageComponent bisa menampilkan waktu aslinya
+	pi.on("message_start", async (event) => {
+		if (event.message.role === "user") {
+			const text = typeof event.message.content === "string"
+				? event.message.content
+				: event.message.content?.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("") ?? "";
+			if (text.trim()) {
+				USER_TIMESTAMPS_MAP.set(text.trim(), event.message.timestamp || Date.now());
+			}
+		}
+	});
+
 	pi.on("session_start", async (event, ctx) => {
 		// reload = sesi yang sama lanjut -> timer jangan reset; new/resume/fork/startup = sesi baru
 		if (event.reason !== "reload") {
@@ -281,6 +396,20 @@ export default function (pi: ExtensionAPI) {
 									else if (/ULTRA/i.test(s)) mode = "ULTRA";
 									else if (/FULL/i.test(s)) mode = "FULL";
 									return `${acc("\uef04")}  ${tint("ponytail:")} ${bullet} ${tint(mode)}`;
+								}
+								if (s.includes("jev-eye")) {
+									const isOff = s.includes("OFF") || s.includes("○");
+									const isReview = /REVIEW/i.test(s);
+									let bullet = isOff ? dim("○") : acc("●");
+									if (isReview) {
+										try {
+											bullet = theme.fg("warning", "●");
+										} catch {
+											bullet = acc("●");
+										}
+									}
+									const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
+									return `${acc("\uedcf")}  ${tint("Jev:")} ${bullet} ${tint(label)}`;
 								}
 								let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
 								clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
