@@ -1,22 +1,24 @@
 /**
  * Tool output minimal ala Codex CLI / Claude Code, tiap tool call dalam kotak:
- *   ┌──────────────────────────────┐
- *   │ 󰔟 $ cmd smart…               │  running (ikon status, hilang saat selesai)
- *   └──────────────────────────────┘
- *   ┌──────────────────────────────┐
- *   │ ✓ $ cmd smart…               │  final, collapsed
- *   │ 󱞩 0.1s baris-pertama-output  │
- *   └──────────────────────────────┘
+ *   ┌────────────────────────────┐
+ *   │ 󰔟 $ cmd smart…             │  running (ikon status, hilang saat selesai)
+ *   └────────────────────────────┘
+ *   ┌────────────────────────────┐
+ *   │ ✓ $ cmd smart…      0.1s   │  final, collapsed; durasi rata kanan judul
+ *   │ 󱞩 baris-pertama-output     │
+ *   └────────────────────────────┘
  * Klik / ctrl+e = judul penuh + detail (output = dim; edit = diff toolDiff*).
- * Ringkasan collapsed: bash/write `durasi + baris pertama output`; grep/find/
- * read ringkasan angka (→ N matches / → N files / N lines); edit `+N / -M`.
- * Saat expand baris ringkasan cukup durasi/status - tanpa mengulang output
- * yang sudah tampil penuh di bawahnya (anti duplikat baris pertama).
+ * Ringkasan collapsed: bash/write `󱞩 baris pertama output`; grep/find/read
+ * ringkasan angka (→ N matches / → N files / N lines); edit `󱞩 +N / -M`.
+ * Saat expand baris ringkasan kosong untuk tool biasa (output sudah tampil
+ * penuh) - anti duplikat baris pertama.
+ * Durasi: rata kanan baris judul, space-aware (judul dipotong via visibleWidth
+ * bila tak muat); kosong bila tak terukur (restore sesi lama - tanpa jejak).
  * Warna: nama tool aksen, path/folder & link (URL) tint, sisanya default;
  * garis kotak + 󱞩 dim. Eksekusi murni delegasi (spread tool bawaan).
- * Status "sudah ada hasil" disimpan di context.state dan dibaca saat render()
- * (bukan saat renderCall dipanggil) -> aman untuk reload/restore sesi lama,
- * tanpa kotak 󰔟 tertinggal setelah selesai.
+ * Status "sudah ada hasil" di context.state, dibaca saat render() -> aman
+ * reload/restore, tanpa kotak 󰔟 tertinggal. Gap antar kotak (Spacer bawaan
+ * ToolExecutionComponent) dibuang via patch render (pola sama patch footer).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -26,6 +28,7 @@ import {
 	createGrepTool,
 	createReadTool,
 	createWriteTool,
+	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
@@ -33,7 +36,7 @@ import { homedir } from "node:os";
 type Theme = { fg(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
 type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown> };
-type Res = (r: TResult, th: Theme, tint: (s: string) => string, dur: string, isErr: boolean, expanded: boolean) => string;
+type Res = (r: TResult, th: Theme, tint: (s: string) => string, isErr: boolean, expanded: boolean) => string;
 
 const cwd = process.cwd();
 const TIMINGS = new Map<string, number>(); // durasi ms per tool call (sekali jalan)
@@ -85,26 +88,51 @@ export function smartTitle(cmd: string, maxWords = 6): string {
 	return `${words.slice(0, maxWords).join(" ")}…`;
 }
 
-// Prefix baris hasil: 󱞩 + durasi (hilang bila tak terukur, mis. restore sesi lama).
-export function resHead(theme: Theme, dur: string): string {
-	return theme.fg("dim", dur ? `󱞩 ${dur}` : "󱞩");
+// Prefix baris hasil: 󱞩 dim (tanpa durasi - durasi di ujung kanan judul).
+export function resHead(theme: Theme): string {
+	return theme.fg("dim", "󱞩");
 }
 
-// Ringkasan default: collapsed `󱞩 0.1s baris-pertama-output`, expand cukup durasi
-// (output sudah tampil penuh di bawah - tanpa duplikat baris pertama).
-export const resText: Res = (r, th, tint, dur, _isErr, expanded) => {
-	if (expanded) return resHead(th, dur);
+// Baris judul: durasi rata kanan (space-aware, judul dipotong bila tak muat);
+// expanded = judul penuh di-wrap. Semua baris <= inner (regresi bug overflow).
+export function titleRow(
+	theme: Theme,
+	icon: string,
+	name: string,
+	argPart: string,
+	inner: number,
+	dur: string,
+	expanded: boolean,
+): string[] {
+	const head = `${icon} ${name} ${argPart}`.trim();
+	const durStr = dur ? theme.fg("dim", dur) : "";
+	if (!durStr) {
+		return expanded ? wrapTextWithAnsi(head, inner) : [truncateToWidth(head, inner, "…")];
+	}
+	const durW = visibleWidth(durStr);
+	const avail = Math.max(8, inner - durW);
+	const wrapW = Math.max(4, avail - 1); // minimal 1 spasi sebelum durasi
+	const lines = expanded ? wrapTextWithAnsi(head, wrapW) : [truncateToWidth(head, wrapW, "…")];
+	const pad = Math.max(1, avail - visibleWidth(lines[0]));
+	lines[0] = `${lines[0]}${" ".repeat(pad)}${durStr}`;
+	return lines;
+}
+
+// Ringkasan default: collapsed `󱞩 baris-pertama-output`, expand kosong (output
+// sudah tampil penuh di bawah - anti duplikat).
+export const resText: Res = (r, th, tint, isErr, expanded) => {
+	if (expanded && !isErr) return "";
 	const f = firstLine(textOf(r));
-	return f ? `${resHead(th, dur)} ${paintLinks(f, tint)}` : resHead(th, dur);
+	return f ? `${resHead(th)} ${paintLinks(f, tint)}` : resHead(th);
 };
 
-// Ringkasan angka: `󱞩 0.1s → N matches`; error jatuh ke baris pertama (info penting).
+// Ringkasan angka: `󱞩 → N matches`; error jatuh ke baris pertama (info penting).
 export const numRes =
 	(fmt: (n: number) => string): Res =>
-	(r, th, tint, dur, isErr, expanded) => {
-		if (isErr) return resText(r, th, tint, dur, isErr, false);
-		if (expanded) return resHead(th, dur);
-		return `${resHead(th, dur)} ${fmt(countLines(textOf(r)))}`;
+	(r, th, tint, isErr, expanded) => {
+		if (isErr) return resText(r, th, tint, isErr, false);
+		if (expanded) return "";
+		return `${resHead(th)} ${fmt(countLines(textOf(r)))}`;
 	};
 
 // detail saat expand: warna dim saja (kecuali diff edit yang berwarna)
@@ -114,6 +142,29 @@ const fullText = (r: TResult, th: Theme): string[] =>
 				.split("\n")
 				.map((l) => th.fg("dim", l))
 		: [];
+
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+const isBlankLine = (l: string): boolean => l.replace(ANSI_RE, "").trim() === "";
+
+// Buang baris kosong di awal/akhir (Spacer bawaan) - gap antar kotak tool.
+export function stripBlankEdges(lines: string[]): string[] {
+	let s = 0;
+	let e = lines.length;
+	while (s < e && isBlankLine(lines[s])) s++;
+	while (e > s && isBlankLine(lines[e - 1])) e--;
+	return lines.slice(s, e);
+}
+
+// Gap antar kotak = Spacer(1) bawaan ToolExecutionComponent (di luar ekstensi).
+// Patch render prototype + guard global (pola sama patch FooterComponent).
+const GAP_KEY = Symbol.for("pi-arnative.toolGapStripped");
+if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[GAP_KEY]) {
+	(globalThis as Record<symbol, boolean>)[GAP_KEY] = true;
+	const origRender = ToolExecutionComponent.prototype.render;
+	ToolExecutionComponent.prototype.render = function (width: number): string[] {
+		return stripBlankEdges(origRender.call(this, width));
+	};
+}
 
 const boxEdge = (l: string, r: string, width: number, dim: (s: string) => string): string =>
 	dim(`${l}${"─".repeat(Math.max(0, width - 2))}${r}`);
@@ -135,10 +186,10 @@ function box(theme: Theme, width: number, rows: string[]): string[] {
 }
 
 // Satu jalur render untuk semua tool (tanpa duplikasi per tool).
-// renderCall = kotak running (󰔟) saja; renderResult = kotak final (✓/x + 󱞩);
-// state.hasResult ditulis renderResult dan dibaca saat render() -> tepat satu
-// kotak, juga setelah reload/restore. res & full opsional (default: baris
-// pertama output / detail dim) agar tool yang polos tidak mengulang lambda.
+// renderCall = kotak running (󰔟); renderResult = kotak final (✓/x + durasi kanan
+// judul + 󱞩 ringkasan); state.hasResult ditulis renderResult dan dibaca saat
+// render() -> tepat satu kotak, juga setelah reload/restore. res & full
+// opsional (default: baris pertama output / detail dim).
 function minimal(
 	pi: ExtensionAPI,
 	tool: { execute: (...a: any[]) => Promise<any> } & Record<string, unknown>,
@@ -163,8 +214,17 @@ function minimal(
 			return new Lines((width) => {
 				if (st.hasResult) return [];
 				const tint = tintOf(theme);
-				const row = `${theme.fg("warning", "󰔟")} ${name(theme, tint)} ${call(args, theme, tint, false)}`;
-				return box(theme, width, [truncateToWidth(row, Math.max(8, width - 4), "…")]);
+				const inner = Math.max(8, width - 4);
+				const rows = titleRow(
+					theme,
+					theme.fg("warning", "󰔟"),
+					name(theme, tint),
+					call(args, theme, tint, false),
+					inner,
+					"",
+					false,
+				);
+				return box(theme, width, rows);
 			});
 		},
 		renderResult(
@@ -183,11 +243,17 @@ function minimal(
 			return new Lines((width) => {
 				const tint = tintOf(theme);
 				const inner = Math.max(8, width - 4);
-				const fit = (s: string) => (expanded ? s : truncateToWidth(s, inner, "…"));
-				const rows = [
-					fit(`${icon} ${name(theme, tint)} ${call(context.args ?? {}, theme, tint, expanded)}`),
-					fit(res(result, theme, tint, dur, isErr, expanded)),
-				];
+				const rows = titleRow(
+					theme,
+					icon,
+					name(theme, tint),
+					call(context.args ?? {}, theme, tint, expanded),
+					inner,
+					dur,
+					expanded,
+				);
+				const resLine = res(result, theme, tint, isErr, expanded);
+				if (resLine) rows.push(resLine);
 				if (expanded) rows.push(...full(result, theme));
 				return box(theme, width, rows);
 			});
@@ -196,7 +262,7 @@ function minimal(
 }
 
 export default function (pi: ExtensionAPI) {
-	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>`, res default
+	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>  0.1s`
 	minimal(
 		pi,
 		createBashTool(cwd),
@@ -207,7 +273,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	);
 
-	// read: `read path[:range]` → `N lines`
+	// read: `read path[:range]` → `󱞩 N lines`
 	minimal(
 		pi,
 		createReadTool(cwd),
@@ -220,7 +286,7 @@ export default function (pi: ExtensionAPI) {
 		numRes((n) => `${n} lines`),
 	);
 
-	// grep: `grep /pattern/ in path (glob)` → `→ N matches`
+	// grep: `grep /pattern/ in path (glob)` → `󱞩 → N matches`
 	minimal(
 		pi,
 		createGrepTool(cwd),
@@ -230,7 +296,7 @@ export default function (pi: ExtensionAPI) {
 		numRes((n) => `→ ${n} matches`),
 	);
 
-	// find: `find pattern in path` → `→ N files`
+	// find: `find pattern in path` → `󱞩 → N files`
 	minimal(
 		pi,
 		createFindTool(cwd),
@@ -247,14 +313,14 @@ export default function (pi: ExtensionAPI) {
 		(a, _th, tint) => tint(shortPath(a.path ?? "")),
 	);
 
-	// edit: `edit path`, baris hasil `󱞩 0.1s +N / -M`, expand = diff toolDiff*
+	// edit: `edit path`, `󱞩 +N / -M`, expand = diff toolDiff*
 	minimal(
 		pi,
 		createEditTool(cwd),
 		(th) => th.fg("accent", "edit"),
 		(a, _th, tint) => tint(shortPath(a.path ?? "")),
-		(r, th, _tint, dur, isErr, expanded) => {
-			if (isErr) return resText(r, th, (s) => s, dur, isErr, expanded);
+		(r, th, _tint, isErr, expanded) => {
+			if (isErr) return resText(r, th, (s) => s, isErr, false);
 			const diff: string = r.details?.diff ?? "";
 			let add = 0;
 			let del = 0;
@@ -262,7 +328,7 @@ export default function (pi: ExtensionAPI) {
 				if (l.startsWith("+") && !l.startsWith("+++")) add++;
 				else if (l.startsWith("-") && !l.startsWith("---")) del++;
 			}
-			return `${resHead(th, dur)} ${th.fg("toolDiffAdded", `+${add}`)} / ${th.fg("toolDiffRemoved", `-${del}`)}`;
+			return `${resHead(th)} ${th.fg("toolDiffAdded", `+${add}`)} / ${th.fg("toolDiffRemoved", `-${del}`)}`;
 		},
 		(r, th) => {
 			const diff: string = r.details?.diff ?? "";
@@ -301,23 +367,33 @@ if (isMain) {
 	assert(paintLinks("ls extensions/tools.ts", mark) === "ls <extensions/tools.ts>", "filter path relatif");
 	assert(paintLinks("echo plain 2>&1", mark) === "echo plain 2>&1", "teks polos tak tersentuh");
 
-	assert(resHead(th, "") === "󱞩", "tanpa durasi: ikon saja");
-	assert(resHead(th, "0.4s") === "󱞩 0.4s", "dengan durasi");
+	// durasi rata kanan judul, space-aware (regresi bug overflow)
+	const t1 = titleRow(th, "✓", "$", "echo hi", 30, "0.1s", false);
+	assert(t1.length === 1 && visibleWidth(t1[0]) === 30, "durasi rata kanan pas selebar inner");
+	assert(t1[0].endsWith("0.1s"), "durasi di ujung kanan judul");
+	const t2 = titleRow(th, "✓", "$", "word ".repeat(40), 30, "0.1s", false);
+	assert(t2.length === 1 && visibleWidth(t2[0]) === 30, "collapsed: judul panjang tetap 1 baris pas");
+	const t3 = titleRow(th, "✓", "$", "word ".repeat(40), 30, "0.1s", true);
+	assert(t3.every((l) => visibleWidth(l) <= 30), "expanded: semua baris <= inner");
+	const t4 = titleRow(th, "✓", "$", "echo hi", 30, "", false);
+	assert(!t4[0].includes("0.1s"), "tanpa durasi: kosong (restore sesi lama)");
 
-	// anti duplikat: expand = durasi saja, tanpa baris pertama output
-	assert(resText(R, th, (s) => s, "0.1s", false, true) === "󱞩 0.1s", "expand: tanpa baris pertama");
-	assert(resText(R, th, (s) => s, "0.1s", false, false) === "󱞩 0.1s path:1:match a", "collapsed: baris pertama tampil");
-	// ringkasan angka
-	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, "0.1s", false, false) === "󱞩 0.1s → 3 matches", "grep: N matches");
-	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, "", false, true) === "󱞩", "expand angka: durasi saja");
+	// anti duplikat ringkasan
+	assert(resText(R, th, (s) => s, false, true) === "", "expand: ringkasan kosong");
+	assert(resText(R, th, (s) => s, false, false) === "󱞩 path:1:match a", "collapsed: baris pertama tampil");
+	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, false, false) === "󱞩 → 3 matches", "grep: N matches");
 	assert(
-		numRes((n) => `→ ${n} matches`)({ content: [{ type: "text", text: "Error: bad pattern" }] }, th, (s) => s, "0.1s", true, false) ===
-			"󱞩 0.1s Error: bad pattern",
+		numRes((n) => `→ ${n} matches`)({ content: [{ type: "text", text: "Error: bad" }] }, th, (s) => s, true, false) ===
+			"󱞩 Error: bad",
 		"error: jatuh ke baris pertama",
 	);
 
-	// regresi bug overflow + bug 󰔟 tertinggal
-	assert(visibleWidth(boxRow("hello", 20, (s) => s)) === 20, "boxRow pas lebar penuh");
+	// gap antar kotak dibuang
+	assert(stripBlankEdges(["", "a", "", "b", "  ", ""]).join() === "a,,b", "baris kosong tepi dibuang");
+	assert(stripBlankEdges(["", "\x1b[2m\x1b[22m", "x"]).join() === "x", "baris ANSI kosong = blank");
+	assert(stripBlankEdges(["a"]).join() === "a", "tanpa blank tetap utuh");
+
+	// bug 󰔟 tertinggal (restore-safe)
 	const st: Record<string, unknown> = {};
 	const comp = new Lines(() => (st.hasResult ? [] : ["row"]));
 	assert(comp.render(10).length === 1, "running: kotak 󰔟 tampil");
