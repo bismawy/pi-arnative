@@ -38,7 +38,7 @@ let footerGen = (globalThis as Record<symbol, number>)[GEN_KEY] || 0;
 // 50ms: cukup 1-3 frame agar default sempat tampil, tapi lebih cepat dari
 // datangnya status ekstensi (itu yang membentuk frame-3-baris mentah).
 // 0 = tanpa kedip default; naikkan hanya bila frame mentah kembali muncul.
-const FOOTER_DELAY_MS = 0;
+const FOOTER_DELAY_MS = 50;
 
 // ponytail: log debug sementara, hapus setelah verifikasi /reload.
 const LOG_PATH = "/tmp/pi-arnative-footer.log";
@@ -264,8 +264,18 @@ export default function (pi: ExtensionAPI) {
 						render(width: number): string[] {
 							const acc = (text: string) => theme.fg("accent", text);
 							const dim = (text: string) => theme.fg("dim", text);
-							// Ikut tema aktif (dulu RGB cyan hard-code #7DB9CD -> nyangkut saat ganti tema).
-							const tint = (text: string) => theme.fg("accent", text);
+							// Slot "tint" (lembut) hanya didefinisikan arnative-cyan; tema
+							// lain tidak punya -> jatuh kembali ke aksen penuh. Probe sekali
+							// per render karena theme.fg melempar untuk warna tak dikenal.
+							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
+							let tintName = "accent";
+							try {
+								fgAny("tint", "");
+								tintName = "tint";
+							} catch {
+								// tema tanpa slot tint: tetap aksen
+							}
+							const tint = (text: string) => fgAny(tintName, text);
 							const sep = dim(" | ");
 
 							const durationStr = formatDuration(Date.now() - sessionStartMs);
