@@ -35,7 +35,10 @@ const GEN_KEY = Symbol.for("pi-arnative.footerGen");
 let footerGen = (globalThis as Record<symbol, number>)[GEN_KEY] || 0;
 
 // Jeda sebelum pasang footer kustom (riwayat: 250ms di 238ca81).
-const FOOTER_DELAY_MS = 250;
+// 50ms: cukup 1-3 frame agar default sempat tampil, tapi lebih cepat dari
+// datangnya status ekstensi (itu yang membentuk frame-3-baris mentah).
+// 0 = tanpa kedip default; naikkan hanya bila frame mentah kembali muncul.
+const FOOTER_DELAY_MS = 50;
 
 // ponytail: log debug sementara, hapus setelah verifikasi /reload.
 const LOG_PATH = "/tmp/pi-arnative-footer.log";
@@ -210,7 +213,7 @@ export default function (pi: ExtensionAPI) {
 			: ctx.cwd;
 		(globalThis as Record<symbol, any>)[CWD_KEY] = cwd;
 
-		// Default murni dulu (250ms), lalu langsung pi-arnative: pasang cepat,
+		// Default murni dulu (sekedip), lalu langsung pi-arnative: pasang cepat,
 		// git menyusul via background refresh agar jendela default-mentah singkat.
 		runtimeGen = ++footerGen;
 		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
