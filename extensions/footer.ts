@@ -512,6 +512,39 @@ export default function (pi: ExtensionAPI) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
 				}
 
+				private applyFixedIndicatorColors(indicator: any) {
+					if (!indicator) return;
+					indicator.spinnerColorFn = (text: string) => {
+						try {
+							return ctx.theme.fg("accent", text);
+						} catch {
+							return text;
+						}
+					};
+					indicator.messageColorFn = (text: string) => {
+						try {
+							return ctx.theme.fg("tint", text);
+						} catch {
+							try {
+								return ctx.theme.fg("muted", text);
+							} catch {
+								return text;
+							}
+						}
+					};
+				}
+
+				setWorkingStatusIndicator(indicator: any) {
+					this.applyFixedIndicatorColors(indicator);
+					indicator?.updateDisplay?.();
+					super.setWorkingStatusIndicator(indicator);
+				}
+
+				renderTopBorder(width: number, hiddenLineCount: number): string {
+					this.applyFixedIndicatorColors((this as any).workingStatusIndicator);
+					return super.renderTopBorder(width, hiddenLineCount);
+				}
+
 				render(width: number): string[] {
 					const lines = super.render(width);
 					let bgOpen: string;
