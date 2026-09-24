@@ -199,7 +199,13 @@ export default function (pi: ExtensionAPI) {
 					const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
 					const lines = [truncateToWidth(left1 + pad1 + right1, width)];
 
-					const statuses = footerData.getExtensionStatuses();
+					const statuses: ReadonlyMap<string, string> = (() => {
+						try {
+							return footerData.getExtensionStatuses();
+						} catch {
+							return new Map<string, string>();
+						}
+					})();
 					const rawCache = statuses.get("pi-cache-stats");
 					const segs: string[] = [];
 					const cleanStatus = (s: string) => {
@@ -229,7 +235,12 @@ export default function (pi: ExtensionAPI) {
 					const left2 = segs.join(sep);
 
 					const opt = parseOptimizer(rawCache);
-					const usageStr = getUsage(ctx, acc, tint);
+					let usageStr = "";
+					try {
+						usageStr = getUsage(ctx, acc, tint);
+					} catch {
+						// ctx basi di jeda reload/new: tampil tanpa usage
+					}
 					let right2 = "";
 					if (opt && usageStr) {
 						right2 = `${tint(opt)} ${dim("·")} ${usageStr}`;
@@ -317,7 +328,10 @@ export default function (pi: ExtensionAPI) {
 		poke();
 	});
 
-	pi.on("session_shutdown", async (_event, ctx) => {
-		ctx.ui.setFooter(undefined);
+	pi.on("session_shutdown", async () => {
+		// Footer custom SENGAJA dipertahankan (bukan setFooter(undefined)):
+		// reload/new me-rebuild extension + kirim session_start baru;
+		// footer lama tampil sesaat sampai pabrik baru terdaftar.
+		rerender = null;
 	});
 }
