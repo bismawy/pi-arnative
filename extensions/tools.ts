@@ -41,6 +41,26 @@ type Res = (r: TResult, th: Theme, tint: (s: string) => string, isErr: boolean, 
 const cwd = process.cwd();
 const TIMINGS = new Map<string, number>(); // durasi ms per tool call (sekali jalan)
 
+// Animasi ikon running 󰔟 󱦠 󱦟: frame berputar per 150ms via ticker yang hidup
+// HANYA selama ada tool berjalan (idle = tanpa render ulang boros).
+const FRAMES = ["󰔟", "󱦠", "󱦟"];
+let ACTIVE = 0;
+let TICK: ReturnType<typeof setInterval> | null = null;
+let requestRenderFn: (() => void) | null = null;
+
+function syncTicker(): void {
+	if (ACTIVE > 0 && !TICK) {
+		TICK = setInterval(() => requestRenderFn?.(), 150);
+	} else if (ACTIVE <= 0 && TICK) {
+		clearInterval(TICK);
+		TICK = null;
+	}
+}
+
+export function spinIcon(): string {
+	return FRAMES[Math.floor(Date.now() / 150) % FRAMES.length];
+}
+
 export class Lines {
 	private get: (width: number) => string[];
 	constructor(get: (width: number) => string[]) {
@@ -203,10 +223,14 @@ function minimal(
 		renderShell: "self",
 		async execute(toolCallId: string, params: any, signal: any, onUpdate: any, ctx: any) {
 			const start = performance.now();
+			ACTIVE++;
+			syncTicker();
 			try {
 				return await tool.execute(toolCallId, params, signal, onUpdate, ctx);
 			} finally {
 				TIMINGS.set(toolCallId, Math.round(performance.now() - start));
+				ACTIVE--;
+				syncTicker();
 			}
 		},
 		renderCall(args: any, theme: Theme, context: TCtx) {
@@ -262,6 +286,24 @@ function minimal(
 }
 
 export default function (pi: ExtensionAPI) {
+	// Sumber render ulang untuk animasi ikon + bersih-bungkus ticker saat sesi tutup
+	pi.on("session_start", async (_event, ctx) => {
+		requestRenderFn = () => {
+			try {
+				(ctx.ui as { requestRender?: () => void }).requestRender?.();
+			} catch {
+				// ignore
+			}
+		};
+	});
+	pi.on("session_shutdown", async () => {
+		if (TICK) {
+			clearInterval(TICK);
+			TICK = null;
+		}
+		requestRenderFn = null;
+	});
+
 	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>  0.1s`
 	minimal(
 		pi,
@@ -399,5 +441,12 @@ if (isMain) {
 	assert(comp.render(10).length === 1, "running: kotak 󰔟 tampil");
 	st.hasResult = true;
 	assert(comp.render(10).length === 0, "final: kotak running hilang (restore-safe)");
+	assert(FRAMES.includes(spinIcon()), "ikon animasi selalu frame valid");
+	ACTIVE = 3;
+	syncTicker();
+	assert(TICK !== null, "ticker hidup selama ada tool berjalan");
+	ACTIVE = 0;
+	syncTicker();
+	assert(TICK === null, "ticker mati saat idle (tanpa leak timer)");
 	console.log("OK");
 }
