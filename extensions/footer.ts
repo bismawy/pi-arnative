@@ -38,7 +38,7 @@ let footerGen = (globalThis as Record<symbol, number>)[GEN_KEY] || 0;
 // 50ms: cukup 1-3 frame agar default sempat tampil, tapi lebih cepat dari
 // datangnya status ekstensi (itu yang membentuk frame-3-baris mentah).
 // 0 = tanpa kedip default; naikkan hanya bila frame mentah kembali muncul.
-const FOOTER_DELAY_MS = 50;
+const FOOTER_DELAY_MS = 0;
 
 // ponytail: log debug sementara, hapus setelah verifikasi /reload.
 const LOG_PATH = "/tmp/pi-arnative-footer.log";
