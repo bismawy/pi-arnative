@@ -487,7 +487,7 @@ export default function (pi: ExtensionAPI) {
 							// fallback
 						}
 						const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-						const right2 = [speedStr, opt ? tint(opt) : "", usageStr].filter(Boolean).join(` ${dim("·")} `);
+						const right2 = [speedStr, opt ? `${acc("\udb80\udf5b")} ${tint(opt)}` : "", usageStr].filter(Boolean).join(` ${dim("·")} `);
 
 						if (!right2) {
 							lines.push(truncateToWidth(left2, width));
