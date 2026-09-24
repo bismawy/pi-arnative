@@ -10,7 +10,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 
-type GitInfo = { branch: string; tag: string; uncommitted: number } | null;
+type GitInfo = { branch: string; tag: string; uncommitted: number; ahead: number; behind: number } | null;
 let gitRefreshInFlight = false;
 
 let git: GitInfo = null;
@@ -43,15 +43,22 @@ async function refreshGit(cwd: string): Promise<void> {
 		gitRefreshInFlight = false;
 		return;
 	}
-	const [tag, status] = await Promise.all([
+	const [tag, status, sync] = await Promise.all([
 		run("git", ["describe", "--tags", "--abbrev=0"], cwd),
 		run("git", ["status", "--porcelain"], cwd),
+		run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
 	]);
 	const uncommitted = status ? status.split("\n").filter((l) => l.trim().length > 0).length : 0;
+	// sync: "behind ahead"; tanpa upstream -> "" -> 0/0 (disembunyikan)
+	const parts = sync.trim() === "" ? [] : sync.trim().split(/\s+/).map(Number);
+	const behind = parts.length > 0 && parts[0] > 0 ? parts[0] : 0;
+	const ahead = parts.length > 1 && parts[1] > 0 ? parts[1] : 0;
 	git = {
 		branch,
 		tag: tag || "-",
 		uncommitted,
+		ahead,
+		behind,
 	};
 	gitRefreshInFlight = false;
 }
@@ -180,7 +187,7 @@ export default function (pi: ExtensionAPI) {
 					if (git) {
 						const gitIcon = acc("\uf172");
 						const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
-						const pBranch = `${acc("\uf126")} ${tint(git.branch)}`;
+						const pBranch = `${acc("\uf126")} ${tint(git.branch)}${git.ahead > 0 ? ` ${tint(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${tint(`↓${git.behind}`)}` : ""}`;
 						const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
 						const pState = `${gitIcon}  ${gitText}`;
 						const pSpeed = latestSpeed !== null && latestSpeed > 0 ? `${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
