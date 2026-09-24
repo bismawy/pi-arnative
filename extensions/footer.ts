@@ -9,6 +9,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 type GitInfo = { branch: string; tag: string; uncommitted: number; ahead: number; behind: number } | null;
 let gitRefreshInFlight = false;
@@ -22,6 +25,39 @@ let lastPokeMs = 0;
 const SESSION_START_KEY = Symbol.for("pi-arnative.sessionStartMs");
 let sessionStartMs: number = (globalThis as Record<symbol, number>)[SESSION_START_KEY] || Date.now();
 (globalThis as Record<symbol, number>)[SESSION_START_KEY] = sessionStartMs;
+
+const MODEL_KEY = Symbol.for("pi-arnative.currentModel");
+const THINKING_KEY = Symbol.for("pi-arnative.currentThinking");
+const CWD_KEY = Symbol.for("pi-arnative.lastCwd");
+const GIT_KEY = Symbol.for("pi-arnative.lastGit");
+const LAST_FOOTER_LINES_KEY = Symbol.for("pi-arnative.lastFooterLines");
+const PATCHED_KEY = Symbol.for("pi-arnative.footerComponentPatched");
+
+function patchBuiltInFooter(): void {
+	if ((globalThis as Record<symbol, boolean>)[PATCHED_KEY]) return;
+	(globalThis as Record<symbol, boolean>)[PATCHED_KEY] = true;
+
+	const candidates = [
+		join(process.env.APPDATA || "", "npm/node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/footer.js"),
+		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/footer.js",
+		"/usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/footer.js",
+	];
+	const footerJsPath = candidates.find((p) => p && existsSync(p));
+	if (!footerJsPath) return;
+
+	void import(pathToFileURL(footerJsPath).href).then((mod) => {
+		const comp = mod?.FooterComponent;
+		if (!comp?.prototype?.render) return;
+		const originalRender = comp.prototype.render;
+		comp.prototype.render = function (width: number): string[] {
+			const cached = (globalThis as Record<symbol, string[]>)[LAST_FOOTER_LINES_KEY];
+			if (cached && cached.length > 0) {
+				return cached;
+			}
+			return originalRender.call(this, width);
+		};
+	}).catch(() => {});
+}
 
 // Telemetri kecepatan token streaming murni (tok/s)
 let assistantStartMs: number | null = null;
@@ -62,6 +98,7 @@ async function refreshGit(cwd: string): Promise<void> {
 		ahead,
 		behind,
 	};
+	(globalThis as Record<symbol, any>)[GIT_KEY] = git;
 	gitRefreshInFlight = false;
 }
 
@@ -159,18 +196,30 @@ function poke(): void {
 }
 
 export default function (pi: ExtensionAPI) {
+	patchBuiltInFooter();
 	pi.on("session_start", async (event, ctx) => {
 		// reload = sesi yang sama lanjut -> timer jangan reset; new/resume/fork/startup = sesi baru
 		if (event.reason !== "reload") {
 			sessionStartMs = Date.now();
 			(globalThis as Record<symbol, number>)[SESSION_START_KEY] = sessionStartMs;
-		}
-
-		const mountFooter = () => {
 			currentModel = ctx.model;
 			currentThinkingLevel = ctx.thinkingLevel;
-			const cwd = ctx.cwd;
-			ctx.ui.setFooter((tui, theme, footerData) => {
+			git = null;
+		} else {
+			currentModel = (globalThis as Record<symbol, any>)[MODEL_KEY] ?? ctx.model;
+			currentThinkingLevel = (globalThis as Record<symbol, any>)[THINKING_KEY] ?? ctx.thinkingLevel;
+			git = (globalThis as Record<symbol, any>)[GIT_KEY] ?? null;
+		}
+		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
+		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
+		(globalThis as Record<symbol, any>)[GIT_KEY] = git;
+
+		const cwd = (event.reason === "reload" && (globalThis as Record<symbol, any>)[CWD_KEY])
+			? (globalThis as Record<symbol, any>)[CWD_KEY]
+			: ctx.cwd;
+		(globalThis as Record<symbol, any>)[CWD_KEY] = cwd;
+
+		ctx.ui.setFooter((tui, theme, footerData) => {
 			rerender = () => tui.requestRender();
 			const unsub = footerData.onBranchChange(() => {
 				void refreshGit(cwd).then(() => tui.requestRender());
@@ -263,26 +312,21 @@ export default function (pi: ExtensionAPI) {
 						const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
 						lines.push(truncateToWidth(left2 + pad2 + right2, width));
 					}
+					(globalThis as Record<symbol, string[]>)[LAST_FOOTER_LINES_KEY] = lines;
 					return lines;
 				},
 			};
 		});
 		// Git di background: dulu await sebelum setFooter → footer bawaan sempat tampil + start terasa berat.
 		void refreshGit(cwd).then(() => poke());
-		};
-
-		if (event.reason === "reload") {
-			// Saat reload: biarkan footer bawaan Pi tampil selama dialog reload aktif (1).
-			// Setelah reload selesai (dialog ditutup), langsung beralih ke pi-arnative (2).
-			setTimeout(mountFooter, 250);
-		} else {
-			mountFooter();
-		}
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
+		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
+		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
+		(globalThis as Record<symbol, any>)[CWD_KEY] = ctx.cwd;
 		void refreshGit(ctx.cwd).then(() => poke());
 	});
 
@@ -336,11 +380,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("model_select", async (event) => {
 		currentModel = event.model;
+		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
 		poke();
 	});
 
 	pi.on("thinking_level_select", async (event) => {
 		currentThinkingLevel = event.level;
+		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
 		poke();
 	});
 
