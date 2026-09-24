@@ -486,26 +486,14 @@ export default function (pi: ExtensionAPI) {
 						} catch {
 							// fallback
 						}
-						let right2 = "";
-						if (opt && usageStr) {
-							right2 = `${tint(opt)} ${dim("·")} ${usageStr}`;
-						} else if (opt) {
-							right2 = tint(opt);
-						} else if (usageStr) {
-							right2 = usageStr;
-						}
+						const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+						const right2 = [speedStr, opt ? tint(opt) : "", usageStr].filter(Boolean).join(` ${dim("·")} `);
 
 						if (!right2) {
 							lines.push(truncateToWidth(left2, width));
 						} else {
 							const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
 							lines.push(truncateToWidth(left2 + pad2 + right2, width));
-						}
-
-						const right3 = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-						if (right3) {
-							const pad3 = " ".repeat(Math.max(1, width - visibleWidth(right3)));
-							lines.push(truncateToWidth(pad3 + right3, width));
 						}
 						return lines;
 					},
@@ -574,7 +562,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_update", async (event) => {
-		if (event.message.role === "assistant" && assistantStartMs !== null) {
+		if (event.message.role === "assistant") {
+			// Timer mulai lazy bila message_start tidak terpicu (pasangan event rapuh)
+			if (assistantStartMs === null) assistantStartMs = Date.now();
 			const streamEvent = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
 			if (streamEvent?.delta) {
 				assistantChars += streamEvent.delta.length;
@@ -596,8 +586,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_end", async (event) => {
-		if (event.message.role === "assistant" && assistantStartMs !== null) {
-			const elapsed = (Date.now() - assistantStartMs) / 1000;
+		if (event.message.role === "assistant") {
+			const start = assistantStartMs ?? Date.now();
+			const elapsed = (Date.now() - start) / 1000;
 			assistantStartMs = null;
 			const usageOut = (event.message as AssistantMessage).usage?.output;
 			const finalTokens = typeof usageOut === "number" && usageOut > 0 ? usageOut : Math.ceil(assistantChars / 3.8);
