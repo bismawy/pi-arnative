@@ -157,8 +157,9 @@ function poke(): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.on("session_start", async (_event, ctx) => {
-		sessionStartMs = Date.now();
+	pi.on("session_start", async (event, ctx) => {
+		// reload = sesi yang sama lanjut -> timer jangan reset; new/resume/fork/startup = sesi baru
+		if (event.reason !== "reload") sessionStartMs = Date.now();
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
 		const cwd = ctx.cwd;
