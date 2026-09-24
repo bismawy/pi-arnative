@@ -8,6 +8,10 @@
  *   │ 󱞩 0.1s baris-pertama-output  │
  *   └──────────────────────────────┘
  * Klik / ctrl+e = judul penuh + detail (output = dim; edit = diff toolDiff*).
+ * Ringkasan collapsed: bash/write `durasi + baris pertama output`; grep/find/
+ * read ringkasan angka (→ N matches / → N files / N lines); edit `+N / -M`.
+ * Saat expand baris ringkasan cukup durasi/status - tanpa mengulang output
+ * yang sudah tampil penuh di bawahnya (anti duplikat baris pertama).
  * Warna: nama tool aksen, path/folder & link (URL) tint, sisanya default;
  * garis kotak + 󱞩 dim. Eksekusi murni delegasi (spread tool bawaan).
  * Status "sudah ada hasil" disimpan di context.state dan dibaca saat render()
@@ -29,6 +33,7 @@ import { homedir } from "node:os";
 type Theme = { fg(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
 type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown> };
+type Res = (r: TResult, th: Theme, tint: (s: string) => string, dur: string, isErr: boolean, expanded: boolean) => string;
 
 const cwd = process.cwd();
 const TIMINGS = new Map<string, number>(); // durasi ms per tool call (sekali jalan)
@@ -55,6 +60,8 @@ const textOf = (r: TResult): string =>
 
 const firstLine = (s: string): string => s.split("\n").find((l) => l.trim()) ?? "";
 
+const countLines = (s: string): number => (s ? s.split("\n").filter(Boolean).length : 0);
+
 // Filter path folder / link URL -> tint; sisanya default.
 export const LINK_RE = /(?:https?:\/\/[^\s"'`)}\]]+|(?:~|\.{1,2})?\/[\w.+@~%/-]+|[\w.+@~-]+(?:\/[\w.+@~%/-]+)+)/g;
 export function paintLinks(text: string, tint: (s: string) => string): string {
@@ -78,23 +85,34 @@ export function smartTitle(cmd: string, maxWords = 6): string {
 	return `${words.slice(0, maxWords).join(" ")}…`;
 }
 
-// Prefix baris hasil: 󱞩 + durasi (hila bila tak terukur, mis. restore sesi lama).
+// Prefix baris hasil: 󱞩 + durasi (hilang bila tak terukur, mis. restore sesi lama).
 export function resHead(theme: Theme, dur: string): string {
 	return theme.fg("dim", dur ? `󱞩 ${dur}` : "󱞩");
 }
 
-// baris hasil seragam: `󱞩 0.1s baris-pertama-output` (link/path -> tint)
-const resText = (r: TResult, theme: Theme, tint: (s: string) => string, dur: string): string => {
+// Ringkasan default: collapsed `󱞩 0.1s baris-pertama-output`, expand cukup durasi
+// (output sudah tampil penuh di bawah - tanpa duplikat baris pertama).
+export const resText: Res = (r, th, tint, dur, _isErr, expanded) => {
+	if (expanded) return resHead(th, dur);
 	const f = firstLine(textOf(r));
-	return f ? `${resHead(theme, dur)} ${paintLinks(f, tint)}` : resHead(theme, dur);
+	return f ? `${resHead(th, dur)} ${paintLinks(f, tint)}` : resHead(th, dur);
 };
 
+// Ringkasan angka: `󱞩 0.1s → N matches`; error jatuh ke baris pertama (info penting).
+export const numRes =
+	(fmt: (n: number) => string): Res =>
+	(r, th, tint, dur, isErr, expanded) => {
+		if (isErr) return resText(r, th, tint, dur, isErr, false);
+		if (expanded) return resHead(th, dur);
+		return `${resHead(th, dur)} ${fmt(countLines(textOf(r)))}`;
+	};
+
 // detail saat expand: warna dim saja (kecuali diff edit yang berwarna)
-const fullText = (r: TResult, theme: Theme): string[] =>
+const fullText = (r: TResult, th: Theme): string[] =>
 	textOf(r)
 		? textOf(r)
 				.split("\n")
-				.map((l) => theme.fg("dim", l))
+				.map((l) => th.fg("dim", l))
 		: [];
 
 const boxEdge = (l: string, r: string, width: number, dim: (s: string) => string): string =>
@@ -119,14 +137,15 @@ function box(theme: Theme, width: number, rows: string[]): string[] {
 // Satu jalur render untuk semua tool (tanpa duplikasi per tool).
 // renderCall = kotak running (󰔟) saja; renderResult = kotak final (✓/x + 󱞩);
 // state.hasResult ditulis renderResult dan dibaca saat render() -> tepat satu
-// kotak, juga setelah reload/restore.
+// kotak, juga setelah reload/restore. res & full opsional (default: baris
+// pertama output / detail dim) agar tool yang polos tidak mengulang lambda.
 function minimal(
 	pi: ExtensionAPI,
 	tool: { execute: (...a: any[]) => Promise<any> } & Record<string, unknown>,
 	name: (th: Theme, tint: (s: string) => string) => string,
 	call: (a: any, th: Theme, tint: (s: string) => string, expanded: boolean) => string,
-	res: (r: TResult, th: Theme, tint: (s: string) => string, dur: string, isErr: boolean) => string,
-	full?: (r: TResult, th: Theme) => string[],
+	res: Res = resText,
+	full: (r: TResult, th: Theme) => string[] = fullText,
 ): void {
 	pi.registerTool({
 		...tool,
@@ -167,9 +186,9 @@ function minimal(
 				const fit = (s: string) => (expanded ? s : truncateToWidth(s, inner, "…"));
 				const rows = [
 					fit(`${icon} ${name(theme, tint)} ${call(context.args ?? {}, theme, tint, expanded)}`),
-					fit(res(result, theme, tint, dur, isErr)),
+					fit(res(result, theme, tint, dur, isErr, expanded)),
 				];
-				if (expanded && full) rows.push(...full(result, theme));
+				if (expanded) rows.push(...full(result, theme));
 				return box(theme, width, rows);
 			});
 		},
@@ -177,7 +196,7 @@ function minimal(
 }
 
 export default function (pi: ExtensionAPI) {
-	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>`
+	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>`, res default
 	minimal(
 		pi,
 		createBashTool(cwd),
@@ -186,11 +205,9 @@ export default function (pi: ExtensionAPI) {
 			const cmd = (a.command ?? "").replace(/\r?\n/g, " ").trim();
 			return paintLinks(expanded ? cmd : smartTitle(cmd), tint);
 		},
-		(r, th, tint, dur) => resText(r, th, tint, dur),
-		fullText,
 	);
 
-	// read: `read path[:range]`
+	// read: `read path[:range]` → `N lines`
 	minimal(
 		pi,
 		createReadTool(cwd),
@@ -200,39 +217,34 @@ export default function (pi: ExtensionAPI) {
 				a.offset || a.limit ? `:${a.offset ?? 1}${a.limit ? `-${(a.offset ?? 1) + a.limit - 1}` : ""}` : "";
 			return `${tint(shortPath(a.path ?? ""))}${range}`;
 		},
-		(r, th, tint, dur) => resText(r, th, tint, dur),
-		fullText,
+		numRes((n) => `${n} lines`),
 	);
 
-	// grep: `grep /pattern/ in path (glob)`
+	// grep: `grep /pattern/ in path (glob)` → `→ N matches`
 	minimal(
 		pi,
 		createGrepTool(cwd),
 		(th) => th.fg("accent", "grep"),
 		(a, _th, tint) =>
 			`/${a.pattern ?? ""}/ in ${tint(shortPath(a.path ?? "."))}${a.glob ? ` (${a.glob})` : ""}`,
-		(r, th, tint, dur) => resText(r, th, tint, dur),
-		fullText,
+		numRes((n) => `→ ${n} matches`),
 	);
 
-	// find: `find pattern in path`
+	// find: `find pattern in path` → `→ N files`
 	minimal(
 		pi,
 		createFindTool(cwd),
 		(th) => th.fg("accent", "find"),
 		(a, _th, tint) => `${a.pattern ?? ""} in ${tint(shortPath(a.path ?? "."))}`,
-		(r, th, tint, dur) => resText(r, th, tint, dur),
-		fullText,
+		numRes((n) => `→ ${n} files`),
 	);
 
-	// write: `write path`
+	// write: `write path`, res default (baris pertama output)
 	minimal(
 		pi,
 		createWriteTool(cwd),
 		(th) => th.fg("accent", "write"),
 		(a, _th, tint) => tint(shortPath(a.path ?? "")),
-		(r, th, tint, dur) => resText(r, th, tint, dur),
-		fullText,
 	);
 
 	// edit: `edit path`, baris hasil `󱞩 0.1s +N / -M`, expand = diff toolDiff*
@@ -241,8 +253,8 @@ export default function (pi: ExtensionAPI) {
 		createEditTool(cwd),
 		(th) => th.fg("accent", "edit"),
 		(a, _th, tint) => tint(shortPath(a.path ?? "")),
-		(r, th, _tint, dur, isErr) => {
-			if (isErr) return resText(r, th, (s) => s, dur);
+		(r, th, _tint, dur, isErr, expanded) => {
+			if (isErr) return resText(r, th, (s) => s, dur, isErr, expanded);
 			const diff: string = r.details?.diff ?? "";
 			let add = 0;
 			let del = 0;
@@ -277,6 +289,7 @@ if (isMain) {
 	};
 	const mark = (s: string) => `<${s}>`;
 	const th: Theme = { fg: (_c, s) => s };
+	const R = { content: [{ type: "text", text: "path:1:match a\npath:2:match b\npath:3:match c" }] };
 
 	assert(smartTitle("echo hi") === "echo hi", "teks pendek utuh");
 	assert(smartTitle("ls a b c d e f g h") === "ls a b c d e…", "potong di batas 6 kata");
@@ -290,6 +303,18 @@ if (isMain) {
 
 	assert(resHead(th, "") === "󱞩", "tanpa durasi: ikon saja");
 	assert(resHead(th, "0.4s") === "󱞩 0.4s", "dengan durasi");
+
+	// anti duplikat: expand = durasi saja, tanpa baris pertama output
+	assert(resText(R, th, (s) => s, "0.1s", false, true) === "󱞩 0.1s", "expand: tanpa baris pertama");
+	assert(resText(R, th, (s) => s, "0.1s", false, false) === "󱞩 0.1s path:1:match a", "collapsed: baris pertama tampil");
+	// ringkasan angka
+	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, "0.1s", false, false) === "󱞩 0.1s → 3 matches", "grep: N matches");
+	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, "", false, true) === "󱞩", "expand angka: durasi saja");
+	assert(
+		numRes((n) => `→ ${n} matches`)({ content: [{ type: "text", text: "Error: bad pattern" }] }, th, (s) => s, "0.1s", true, false) ===
+			"󱞩 0.1s Error: bad pattern",
+		"error: jatuh ke baris pertama",
+	);
 
 	// regresi bug overflow + bug 󰔟 tertinggal
 	assert(visibleWidth(boxRow("hello", 20, (s) => s)) === 20, "boxRow pas lebar penuh");
