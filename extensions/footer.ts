@@ -418,10 +418,7 @@ export default function (pi: ExtensionAPI) {
 							const pBranch = `${acc("\uf126")} ${tint(git.branch)}${git.ahead > 0 ? ` ${tint(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${tint(`↓${git.behind}`)}` : ""}`;
 							const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
 							const pState = `${gitIcon}  ${gitText}`;
-							const pSpeed = latestSpeed !== null && latestSpeed > 0 ? `${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-							left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}${pSpeed}`;
-						} else if (latestSpeed !== null && latestSpeed > 0) {
-							left1 = `${left1}${sep}${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}`;
+							left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 						}
 						const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
 						const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
@@ -501,6 +498,12 @@ export default function (pi: ExtensionAPI) {
 						} else {
 							const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
 							lines.push(truncateToWidth(left2 + pad2 + right2, width));
+						}
+
+						const right3 = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+						if (right3) {
+							const pad3 = " ".repeat(Math.max(1, width - visibleWidth(right3)));
+							lines.push(truncateToWidth(pad3 + right3, width));
 						}
 						return lines;
 					},
