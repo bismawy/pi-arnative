@@ -35,8 +35,8 @@
 		"thinkingText": "gray",
 
 		"selectedBg": "selectedBg",
-		"scrollbarTrack": "darkGray",
-		"scrollbarThumb": "text",
+		"scrollbarTrack": "softCyan",
+		"scrollbarThumb": "softCyan",
 		"searchMatchBg": "selectedBg",
 		"searchMatchText": "text",
 		"userMessageBg": "userMsgBg",

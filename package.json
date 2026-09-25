@@ -3,14 +3,23 @@
   "version": "0.1.0",
   "private": true,
   "description": "Pi package: tema, style, footer, timestamp plus model",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "type": "module",
   "pi": {
-    "extensions": ["./extensions/*.ts"],
-    "themes": ["./themes/*.json"]
+    "extensions": [
+      "./extensions/*.ts"
+    ],
+    "themes": [
+      "./themes/*.json"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "scripts": {
+    "test": "node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts"
   }
 }
