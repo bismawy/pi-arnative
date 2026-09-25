@@ -20,6 +20,6 @@
     "@earendil-works/pi-tui": "*"
   },
   "scripts": {
-    "test": "node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts"
+    "test": "node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts"
   }
 }

@@ -1,13 +1,25 @@
 /**
- * Dua tambalan kecil pada renderer pi fullscreen:
+ * Empat tambalan kecil pada renderer pi fullscreen (semua di lapisan render, tanpa
+ * mengubah data sesi):
  * 1. Sembunyikan box "Reloading keybindings, extensions, skills..." bawaan pi
  *    (hardcoded di handleReloadCommand, tak ada auto-hide).
  * 2. Seleksi drag: pi hanya membungkus irisan dengan reverse video (\x1b[7m) —
  *    di terminal/tema tertentu teks jadi tak terbaca. Ganti jadi warna eksplisit
  *    (bg selectedBg + fg text) supaya teks selalu terlihat.
+ * 3. Pesan compaction: bawaan pi = label + baris kosong + teks (3 baris). Kita
+ *    rapatkan jadi satu baris `[compaction] Compacted from N tokens (ctrl+o to expand)`.
+ * 4. Pesan custom `pi-jev-eye-review`: bawaan pi menambah label `[pi-jev-eye-review]` +
+ *    baris kosong di dalam kotak ungu; renderer kita tampilkan isi apa adanya.
  */
-import { UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { TuiAltScreen } from "@earendil-works/pi-tui";
+import {
+	CompactionSummaryMessageComponent,
+	getMarkdownTheme,
+	initTheme,
+	keyText,
+	UserMessageComponent,
+	type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, MouseRegion, Spacer, Text, TuiAltScreen } from "@earendil-works/pi-tui";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
@@ -77,11 +89,86 @@ if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[SELECTIO
 	}
 }
 
-export default function (pi: ExtensionAPI) {
+export default function uiRenderTweaks(pi: ExtensionAPI) {
 	// Tema aktif diambil ulang tiap sesi (ctx.ui.theme); render membacanya lazy.
 	pi.on("session_start", async (_event, ctx) => {
 		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
 	});
+
+	// 4. Pesan kontrak `pi-jev-eye-review`: label ganda + baris kosong + kotak ungu
+	// dihapus, isi pesan tampil apa adanya (baris `[pi-jev-eye] ...` sudah ada di
+	// dalam isinya sendiri).
+	pi.registerMessageRenderer("pi-jev-eye-review", (message, _opts, th) =>
+		new Text(customMessageText(message.content), 0, 0, (t) => th.fg("customMessageText", t)),
+	);
+}
+
+// 3. Pesan compaction: satu baris, bukan tiga (label, spacer, teks).
+// Tema aktif dipakai supaya warna identik dengan kotak bawaan pi; sebelum sesi
+// jalan (proxy belum ada) biarkan renderer bawaan yang bekerja.
+export function compactionLine(th: { fg(c: string, t: string): string }, tokenStr: string): string {
+	const label = th.fg("customMessageLabel", "\x1b[1m[compaction]\x1b[22m");
+	return `${label} ${th.fg("customMessageText", `Compacted from ${tokenStr} tokens (`)}${th.fg("dim", expandKey())}${th.fg(
+		"customMessageText",
+		" to expand)",
+	)}`;
+}
+
+// Teks tombol ikut keybinding aktif; di luar sesi pi keyText() kosong.
+function expandKey(): string {
+	try {
+		return keyText("app.tools.expand") || "ctrl+o";
+	} catch {
+		return "ctrl+o";
+	}
+}
+
+// Isi pesan custom: string apa adanya, atau gabungan blok teks (blok gambar dibuang).
+export function customMessageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content))
+		return content
+			.filter((c) => (c as { type?: string })?.type === "text")
+			.map((c) => (c as { text?: string }).text ?? "")
+			.join("\n");
+	return "";
+}
+
+const COMPACTION_KEY = Symbol.for("pi-arnative.compactionOneLine");
+if (CompactionSummaryMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[COMPACTION_KEY]) {
+	(globalThis as Record<symbol, boolean>)[COMPACTION_KEY] = true;
+	const proto = CompactionSummaryMessageComponent.prototype as any;
+	const origUpdateDisplay = proto.updateDisplay;
+	proto.updateDisplay = function (): void {
+		const th = activeThemeProxy;
+		if (!th) return origUpdateDisplay.call(this);
+		const message = this.message as { tokensBefore?: number; summary?: string } | undefined;
+		const tokenStr = Number(message?.tokensBefore ?? 0).toLocaleString();
+		this.clear();
+		const content = new Container();
+		if (this.expanded) {
+			content.addChild(new Text(th.fg("customMessageLabel", "\x1b[1m[compaction]\x1b[22m"), 0, 0));
+			content.addChild(new Spacer(1));
+			content.addChild(
+				new Markdown(
+					`**Compacted from ${tokenStr} tokens**\n\n${message?.summary ?? ""}`,
+					0,
+					0,
+					this.markdownTheme ?? getMarkdownTheme(),
+					{ color: (t: string) => th.fg("customMessageText", t) },
+				),
+			);
+		} else {
+			content.addChild(new Text(compactionLine(th, tokenStr), 0, 0));
+		}
+		this.addChild(
+			new MouseRegion(content, (event: any) => {
+				if (event.type !== "click" || event.button !== "left") return undefined;
+				this.setExpanded(!this.expanded);
+				return { handled: true };
+			}),
+		);
+	};
 }
 
 // Self-check: `node extensions/ui-render-tweaks.ts`
@@ -106,5 +193,80 @@ if (isMain) {
 	assert(ansiFgOpen(null) === "", "tanpa tema: fgOpen kosong");
 	assert(ansiFgOpen({ fg: (_c, t) => `\x1b[38;2;1;2;3m${t}\x1b[39m` }) === "\x1b[38;2;1;2;3m", "fgOpen terambil dari probe tema");
 	assert(ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;9;9;9m${t}\x1b[49m` }, "selectedBg") === "\x1b[48;2;9;9;9m", "bgOpen selectedBg terambil");
+
+	// compaction: tiga baris bawaan pi -> satu baris
+	assert(
+		compactionLine({ fg: (_c, t) => t }, "112,247").replace(/\x1b\[[0-9;]*m/g, "") ===
+			"[compaction] Compacted from 112,247 tokens (ctrl+o to expand)",
+		"compaction: label + teks + petunjuk expand dalam satu baris (tanpa baris kosong)",
+	);
+
+	// pesan custom: isi apa adanya, tanpa label/garis tambahan
+	assert(
+		customMessageText("[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user") ===
+			"[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user",
+		"isi pesan custom utuh",
+	);
+	assert(
+		customMessageText([
+			{ type: "text", text: "a" },
+			{ type: "image", data: "x" },
+			{ type: "text", text: "b" },
+		]) === "a\nb",
+		"blok non-teks dibuang",
+	);
+
+	// Integrasi: jalankan factory seperti pi, lalu panggil updateDisplay/ renderer asli
+	const fakePi = {
+		handlers: [] as any[],
+		renderers: {} as Record<string, any>,
+		on(_e: string, h: any) {
+			this.handlers.push(h);
+			return () => {};
+		},
+		registerMessageRenderer(t: string, r: any) {
+			this.renderers[t] = r;
+		},
+	};
+	initTheme(); // markdown + tema internal pi (di sesi nyata sudah aktif)
+	uiRenderTweaks(fakePi as any);
+	await fakePi.handlers[0]({}, { ui: { theme: { fg: (_c: string, t: string) => t } } });
+
+	const kids: any[] = [];
+	const fake = {
+		expanded: false,
+		message: { tokensBefore: 112247, summary: "**Ringkasan** panjang\n\n- satu" },
+		clear() {
+			kids.length = 0;
+		},
+		addChild(c: any) {
+			kids.push(c);
+		},
+	};
+	CompactionSummaryMessageComponent.prototype.updateDisplay.call(fake as any);
+	const collapsed = kids[0].render(120);
+	assert(
+		collapsed.length === 1 && collapsed[0].trimEnd().endsWith("Compacted from 112,247 tokens (ctrl+o to expand)"),
+		"compaction collapsed: tepat satu baris",
+	);
+
+	fake.expanded = true;
+	CompactionSummaryMessageComponent.prototype.updateDisplay.call(fake as any);
+	const expanded = kids[0].render(120);
+	assert(
+		expanded.length > 1 && expanded.some((l: string) => l.includes("[compaction]")) && expanded.join(" ").includes("Ringkasan"),
+		"compaction expanded: label + ringkasan markdown tetap ada",
+	);
+
+	const contract = fakePi.renderers["pi-jev-eye-review"](
+		{ customType: "pi-jev-eye-review", content: "[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user" },
+		{ expanded: false, outputPad: 1 },
+		{ fg: (_c: string, t: string) => t },
+	);
+	const contractLines = contract.render(120).map((l: string) => l.trimEnd());
+	assert(
+		contractLines[0] === "[pi-jev-eye] Reviewed turn contract:" && contractLines.length === 2,
+		"pesan kontrak: isi apa adanya, tanpa label/baris kosong tambahan",
+	);
 	console.log("ui-render-tweaks.ts self-check OK");
 }

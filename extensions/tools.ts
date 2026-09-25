@@ -19,6 +19,10 @@
  * Status "sudah ada hasil" di context.state, dibaca saat render() -> aman
  * reload/restore, tanpa kotak 󰔟 tertinggal. Gap antar kotak (Spacer bawaan
  * ToolExecutionComponent) dibuang via patch render (pola sama patch footer).
+ * Tool pihak lain yang TIDAK punya renderer sendiri (memory_write, scratchpad,
+ * MCP, …) dapat perlakuan sama: pi merendernya polos (nama + 10 baris output),
+ * kita alihkan ke shell "self" + kotak dengan satu baris ringkasan ber-
+ * `[ctrl+o to expand]`; detail lengkap hanya saat expand.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -28,6 +32,7 @@ import {
 	createGrepTool,
 	createReadTool,
 	createWriteTool,
+	keyText,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -155,6 +160,30 @@ export const numRes =
 		return `${resHead(th)} ${fmt(countLines(textOf(r)))}`;
 	};
 
+// Heading pertama pada isi tulisan (mis. `## omaga-sync workflow (2026-08-23)`).
+const firstHeading = (s: unknown): string =>
+	typeof s === "string" ? (s.split("\n").find((l) => /^#{1,6}\s/.test(l.trim()))?.trim() ?? "") : "";
+
+// Ringkasan satu baris untuk tool tanpa renderer sendiri. memory_write dapat
+// judul seksi yang baru ditulis (dari args.content) supaya baris hasil menyebut
+// APA yang tertulis, bukan cuma "Appended to MEMORY.md".
+export function toolSummary(name: string, text: string, args?: any): string {
+	const head = firstLine(text);
+	const title = name === "memory_write" ? firstHeading(args?.content) : "";
+	return title ? `${head}. ${title}` : head;
+}
+
+// Petunjuk expand `[ctrl+o to expand]` (teks tombol ikut keybinding aktif).
+export function expandHint(th: Theme): string {
+	let key = "ctrl+o";
+	try {
+		key = keyText("app.tools.expand") || key;
+	} catch {
+		// di luar sesi pi: pakai literal
+	}
+	return th.fg("dim", `[${key} to expand]`);
+}
+
 // detail saat expand: warna dim saja (kecuali diff edit yang berwarna)
 const fullText = (r: TResult, th: Theme): string[] =>
 	textOf(r)
@@ -183,6 +212,70 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	const origRender = ToolExecutionComponent.prototype.render;
 	ToolExecutionComponent.prototype.render = function (width: number): string[] {
 		return stripBlankEdges(origRender.call(this, width));
+	};
+}
+
+// --- Tool tanpa renderer sendiri: kotak yang sama, ringkasan satu baris ---
+// Tanpa patch ini pi merender mereka sebagai blok bg polos (nama + potongan
+// 10 baris output). Renderer kita dipasang lewat prototype (pola sama gap patch),
+// hanya bila tool tidak punya renderCall/renderResult sendiri (tool bawaan kita
+// dan pi-web-access dll. tak tersentuh).
+const DEFAULT_TOOL_KEY = Symbol.for("pi-arnative.defaultToolBox");
+if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY]) {
+	(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY] = true;
+	const proto = ToolExecutionComponent.prototype as any;
+	const origCall = proto.getCallRenderer;
+	const origResult = proto.getResultRenderer;
+	const origShell = proto.getRenderShell;
+	const hasOwnRenderer = (self: any): boolean => Boolean(origCall.call(self) || origResult.call(self));
+
+	proto.getRenderShell = function (): string {
+		return hasOwnRenderer(this) ? origShell.call(this) : "self";
+	};
+
+	proto.getCallRenderer = function () {
+		if (hasOwnRenderer(this)) return origCall.call(this);
+		const name: string = this.toolName;
+		return (_args: any, th: Theme, ctx: TCtx) =>
+			new Lines((width) => {
+				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
+				const inner = Math.max(8, width - 4);
+				return box(
+					th,
+					width,
+					titleRow(th, th.fg("warning", spinIcon()), th.fg("accent", name), "", inner, "", false),
+				);
+			});
+	};
+
+	proto.getResultRenderer = function () {
+		if (hasOwnRenderer(this)) return origResult.call(this);
+		const name: string = this.toolName;
+		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
+			if (opts.isPartial) return EMPTY;
+			((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
+			const text = textOf(result);
+			return new Lines((width) => {
+				const tint = tintOf(th);
+				const inner = Math.max(8, width - 4);
+				const isErr = Boolean(ctx.isError || result.isError);
+				const rows = titleRow(
+					th,
+					isErr ? th.fg("error", "x") : th.fg("success", "✓"),
+					th.fg("accent", name),
+					"",
+					inner,
+					"",
+					opts.expanded,
+				);
+				const summary = toolSummary(name, text, ctx.args);
+				const more = countLines(text) > 1;
+				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
+				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, tint)}` : ""}${hint}`);
+				if (opts.expanded) rows.push(...fullText(result, th));
+				return box(th, width, rows);
+			});
+		};
 	};
 }
 
@@ -434,6 +527,51 @@ if (isMain) {
 	assert(stripBlankEdges(["", "a", "", "b", "  ", ""]).join() === "a,,b", "baris kosong tepi dibuang");
 	assert(stripBlankEdges(["", "\x1b[2m\x1b[22m", "x"]).join() === "x", "baris ANSI kosong = blank");
 	assert(stripBlankEdges(["a"]).join() === "a", "tanpa blank tetap utuh");
+
+	// tool tanpa renderer sendiri -> kotak yang sama (memory_write dll.)
+	const noRenderer = { toolName: "memory_write", toolDefinition: {} };
+	const withRenderer = { toolName: "bash", toolDefinition: { renderResult: () => undefined } };
+	assert(ToolExecutionComponent.prototype.getRenderShell.call(noRenderer) === "self", "tool polos -> shell self");
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(withRenderer) === "default",
+		"tool ber-renderer -> shell aslinya (tak disentuh)",
+	);
+	assert(
+		toolSummary("memory_write", "Appended to MEMORY.md\n\nExisting MEMORY.md preview (1 lines)", {
+			content: "## omaga-sync workflow (2026-08-23)\n- Repo: /x",
+		}) === "Appended to MEMORY.md. ## omaga-sync workflow (2026-08-23)",
+		"memory_write: ringkasan + judul seksi yang baru ditulis",
+	);
+	assert(
+		toolSummary("memory_write", "Appended to daily log: /x/y.md", { content: "- catatan tanpa judul" }) ===
+			"Appended to daily log: /x/y.md",
+		"memory_write daily: tanpa judul tetap baris pertama",
+	);
+	assert(toolSummary("todo", "line1\nline2") === "line1", "tool lain: baris pertama saja");
+
+	const ctxState: TCtx = { args: { content: "## Judul\n- x" }, state: {} };
+	const resRenderer = ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any;
+	const out = resRenderer(
+		{ content: [{ type: "text", text: "Appended to MEMORY.md\n\nExisting MEMORY.md preview" }] },
+		{ expanded: false, isPartial: false },
+		th,
+		ctxState,
+	).render(60);
+	assert(out[0].startsWith("┌") && out[out.length - 1].startsWith("└"), "hasil tool polos dibungkus kotak");
+	assert(
+		out.some((l: string) => l.includes("Appended to MEMORY.md. ## Judul")),
+		"kotak memuat ringkasan + judul",
+	);
+	assert(out.some((l: string) => l.includes("[ctrl+o to expand]")), "collapsed: ada petunjuk expand");
+	assert(
+		resRenderer(
+			{ content: [{ type: "text", text: "Appended to MEMORY.md\n\nExisting preview" }] },
+			{ expanded: true, isPartial: false },
+			th,
+			ctxState,
+		).render(60).length > out.length,
+		"expand: detail lengkap ikut tampil",
+	);
 
 	// bug 󰔟 tertinggal (restore-safe)
 	const st: Record<string, unknown> = {};
