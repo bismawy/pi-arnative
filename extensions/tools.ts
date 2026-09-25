@@ -642,6 +642,18 @@ if (isMain) {
 		"pi-web-access: baris args renderer mereka masuk kotak",
 	);
 
+	// Guard: web_search/source_check SENGAJA tidak dipaksa — fase partial kurator
+	// memuat URL + status persetujuan, sedangkan jalur partial kita mengosongkan.
+	// Tanpa assert ini, penyuntingan BOXED_TOOLS di kemudian hari bisa menelannya diam-diam.
+	for (const n of ["web_search", "source_check"]) {
+		const theirs = () => "renderer-mereka";
+		assert(
+			ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: n, toolDefinition: { renderResult: theirs } })() ===
+				"renderer-mereka",
+			`${n}: sengaja tidak dipaksa kotak (partial kurator butuh URL)`,
+		);
+	}
+
 	const ctxState: TCtx = { args: { content: "## Judul\n- x" }, state: {} };
 	const resRenderer = ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any;
 	const out = resRenderer(
