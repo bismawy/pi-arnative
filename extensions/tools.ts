@@ -287,7 +287,9 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 			if (opts.isPartial) return EMPTY;
 			((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
 			const text = textOf(result);
-			const isErr = Boolean(ctx.isError || result.isError);
+			// pi-web-access melaporkan kegagalan lewat `details.error` tanpa melempar,
+			// jadi ctx.isError saja tidak cukup: tanpa ini kotak error tampil dengan ✓.
+			const isErr = Boolean(ctx.isError || result.isError || (result.details as { error?: unknown } | undefined)?.error);
 			// Error pakai jalur kita sendiri: kotak error bawaan pi-web-access = kotak
 			// di dalam kotak. Isi renderer mereka hanya dipakai saat sukses.
 			const theirs =
@@ -305,7 +307,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const more = countLines(text) > 1;
 				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
 				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, tint)}` : ""}${hint}`);
-				if (opts.expanded) rows.push(...fullText(result, th));
+				if (opts.expanded && more) rows.push(...fullText(result, th));
 				return box(th, width, rows);
 			});
 		};
@@ -603,6 +605,20 @@ if (isMain) {
 	assert(bOut[0].startsWith("┌") && bOut[bOut.length - 1].startsWith("└"), "pi-web-access: hasil dibungkus kotak kita");
 	assert(bOut.some((l: string) => l.includes("(77 matches, 77 shown)")), "pi-web-access: info renderer mereka dipertahankan");
 	assert(!bOut.some((l: string) => l.includes("raw panjang")), "pi-web-access: teks mentah tidak dipakai saat renderer ada");
+	assert(
+		bRes(
+			{
+				content: [{ type: "text", text: "No URL specified. Provide url, urlIndex, or query." }],
+				details: { error: "No URL specified" },
+			},
+			{ expanded: false, isPartial: false },
+			th,
+			{ args: {} },
+		)
+			.render(60)
+			.some((l: string) => l.includes("x get_content")),
+		"pi-web-access: details.error -> ikon x (bukan ✓)",
+	);
 	const bErr = bRes(
 		{ content: [{ type: "text", text: "No URL specified. Provide url, urlIndex, or query." }] },
 		{ expanded: false, isPartial: false },
