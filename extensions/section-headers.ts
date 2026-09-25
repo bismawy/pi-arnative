@@ -5,13 +5,16 @@
  *
  * Tertutup = "<ikon> Nama [jumlah]" saja (isi seksi disembunyikan), terbuka =
  * header + isi. Klik baris header (ikon/nama/[jumlah]) men-toggle seksi itu;
- * tombol app.tools.expand pi tetap men-toggle semuanya.
+ * tombol app.tools.expand pi tetap men-toggle semuanya. Label seksi Extensions
+ * diberi versi paket terpasang ("@bismawy/pi-agentrouter@1.6.1").
  *
  * Intercept ExpandableText lewat Container.prototype.addChild (class-nya tak
  * diekspor pi). Semua jalur gagal = teks asli dikembalikan utuh (fail-safe),
  * jadi baris header tidak mungkin kosong.
  */
-import { UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { UserMessageComponent, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
@@ -75,6 +78,71 @@ export function rewriteSectionHeader(text: string, count: number, th: Themeish, 
 	return next.includes(name) && next.trim() !== "" ? next : text;
 }
 
+const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
+
+// Sisipkan `text` tepat sebelum karakter terlihat ke-`visibleIndex` (kode ANSI
+// dilewati, tidak dihitung sebagai karakter).
+function insertAtVisible(s: string, visibleIndex: number, text: string): string {
+	let seen = 0;
+	for (let i = 0; i < s.length; i += 1) {
+		if (seen === visibleIndex) return s.slice(0, i) + text + s.slice(i);
+		if (s[i] === "\x1b") {
+			const end = s.indexOf("m", i);
+			i = end === -1 ? s.length : end;
+			continue;
+		}
+		seen += 1;
+	}
+	return s + text;
+}
+
+// Label di daftar ringkas Extensions -> nama paket npm: "@scope/nama",
+// "@scope/nama:sub/path.ts" -> "@scope/nama"; sudah berversi -> null (tak dobel).
+export function packageNameOf(label: string): string | null {
+	const base = label.split(":")[0].trim();
+	if (base === "") return null;
+	const at = base.lastIndexOf("@");
+	if (at > 0 && /^\d/.test(base.slice(at + 1))) return null;
+	return /^[\w.@/-]+$/.test(base) ? base : null;
+}
+
+// Versi paket npm terpasang; gagal baca = null (label dibiarkan apa adanya).
+const versionCache = new Map<string, string | null>();
+export function installedVersion(label: string, root = join(getAgentDir(), "npm", "node_modules")): string | null {
+	const name = packageNameOf(label);
+	if (!name) return null;
+	if (versionCache.has(name)) return versionCache.get(name) ?? null;
+	let version: string | null = null;
+	try {
+		const pkg = JSON.parse(readFileSync(join(root, name, "package.json"), "utf8")) as { version?: unknown };
+		version = typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
+	} catch {
+		version = null;
+	}
+	versionCache.set(name, version);
+	return version;
+}
+
+// Body daftar Extensions + "@versi" per label yang versinya diketahui:
+// "@bismawy/pi-agentrouter" -> "@bismawy/pi-agentrouter@1.6.1",
+// "pi-antigravity:src" -> "pi-antigravity@1.6.1:src". Body pi ber-ANSI, jadi
+// label dibaca tanpa kode warna lalu versi disisipkan pada offset terlihat
+// (kode warna awal/akhir tetap utuh).
+export function withExtensionVersions(body: string, resolve: (label: string) => string | null = installedVersion): string {
+	return body
+		.split(", ")
+		.map((label) => {
+			const visible = stripAnsi(label);
+			const colon = visible.indexOf(":");
+			const name = (colon === -1 ? visible : visible.slice(0, colon)).trim();
+			const version = name === "" || !packageNameOf(name) ? null : resolve(name);
+			if (!version) return label;
+			const at = colon === -1 ? visible.trimEnd().length : colon;
+			return insertAtVisible(label, at, `@${version}`);
+		})
+		.join(", ");
+}
+
 const SECTION_HEADER_KEY = Symbol.for("pi-arnative.sectionHeadersRewritten");
 if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[SECTION_HEADER_KEY]) {
 	(globalThis as Record<symbol, boolean>)[SECTION_HEADER_KEY] = true;
@@ -85,18 +153,27 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 		const origAddChild = containerProto.addChild;
 		containerProto.addChild = function (child: any): unknown {
 			try {
+				const sectionName = sectionNameOf(String(child?.getCollapsedText?.() ?? ""));
 				const isSection = child && typeof child.getCollapsedText === "function"
 					&& typeof child.getExpandedText === "function" && typeof child.setText === "function"
-					&& SECTION_ICONS[sectionNameOf(String(child.getCollapsedText())) ?? ""] !== undefined;
+					&& (sectionName === null ? false : SECTION_ICONS[sectionName] !== undefined);
 				const wrapped = (child as { _arnativeHeaderWrapped?: boolean })?._arnativeHeaderWrapped === true;
 				if (isSection && !wrapped) {
 					const origCollapsed = child.getCollapsedText.bind(child) as () => string;
 					const count = sectionItemCount(origCollapsed().split("\n").slice(1).join("\n"));
 					const theme = () => activeThemeProxy as Themeish;
+					// Versi paket hanya untuk seksi Extensions, dan hanya pada baris body
+					// (baris pertama = header, jangan ikut diproses).
+					const withVersions = (text: string) => {
+						if (sectionName !== "Extensions") return text;
+						const nl = text.indexOf("\n");
+						return nl === -1 ? text : text.slice(0, nl + 1) + withExtensionVersions(text.slice(nl + 1));
+					};
+					const body = (text: string) => withVersions(text);
 					// Body kedua state = daftar ringkas pi (satu baris koma, membungkus
 					// menyamping); format bergrup pi (satu item per baris) tidak dipakai.
-					const collapsedText = () => rewriteSectionHeader(origCollapsed(), count, theme());
-					const expandedText = () => rewriteSectionHeader(origCollapsed(), count, theme(), true);
+					const collapsedText = () => rewriteSectionHeader(body(origCollapsed()), count, theme());
+					const expandedText = () => rewriteSectionHeader(body(origCollapsed()), count, theme(), true);
 					let expanded = false;
 					child.getCollapsedText = collapsedText;
 					child.getExpandedText = expandedText;
@@ -161,6 +238,18 @@ if (isMain) {
 	assert(rewriteSectionHeader("pi v0.87.1", 1, fakeTheme) === "pi v0.87.1", "teks non-seksi tak berubah");
 	assert(rewriteSectionHeader("[Themes]\n  x", 1, { fg: () => "" }, true) === "\uee72 Themes [1]\n  x", "tema rusak: label tetap utuh (fail-safe)");
 	assert(fgFirst({ fg: () => "" }, ["tint", "text"], "z") === "z", "fg gagal: teks dikembalikan polos");
+	// Versi paket di daftar Extensions (resolver di-inject supaya tak bergantung env)
+	assert(packageNameOf("@bismawy/pi-agentrouter") === "@bismawy/pi-agentrouter", "label npm polos");
+	assert(packageNameOf("@bismawy/pi-vision-watcher:vision-watcher.ts") === "@bismawy/pi-vision-watcher", "label npm dengan subpath");
+	assert(packageNameOf("pi-mcp-adapter@2.36.0") === null, "label yang sudah berversi dilewati");
+	assert(packageNameOf("footer.ts") === "footer.ts", "label lokal tetap dicoba resolve");
+	const fakeVersion = (label: string) => label.startsWith("@bismawy/") ? "1.6.1" : null;
+	const bodyWithVersions = withExtensionVersions("  @bismawy/pi-agentrouter, footer.ts, pi-mcp-adapter@2.36.0", fakeVersion);
+	assert(bodyWithVersions === "  @bismawy/pi-agentrouter@1.6.1, footer.ts, pi-mcp-adapter@2.36.0", `versi disisipkan, label lain utuh (nyata: "${bodyWithVersions}")`);
+	assert(withExtensionVersions("@bismawy/pi-vision-watcher:vision-watcher.ts", fakeVersion) === "@bismawy/pi-vision-watcher@1.6.1:vision-watcher.ts", "subpath: versi setelah nama paket");
+	const ansiBody = `\x1b[38;2;102;102;102m  @bismawy/pi-agentrouter, footer.ts\x1b[39m`;
+	assert(withExtensionVersions(ansiBody, fakeVersion) === `\x1b[38;2;102;102;102m  @bismawy/pi-agentrouter@1.6.1, footer.ts\x1b[39m`, "body ber-ANSI: label pertama ikut dapat versi, kode warna utuh");
+	assert(withExtensionVersions("", fakeVersion) === "" && withExtensionVersions("  a, b", () => null) === "  a, b", "tanpa versi: body tak berubah");
 	// Pasang lewat addChild asli -> klaim: mulai tertutup, klik men-toggle, isi ikut hilang/tampil
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };
 	assert(typeof proto.addChild === "function", "addChild pi terpasang");
