@@ -220,6 +220,35 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 // 10 baris output). Renderer kita dipasang lewat prototype (pola sama gap patch),
 // hanya bila tool tidak punya renderCall/renderResult sendiri (tool bawaan kita
 // dan pi-web-access dll. tak tersentuh).
+//
+// Pengecualian: dua tool pi-web-access yang tampil beda dari kotak kita
+// (`fetch_content`, `get_search_content`; nama tampilannya di-hardcode oleh paket
+// itu sebagai "fetch "/"get_content "). Isi renderer mereka dipakai apa adanya dan
+// hanya dibungkus kotak kita. `web_search`/`source_check` sengaja TIDAK dipaksa:
+// fase partial-nya (kurator: URL + status persetujuan) akan hilang karena jalur
+// partial kita mengembalikan kosong.
+const BOXED_TOOLS = new Map([
+	["fetch_content", "fetch"],
+	["get_search_content", "get_content"],
+]);
+const displayName = (name: string): string => BOXED_TOOLS.get(name) ?? name;
+
+// Baris dari komponen renderer pihak ketiga (spasi kanan dipangkas, ANSI utuh).
+const componentLines = (component: any, width: number): string[] => {
+	try {
+		const lines = component?.render(Math.max(8, width));
+		return Array.isArray(lines) ? lines.map((l: string) => String(l).trimEnd()) : [];
+	} catch {
+		return [];
+	}
+};
+
+// Ikon status + baris renderer pihak ketiga -> baris isi kotak kita.
+const boxedRows = (icon: string, lines: string[]): string[] => {
+	const body = lines.filter((l) => !isBlankLine(l));
+	return body.length ? [`${icon} ${body[0]}`, ...body.slice(1)] : [icon];
+};
+
 const DEFAULT_TOOL_KEY = Symbol.for("pi-arnative.defaultToolBox");
 if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY]) {
 	(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY] = true;
@@ -230,44 +259,48 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	const hasOwnRenderer = (self: any): boolean => Boolean(origCall.call(self) || origResult.call(self));
 
 	proto.getRenderShell = function (): string {
+		if (BOXED_TOOLS.has(this.toolName)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
 	};
 
 	proto.getCallRenderer = function () {
-		if (hasOwnRenderer(this)) return origCall.call(this);
 		const name: string = this.toolName;
-		return (_args: any, th: Theme, ctx: TCtx) =>
+		const own = origCall.call(this);
+		if (own && !BOXED_TOOLS.has(name)) return own;
+		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
+				const icon = th.fg("warning", spinIcon());
+				const theirs = own ? componentLines(own.call(this, args, th, ctx), width - 6) : [];
+				if (BOXED_TOOLS.has(name) && theirs.length) return box(th, width, boxedRows(icon, theirs));
 				const inner = Math.max(8, width - 4);
-				return box(
-					th,
-					width,
-					titleRow(th, th.fg("warning", spinIcon()), th.fg("accent", name), "", inner, "", false),
-				);
+				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false));
 			});
 	};
 
 	proto.getResultRenderer = function () {
-		if (hasOwnRenderer(this)) return origResult.call(this);
 		const name: string = this.toolName;
+		const own = origResult.call(this);
+		if (own && !BOXED_TOOLS.has(name)) return own;
+		const boxed = BOXED_TOOLS.has(name);
 		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
 			if (opts.isPartial) return EMPTY;
 			((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
 			const text = textOf(result);
+			const isErr = Boolean(ctx.isError || result.isError);
+			// Error pakai jalur kita sendiri: kotak error bawaan pi-web-access = kotak
+			// di dalam kotak. Isi renderer mereka hanya dipakai saat sukses.
+			const theirs =
+				boxed && !isErr
+					? own.call(this, { content: result.content, details: result.details }, opts, th, ctx)
+					: null;
 			return new Lines((width) => {
 				const tint = tintOf(th);
 				const inner = Math.max(8, width - 4);
-				const isErr = Boolean(ctx.isError || result.isError);
-				const rows = titleRow(
-					th,
-					isErr ? th.fg("error", "x") : th.fg("success", "✓"),
-					th.fg("accent", name),
-					"",
-					inner,
-					"",
-					opts.expanded,
-				);
+				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
+				const boxed2 = componentLines(theirs, width - 6);
+				if (boxed2.length) return box(th, width, boxedRows(icon, boxed2));
+				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", opts.expanded);
 				const summary = toolSummary(name, text, ctx.args);
 				const more = countLines(text) > 1;
 				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
@@ -548,6 +581,50 @@ if (isMain) {
 		"memory_write daily: tanpa judul tetap baris pertama",
 	);
 	assert(toolSummary("todo", "line1\nline2") === "line1", "tool lain: baris pertama saja");
+
+	// pi-web-access fetch_content/get_search_content: isi renderer mereka, kotak kita
+	const paResult: any = { render: () => ["\x1b[32mPi Coding Agent\x1b[39m (77 matches, 77 shown)"] };
+	const paCall: any = { render: () => ["\x1b[1mget_content \x1b[22m\x1b[36mfind 4\x1b[39m"] };
+	const boxedRes = {
+		toolName: "get_search_content",
+		toolDefinition: { renderCall: () => paCall, renderResult: () => paResult },
+	};
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(boxedRes) === "self",
+		"pi-web-access: shell dipaksa self (ikut kotak kita, bukan blok bg)",
+	);
+	const bRes = ToolExecutionComponent.prototype.getResultRenderer.call(boxedRes) as any;
+	const bOut = bRes(
+		{ content: [{ type: "text", text: "raw panjang yang tak perlu ditampilkan" }], details: { matchCount: 77 } },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: {} },
+	).render(60);
+	assert(bOut[0].startsWith("┌") && bOut[bOut.length - 1].startsWith("└"), "pi-web-access: hasil dibungkus kotak kita");
+	assert(bOut.some((l: string) => l.includes("(77 matches, 77 shown)")), "pi-web-access: info renderer mereka dipertahankan");
+	assert(!bOut.some((l: string) => l.includes("raw panjang")), "pi-web-access: teks mentah tidak dipakai saat renderer ada");
+	const bErr = bRes(
+		{ content: [{ type: "text", text: "No URL specified. Provide url, urlIndex, or query." }] },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: {}, isError: true },
+	).render(60);
+	assert(
+		bErr.some((l: string) => l.includes("No URL specified")) &&
+			bErr.filter((l: string) => l.includes("┌")).length === 1,
+		"error: satu kotak saja (tanpa kotak bersarang)",
+	);
+	assert(
+		bRes({ content: [{ type: "text", text: "x" }] }, { expanded: false, isPartial: true }, th, { args: {} }).render(60)
+			.length === 0,
+		"pi-web-access: fase partial kosong (tanpa kotak ganda)",
+	);
+	const bCall = ToolExecutionComponent.prototype.getCallRenderer.call(boxedRes) as any;
+	const bCallOut = bCall({}, th, { args: {}, state: {} }).render(60);
+	assert(
+		bCallOut[0].startsWith("┌") && bCallOut.some((l: string) => l.includes("find 4")),
+		"pi-web-access: baris args renderer mereka masuk kotak",
+	);
 
 	const ctxState: TCtx = { args: { content: "## Judul\n- x" }, state: {} };
 	const resRenderer = ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any;

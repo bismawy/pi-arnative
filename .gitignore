@@ -1,1 +1,5 @@
 node_modules/
+
+# artefak lokal (symlink node_modules ke salinan terpasang, screenshot temp)
+node_modules
+.clipboard-ref.png
