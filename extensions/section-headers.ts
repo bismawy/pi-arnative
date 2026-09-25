@@ -91,11 +91,12 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 				const wrapped = (child as { _arnativeHeaderWrapped?: boolean })?._arnativeHeaderWrapped === true;
 				if (isSection && !wrapped) {
 					const origCollapsed = child.getCollapsedText.bind(child) as () => string;
-					const origExpanded = child.getExpandedText.bind(child) as () => string;
 					const count = sectionItemCount(origCollapsed().split("\n").slice(1).join("\n"));
 					const theme = () => activeThemeProxy as Themeish;
+					// Body kedua state = daftar ringkas pi (satu baris koma, membungkus
+					// menyamping); format bergrup pi (satu item per baris) tidak dipakai.
 					const collapsedText = () => rewriteSectionHeader(origCollapsed(), count, theme());
-					const expandedText = () => rewriteSectionHeader(origExpanded(), count, theme(), true);
+					const expandedText = () => rewriteSectionHeader(origCollapsed(), count, theme(), true);
 					let expanded = false;
 					child.getCollapsedText = collapsedText;
 					child.getExpandedText = expandedText;
@@ -151,10 +152,10 @@ if (isMain) {
 	const collapsedHdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a, b", 2, fakeTheme);
 	assert(collapsedHdr === "<accent:\uec21> <tint:Skills> <dim:[2]>", "tertutup: ikon=aksen, nama=tint, [jumlah]=dim, isi disembunyikan");
 	assert(!collapsedHdr.includes("a, b"), "tertutup: body tidak ikut tampil");
-	const expandedHdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a\n  b", 2, fakeTheme, true);
+	const expandedHdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a, b", 2, fakeTheme, true);
 	assert(expandedHdr.split("\n")[0] === "<accent:\uec21> <tint:Skills> <dim:[2]>", "terbuka: header sama, [jumlah]=dim");
-	assert(expandedHdr.split("\n")[1] === "  a", "terbuka: body dipertahankan");
-	assert(expandedHdr.split("\n").length === 3, "terbuka: semua baris body ada");
+	assert(expandedHdr.split("\n")[1] === "  a, b", "terbuka: body ringkas (menyamping) dipertahankan");
+	assert(expandedHdr.split("\n").length === 2, "terbuka: header + satu baris body");
 	assert(rewriteSectionHeader("[Context]\n  a", 1, null) === "\udb84\uddd7 Context [1]", "tanpa tema: header tetap utuh, isi disembunyikan");
 	assert(rewriteSectionHeader("[Prompts]\n  a", 1, null) === "[Prompts]\n  a", "Prompts dikembalikan apa adanya");
 	assert(rewriteSectionHeader("pi v0.87.1", 1, fakeTheme) === "pi v0.87.1", "teks non-seksi tak berubah");
@@ -168,7 +169,7 @@ if (isMain) {
 	const section = {
 		text: "\x1b[33m[Themes]\x1b[39m\n  a, b",
 		getCollapsedText: () => "\x1b[33m[Themes]\x1b[39m\n  a, b",
-		getExpandedText: () => "\x1b[33m[Themes]\x1b[39m\n  a\n  b",
+		getExpandedText: () => "\x1b[33m[Themes]\x1b[39m\n  a, b",
 		setText(t: string) { this.text = t; },
 		setExpanded(e: boolean) { this.setText(e ? this.getExpandedText() : this.getCollapsedText()); },
 	};
@@ -178,12 +179,12 @@ if (isMain) {
 	assert((section as { handleMouse?: unknown }).handleMouse !== undefined, "dipasang: handleMouse ada");
 	const click = (section as { handleMouse: (e: unknown) => any }).handleMouse;
 	assert(click({ type: "click", button: "left" })?.handled === true, "klik kiri = handled");
-	assert(section.text.split("\n").length === 3 && line(section.text) === "\uee72 Themes [2]", "klik: isi terbuka, header tetap sama");
+	assert(section.text.split("\n").length === 2 && line(section.text) === "\uee72 Themes [2]" && section.text.split("\n")[1].includes("a, b"), "klik: isi terbuka menyamping, header tetap sama");
 	assert(click({ type: "move", button: "left" }) === undefined, "gerak/klik kanan tidak men-toggle");
 	assert(click({ type: "click", button: "left" })?.handled === true, "klik kedua = handled");
 	assert(section.text.split("\n").length === 1, "klik kedua: tertutup lagi");
 	section.setExpanded(true);
-	assert(section.text.split("\n").length === 3, "setExpanded (ctrl+e) tetap sinkron dengan state klik");
+	assert(section.text.split("\n").length === 2, "setExpanded (ctrl+e) tetap sinkron dengan state klik");
 	assert(click({ type: "click", button: "left" })?.handled === true, "klik setelah ctrl+e = handled");
 	assert(section.text.split("\n").length === 1, "klik setelah ctrl+e: pakai state terbaru");
 	console.log("section-headers.ts self-check OK");
