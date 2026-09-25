@@ -12,7 +12,8 @@
  * diekspor pi). Semua jalur gagal = teks asli dikembalikan utuh (fail-safe),
  * jadi baris header tidak mungkin kosong.
  */
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { UserMessageComponent, getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -106,18 +107,38 @@ export function packageNameOf(label: string): string | null {
 	return /^[\w.@/-]+$/.test(base) ? base : null;
 }
 
-// Versi paket npm terpasang; gagal baca = null (label dibiarkan apa adanya).
+// Versi paket terpasang; gagal baca = null (label dibiarkan apa adanya).
+// Dua sumber: npm/node_modules/<nama> (label npm) dan git/<host>/<nama>
+// (label paket git seperti "bismawy/pi-arnative").
 const versionCache = new Map<string, string | null>();
-export function installedVersion(label: string, root = join(getAgentDir(), "npm", "node_modules")): string | null {
+
+export function readVersion(dir: string): string | null {
+	try {
+		const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: unknown };
+		return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
+	} catch {
+		return null;
+	}
+}
+
+export function installedVersion(
+	label: string,
+	root = join(getAgentDir(), "npm", "node_modules"),
+	gitRoot = join(getAgentDir(), "git"),
+): string | null {
 	const name = packageNameOf(label);
 	if (!name) return null;
 	if (versionCache.has(name)) return versionCache.get(name) ?? null;
-	let version: string | null = null;
-	try {
-		const pkg = JSON.parse(readFileSync(join(root, name, "package.json"), "utf8")) as { version?: unknown };
-		version = typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
-	} catch {
-		version = null;
+	let version = readVersion(join(root, name));
+	if (!version && name.includes("/")) {
+		try {
+			for (const host of readdirSync(gitRoot)) {
+				version = readVersion(join(gitRoot, host, name));
+				if (version) break;
+			}
+		} catch {
+			version = null;
+		}
 	}
 	versionCache.set(name, version);
 	return version;
@@ -250,6 +271,15 @@ if (isMain) {
 	const ansiBody = `\x1b[38;2;102;102;102m  @bismawy/pi-agentrouter, footer.ts\x1b[39m`;
 	assert(withExtensionVersions(ansiBody, fakeVersion) === `\x1b[38;2;102;102;102m  @bismawy/pi-agentrouter@1.6.1, footer.ts\x1b[39m`, "body ber-ANSI: label pertama ikut dapat versi, kode warna utuh");
 	assert(withExtensionVersions("", fakeVersion) === "" && withExtensionVersions("  a, b", () => null) === "  a, b", "tanpa versi: body tak berubah");
+	// Versi dari klon git (label "user/repo"): pakai fixture, bukan mesin nyata
+	const gitTmp = mkdtempSync(join(tmpdir(), "pi-ver-"));
+	mkdirSync(join(gitTmp, "git", "github.com", "uji/arnative"), { recursive: true });
+	writeFileSync(join(gitTmp, "git", "github.com", "uji/arnative", "package.json"), JSON.stringify({ version: "9.9.9" }));
+	assert(installedVersion("uji/arnative", join(gitTmp, "npm"), join(gitTmp, "git")) === "9.9.9", "versi dari klon git");
+	assert(installedVersion("uji/arnative:footer.ts", join(gitTmp, "npm"), join(gitTmp, "git")) === "9.9.9", "label git + subpath dapat versi");
+	assert(installedVersion("uji/tak-ada", join(gitTmp, "npm"), join(gitTmp, "git")) === null, "klon tak dikenal -> null");
+	assert(installedVersion("footer.ts", join(gitTmp, "npm"), join(gitTmp, "git")) === null, "label tanpa paket -> null");
+	rmSync(gitTmp, { recursive: true, force: true });
 	// Pasang lewat addChild asli -> klaim: mulai tertutup, klik men-toggle, isi ikut hilang/tampil
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };
 	assert(typeof proto.addChild === "function", "addChild pi terpasang");
