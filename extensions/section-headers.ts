@@ -55,15 +55,19 @@ export function sectionItemCount(body: string): number {
 	return plain ? plain.split(/\n|, /).filter((s) => s.trim() !== "").length : 0;
 }
 
-export function rewriteSectionHeader(text: string, count: number, th: Themeish): string {
+// `withCount` = tampilkan [jumlah]. Dipakai berbeda di collapsed vs expanded:
+// collapsed "<ikon> Nama", expanded "<ikon> Nama [jumlah]" (setExpanded membaca
+// kedua getter ini, jadi toggle app.tools.expand otomatis menampilkan angka).
+export function rewriteSectionHeader(text: string, count: number, th: Themeish, withCount = false): string {
 	const name = sectionNameOf(text);
 	const icon = name ? SECTION_ICONS[name] : undefined;
 	if (!name || !icon) return text;
-	const label = [
+	const parts = [
 		fgFirst(th, ["accent", "tint"], icon),
 		fgFirst(th, ["tint", "text"], name),
-		fgFirst(th, ["dim"], `[${count}]`),
-	].join(" ");
+	];
+	if (withCount) parts.push(fgFirst(th, ["dim"], `[${count}]`));
+	const label = parts.join(" ");
 	const nl = text.indexOf("\n");
 	const next = nl === -1 ? label : label + text.slice(nl);
 	return next.includes(name) && next.trim() !== "" ? next : text;
@@ -82,14 +86,18 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 				const isSection = child && typeof child.getCollapsedText === "function"
 					&& typeof child.getExpandedText === "function" && typeof child.setText === "function"
 					&& SECTION_ICONS[sectionNameOf(String(child.getCollapsedText())) ?? ""] !== undefined;
-				if (isSection) {
+				const wrapped = (child as { _arnativeHeaderWrapped?: boolean })?._arnativeHeaderWrapped === true;
+				if (isSection && !wrapped) {
 					const origCollapsed = child.getCollapsedText.bind(child) as () => string;
 					const origExpanded = child.getExpandedText.bind(child) as () => string;
 					const count = sectionItemCount(origCollapsed().split("\n").slice(1).join("\n"));
 					const theme = () => activeThemeProxy as Themeish;
 					child.getCollapsedText = () => rewriteSectionHeader(origCollapsed(), count, theme());
-					child.getExpandedText = () => rewriteSectionHeader(origExpanded(), count, theme());
-					child.setText(rewriteSectionHeader(String(child.text ?? ""), count, theme()));
+					child.getExpandedText = () => rewriteSectionHeader(origExpanded(), count, theme(), true);
+					// Teks awal = state saat dipasang (collapsed kecuali pi memulai expanded)
+					const current = String(child.text ?? "");
+					child.setText(rewriteSectionHeader(current, count, theme(), current !== origCollapsed()));
+					(child as { _arnativeHeaderWrapped?: boolean })._arnativeHeaderWrapped = true;
 				}
 			} catch {
 				// gagal rewrite tak boleh menggagalkan addChild bawaan
@@ -122,13 +130,16 @@ if (isMain) {
 	assert(sectionItemCount("") === 0, "body kosong = 0");
 	assert(SECTION_ICONS.Prompts === undefined, "Prompts sengaja tak disentuh");
 	const fakeTheme = { fg: (c: string, t: string) => `<${c}:${t}>` };
-	const hdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a, b", 2, fakeTheme);
-	assert(hdr.split("\n")[0] === "<accent:\uec21> <tint:Skills> <dim:[2]>", "ikon=aksen, nama=tint, [jumlah]=dim");
-	assert(hdr.split("\n")[1] === "  a, b", "body dipertahankan");
-	assert(rewriteSectionHeader("[Context]\n  a", 1, null) === "\udb84\uddd7 Context [1]\n  a", "tanpa tema: teks tanpa warna");
+	// collapsed: [jumlah] disembunyikan; expanded: [jumlah] tampil (dim)
+	const collapsedHdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a, b", 2, fakeTheme);
+	assert(collapsedHdr.split("\n")[0] === "<accent:\uec21> <tint:Skills>", "collapsed: ikon=aksen, nama=tint, tanpa [jumlah]");
+	assert(collapsedHdr.split("\n")[1] === "  a, b", "body dipertahankan");
+	const expandedHdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a\n  b", 2, fakeTheme, true);
+	assert(expandedHdr.split("\n")[0] === "<accent:\uec21> <tint:Skills> <dim:[2]>", "expanded: [jumlah]=dim");
+	assert(rewriteSectionHeader("[Context]\n  a", 1, null) === "\udb84\uddd7 Context\n  a", "tanpa tema: teks tanpa warna, tanpa [jumlah]");
 	assert(rewriteSectionHeader("[Prompts]\n  a", 1, null) === "[Prompts]\n  a", "Prompts dikembalikan apa adanya");
 	assert(rewriteSectionHeader("pi v0.87.1", 1, fakeTheme) === "pi v0.87.1", "teks non-seksi tak berubah");
-	assert(rewriteSectionHeader("[Themes]\n  x", 1, { fg: () => "" }) === "\uee72 Themes [1]\n  x", "tema rusak: label tetap utuh (fail-safe)");
+	assert(rewriteSectionHeader("[Themes]\n  x", 1, { fg: () => "" }, true) === "\uee72 Themes [1]\n  x", "tema rusak: label tetap utuh (fail-safe)");
 	assert(fgFirst({ fg: () => "" }, ["tint", "text"], "z") === "z", "fg gagal: teks dikembalikan polos");
 	console.log("section-headers.ts self-check OK");
 }
