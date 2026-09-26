@@ -433,10 +433,12 @@ export class ArnativeHeader implements Component {
 		for (const t of tabs) {
 			const plain = `${t.icon} ${t.label}`;
 			const isActive = t.key === this.activeTab;
-			const iconStyled = fgFirst(th, ["accent"], t.icon);
+			const iconStyled = isActive
+				? fgFirst(th, ["accent"], t.icon)
+				: fgFirst(th, ["dim"], t.icon);
 			const labelStyled = isActive
 				? fgFirst(th, ["tint", "text"], `\x1b[1m${t.label}\x1b[22m`)
-				: fgFirst(th, ["tint", "text"], t.label);
+				: fgFirst(th, ["dim"], t.label);
 			const formatted = `${iconStyled} ${labelStyled}`;
 			tabParts.push({ key: t.key, plain, formatted });
 		}
