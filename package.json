@@ -1,12 +1,25 @@
 {
   "name": "pi-arnative",
   "version": "0.1.0",
-  "private": true,
-  "description": "Pi package: tema, style, footer, timestamp plus model",
+  "description": "Arnative look for Pi: 11 warm-neutral themes, rounded tool boxes, branded header with tabs, 2-line footer with git/model/status, transcript clock, and a /usage dashboard.",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-theme",
+    "pi-extension"
   ],
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bismawy/pi-arnative.git"
+  },
+  "homepage": "https://github.com/bismawy/pi-arnative#readme",
+  "files": [
+    "extensions",
+    "lib",
+    "themes",
+    "README.md"
+  ],
   "pi": {
     "extensions": [
       "./extensions/*.ts"
@@ -16,11 +29,12 @@
     ]
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "scripts": {
-    "test": "node lib/box.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts",
+    "test": "node lib/box.ts && node lib/ansi.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts",
     "themes": "node themes/gen-themes.mjs"
   }
 }

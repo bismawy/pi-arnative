@@ -4,3 +4,9 @@ node_modules/
 node_modules
 .clipboard-ref.png
 package-lock.json
+
+# notepad dev — bukan bagian rilis publik
+MEMORY.md
+
+# artefak rilis
+*.tgz
