@@ -32,10 +32,11 @@ import {
 	createGrepTool,
 	createReadTool,
 	createWriteTool,
+	getMarkdownTheme,
 	keyText,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { renderBoxLines as box } from "../lib/box.ts";
 
@@ -192,13 +193,18 @@ export function expandHint(th: Theme): string {
 	return th.fg("dim", `[${key} to expand]`);
 }
 
-// detail saat expand: warna dim saja (kecuali diff edit yang berwarna)
-const fullText = (r: TResult, th: Theme): string[] =>
-	textOf(r)
-		? textOf(r)
-				.split("\n")
-				.map((l) => th.fg("dim", l))
-		: [];
+// Detail saat expand: markdown ber-tema (layout sama dengan pesan biasa pi:
+// blok kode, daftar, warna), bukan dump polos dim.
+export const fullText = (r: TResult, _th: Theme, width = 0): string[] => {
+	const text = textOf(r);
+	if (!text) return [];
+	if (!width) return text.split("\n").map((l) => _th.fg("dim", l));
+	try {
+		return new Markdown(text, 0, 0, getMarkdownTheme()).render(Math.max(8, width));
+	} catch {
+		return text.split("\n").map((l) => _th.fg("dim", l));
+	}
+};
 
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
 const isBlankLine = (l: string): boolean => l.replace(ANSI_RE, "").trim() === "";
@@ -382,7 +388,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				if (opts.expanded && more) {
 					// Args MCP tidak terlihat lagi setelah kotak call tergantikan hasil.
 					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
-					rows.push(...fullText(result, th));
+					rows.push(...fullText(result, th, inner));
 				}
 				return box(th, width, rows, boxBgOf(name));
 			});
@@ -883,5 +889,22 @@ if (isMain) {
 	assert(todoResultOut[0].includes("[bg:toolSuccessBg]"), "todo result: background success");
 	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: ikon \uf14a di baris 1");
 	assert(todoResultOut.some((l: string) => l.includes("● completed")), "todo result: status dengan prefix resHead di baris 2");
+
+	// Detail expand: markdown ber-tema, teks error utuh & tidak lagi polos dim.
+	const errDetail = fullText(
+		{ content: [{ type: "text", text: '{\n  "pattern": "**/*.ts"\n}\nTool glob not found' }], isError: true },
+		th,
+		40,
+	);
+	const plain = errDetail.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	assert(plain.includes("Tool glob not found") && plain.includes('"pattern"'), "detail error: isi utuh");
+	assert(
+		errDetail.every((l: string) => visibleWidth(l) === 40),
+		"detail error: dirender markdown (di-wrap + dipad ke lebar), bukan split baris polos",
+	);
+	assert(
+		fullText({ content: [{ type: "text", text: "a\nb" }] }, th, 0).join("|") === th.fg("dim", "a") + "|" + th.fg("dim", "b"),
+		"tanpa width (self-check) tetap dump dim",
+	);
 	console.log("OK");
 }
