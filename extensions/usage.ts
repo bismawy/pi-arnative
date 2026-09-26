@@ -516,6 +516,9 @@ export class UsageModalComponent implements Component {
 		const out: string[] = [];
 		const accentBorder = new DynamicBorder((s) => th.fg("accent", s));
 		out.push(...accentBorder.render(width));
+		out.push("");
+		out.push(th.fg("accent", bold("Usage")));
+		out.push("");
 		out.push(topBorder);
 
 		// Header Table
@@ -635,7 +638,8 @@ if (isMain) {
 	assert(lines.length >= 10, "render modal menghasilkan baris-baris tabel");
 	assert(lines[0]!.includes("─") && !lines[0]!.includes("╭"), "garis aksen atas full-width");
 	assert(lines[lines.length - 1]!.includes("─"), "garis aksen bawah full-width");
-	assert(lines[1]!.includes("╭") && lines[1]!.includes("╮"), "top border rounded");
+	assert(lines[2]!.includes("Usage"), "judul Usage di bawah garis aksen atas");
+	assert(lines[4]!.includes("╭") && lines[4]!.includes("╮"), "top border rounded");
 
 	console.log("usage.ts self-check OK");
 }
