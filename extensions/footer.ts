@@ -122,9 +122,12 @@ export function formatDuration(ms: number): string {
 	return `${s}s`;
 }
 
-// Editor sebagai kotak penuh. pi bawaan hanya menggambar garis atas+bawah
-// (pi-tui editor.js: "no side borders, just horizontal lines above and below"),
-// jadi sisi `│` + korner bulat `╭╮╰╯` ditambahkan di sini.
+// Editor sebagai kotak penuh + prompt `> `. pi bawaan hanya menggambar garis
+// atas+bawah (pi-tui editor.js: "no side borders, just horizontal lines above
+// and below") tanpa karakter prompt, jadi sisi `│`, korner bulat `╭╮╰╯`, dan
+// prompt ditambahkan di sini.
+// `lines` sudah dirender pi pada lebar SEMPIT (width - 5): 2 kolom untuk sisi,
+// 3 kolom untuk prompt " > "; border lalu ditambal dash agar selebar isi.
 // `visible` = jumlah baris isi editor (field privat `renderedVisibleLineCount`);
 // baris autocomplete berada SETELAH border bawah dan sengaja dibiarkan di luar kotak.
 // Catatan: JetBrainsMono Nerd Font punya glyph korner bulat (dicek via fontconfig).
@@ -132,14 +135,18 @@ export function boxEditorLines(
 	lines: readonly string[],
 	visible: number,
 	color: (text: string) => string,
+	prompt = " > ",
 ): string[] {
 	const inner = lines.length > 0 ? visibleWidth(lines[0]!) : 0;
-	if (inner < 4 || visible < 1 || lines.length < visible + 2) return [...lines];
+	const promptWidth = visibleWidth(prompt);
+	if (inner < promptWidth + 4 || visible < 1 || lines.length < visible + 2) return [...lines];
 	const out = [...lines];
 	const side = color("\u2502");
-	for (let i = 1; i <= visible; i++) out[i] = side + lines[i]! + side;
-	out[0] = color("\u256d") + lines[0]! + color("\u256e");
-	out[visible + 1] = color("\u2570") + lines[visible + 1]! + color("\u256f");
+	const indent = " ".repeat(promptWidth);
+	for (let i = 1; i <= visible; i++) out[i] = side + (i === 1 ? prompt : indent) + lines[i]! + side;
+	const patch = color("\u2500".repeat(promptWidth));
+	out[0] = color("\u256d") + lines[0]! + patch + color("\u256e");
+	out[visible + 1] = color("\u2570") + lines[visible + 1]! + patch + color("\u256f");
 	return out;
 }
 
@@ -445,10 +452,10 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				render(width: number): string[] {
-					// Sisi kotak memakan 2 kolom: isi dirender 2 kolom lebih sempit lalu dibungkus.
+					// Kotak memakan 5 kolom: 2 sisi + 3 prompt " > ". Isi dirender 5 kolom lebih sempit.
 					const visible = (this as unknown as { renderedVisibleLineCount?: number }).renderedVisibleLineCount;
-					if (typeof visible !== "number" || width < 6) return super.render(width);
-					return boxEditorLines(super.render(width - 2), visible, (t) => this.borderColor(t));
+					if (typeof visible !== "number" || width < 11) return super.render(width);
+					return boxEditorLines(super.render(width - 5), visible, (t) => this.borderColor(t));
 				}
 			}
 			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
@@ -577,11 +584,13 @@ if (isMain) {
 	assert(formatDuration(3_700_000) === "1h 1m", "jam + menit");
 
 	const plain = (s: string) => s;
-	const boxed = boxEditorLines(["\u2500\u2500\u2500\u2500\u2500\u2500", "  hi  ", "\u2500\u2500\u2500\u2500\u2500\u2500", "  /mo "], 1, plain);
-	assert(boxed[0] === "\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u256e", "kotak editor: korner atas");
-	assert(boxed[1] === "\u2502  hi  \u2502", "kotak editor: sisi kiri+kanan");
-	assert(boxed[2] === "\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u256f", "kotak editor: korner bawah");
-	assert(boxed[3] === "  /mo ", "baris autocomplete tetap di luar kotak");
+	const D = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"; // 8 kolom = lebar isi pada uji ini
+	const boxed = boxEditorLines([D, "  hi    ", "  lo    ", D, "  /mo "], 2, plain);
+	assert(boxed[0] === `\u256d${D}\u2500\u2500\u2500\u256e`, "kotak editor: korner atas selebar isi");
+	assert(boxed[1] === "\u2502 >   hi    \u2502", "kotak editor: prompt ' > ' di baris pertama");
+	assert(boxed[2] === "\u2502     lo    \u2502", "kotak editor: baris lanjutan indent, tanpa > kedua");
+	assert(boxed[3] === `\u2570${D}\u2500\u2500\u2500\u256f`, "kotak editor: korner bawah");
+	assert(boxed[4] === "  /mo ", "baris autocomplete tetap di luar kotak");
 
 	// Self-check: getToolWorkingMessage
 	assert(getToolWorkingMessage("edit") === "Editing", "edit -> Editing");
@@ -595,7 +604,7 @@ if (isMain) {
 	assert(getToolWorkingMessage("todo") === "Updating tasks", "todo -> Updating tasks");
 	assert(getToolWorkingMessage("unknown_tool") === "Working", "unknown -> Working");
 	assert(getToolWorkingMessage("mcp", { tool: "fetch_repo" }) === "Fetching", "mcp fetch -> Fetching");
-	assert(boxed.every((l, i) => visibleWidth(l) === visibleWidth(["\u2500\u2500\u2500\u2500\u2500\u2500"][0]!) + 2 || i === 3), "lebar kotak seragam");
-	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "baris kurang dari kotak: tak diubah");
+	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "lebar kotak seragam (sisi+prompt)");
+	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "terlalu sempit: tak diubah");
 	console.log("footer.ts self-check OK");
 }
