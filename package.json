@@ -20,6 +20,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "scripts": {
-    "test": "node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts"
+    "test": "node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts",
+    "themes": "node themes/gen-themes.mjs"
   }
 }

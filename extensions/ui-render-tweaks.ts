@@ -356,9 +356,23 @@ if (isMain) {
 	assert(accentPill("teks lain", thPil) === "teks lain", "pil: teks non-pil tak disentuh");
 	assert(accentPill(pilAsli, null) === pilAsli, "pil: tanpa tema -> apa adanya");
 
-	// Varian tema: semua themes/*.json wajib valid (name, warna wajib, kontras pil/tint).
+	// Varian tema: semua themes/*.json wajib valid — name = nama berkas, warna wajib lengkap,
+	// hex valid, dan kontras diukur vs kanvas tema itu sendiri (userMessageBg):
+	// konten >= 3.0, teks sekunder >= 2.0, ramp thinking 1.3-4.0, pil aksen >= 4.5 — ambang
+	// yang sudah lolos di base `arnative` (bukan angka karangan).
 	const dirTema = new URL("../themes/", import.meta.url);
 	const wajib = Object.keys(temaJson.colors);
+	// Kunci yang bukan teks (latar/garis) — tak dinilai kontras teks.
+	const bukanTeks = new Set([
+		"selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
+		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder",
+	]);
+	const sekunder = new Set(["muted", "dim", "mdQuote", "mdHr", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
+	// Ramp thinking: makin tinggi makin terbaca; thinkingMax = accent (dinilai di jalur pil).
+	const ramp: Record<string, number> = {
+		thinkingOff: 1.3, thinkingMinimal: 1.3, thinkingLow: 2.0,
+		thinkingMedium: 2.7, thinkingHigh: 3.6, thinkingXhigh: 4.0,
+	};
 	const luminansi = (h: string) => {
 		const ch = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) =>
 			c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
@@ -382,9 +396,18 @@ if (isMain) {
 		for (const tok of ["accent", "text", "selectedBg", "toolPendingBg"]) {
 			assert(/^#[0-9a-f]{6}$/i.test(hex(tok)), `tema ${f}: ${tok} hex (${hex(tok)})`);
 		}
-		// Pil aksen & tint harus terbaca di kanvas gelap yang dipakai semua varian.
+		// Pil aksen: bg aksen + teks berwarna toolPendingBg.
 		assert(kontras(hex("accent"), hex("toolPendingBg")) >= 4.5, `tema ${f}: kontras accent vs toolPendingBg >= 4.5`);
-		assert(kontras(d.vars.softCyan ?? "#7db9cd", "#18181e") >= 4.5, `tema ${f}: kontras tint vs kanvas >= 4.5`);
+		assert(/^#[0-9a-f]{6}$/i.test(d.vars.softCyan ?? ""), `tema ${f}: vars.softCyan (tint) hex`);
+		const kanvas = hex("userMessageBg");
+		for (const tok of Object.keys(d.colors)) {
+			if (bukanTeks.has(tok) || tok === "thinkingMax") continue;
+			const warna = hex(tok);
+			if (!/^#[0-9a-f]{6}$/i.test(warna)) continue; // indeks 256 warna: biarkan pi yang menilai
+			const batas = ramp[tok] ?? (sekunder.has(tok) ? 2.0 : 3.0);
+			const c = kontras(warna, kanvas);
+			assert(c >= batas, `tema ${f}: kontras ${tok} vs kanvas ${c.toFixed(2)} < ${batas}`);
+		}
 	}
 	const thKosong = new Theme(
 		{ muted: "#808080", text: "#d4d4d4", thinkingXhigh: "#20caee" },
