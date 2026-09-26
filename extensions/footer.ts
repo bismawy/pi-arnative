@@ -11,6 +11,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
+import { formatTokens } from "../lib/usage-store.ts";
 
 // Intercept built-in FooterComponent agar murni 2 baris
 const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
@@ -150,43 +151,48 @@ export function boxEditorLines(
 	return out;
 }
 
-function formatTokens(n: number): string {
-	if (!n || n <= 0) return "0";
-	if (n < 1000) return String(n);
-	if (n < 1_000_000) {
-		const k = n / 1000;
-		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-	}
-	const m = n / 1_000_000;
-	return `${m.toFixed(1).replace(/\.0$/, "")}M`;
-}
-
 function parseOptimizer(raw: string | undefined): string | null {
 	if (!raw) return null;
 	const m = raw.match(/([A-Za-z0-9_-]+)\s+cache\s+(\d+\/\d+)·[^\s]+\s+([\d.]+%)/);
 	return m ? `${m[1]} ${m[2]} (${m[3]})` : null;
 }
 
+let usageScanAt = 0;
+let usageScanLen = -1;
+let usageScanNums = { inp: 0, out: 0, read: 0 };
+
+// Cache 2 dtk + panjang branch: footer di-render tiap poke/stream tick,
+// tanpa ini tiap frame = scan seluruh branch (O(N) per frame).
 function getUsage(
 	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	acc: (t: string) => string,
 	tint: (t: string) => string,
 ): string {
+	const branch = ctx.sessionManager.getBranch();
 	let inp = 0;
 	let out = 0;
 	let read = 0;
-	for (const e of ctx.sessionManager.getBranch()) {
-		if (e && typeof e === "object" && "type" in e && e.type === "message") {
-			const m = (e as { message?: unknown }).message;
-			if (m && typeof m === "object" && "role" in m && m.role === "assistant" && "usage" in m) {
-				const u = (m as AssistantMessage).usage;
-				if (u) {
-					inp += u.input || 0;
-					out += u.output || 0;
-					read += u.cacheRead || 0;
+	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
+		inp = usageScanNums.inp;
+		out = usageScanNums.out;
+		read = usageScanNums.read;
+	} else {
+		for (const e of branch) {
+			if (e && typeof e === "object" && "type" in e && e.type === "message") {
+				const m = (e as { message?: unknown }).message;
+				if (m && typeof m === "object" && "role" in m && m.role === "assistant" && "usage" in m) {
+					const u = (m as AssistantMessage).usage;
+					if (u) {
+						inp += u.input || 0;
+						out += u.output || 0;
+						read += u.cacheRead || 0;
+					}
 				}
 			}
 		}
+		usageScanNums = { inp, out, read };
+		usageScanAt = Date.now();
+		usageScanLen = branch.length;
 	}
 	const parts: string[] = [];
 	if (inp > 0) parts.push(`${acc("↑")}${tint(formatTokens(inp))}`);

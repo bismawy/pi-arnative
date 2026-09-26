@@ -12,6 +12,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
+import { ansiBgOpen } from "../lib/ansi.ts";
 
 const USER_TIMESTAMPS_MAP = new Map<string, number>();
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
@@ -34,17 +35,7 @@ export function formatTimeBadge(timeStr: string, th: { fg(color: string, text: s
 	return `\x1b[36m${timeStr}\x1b[39m`;
 }
 
-// Kode pembuka bg bubble user (tanpa reset penutup) - probe dari tema aktif.
-export function bubbleBgOpen(th: { bg?(c: string, t: string): string } | null, color = "userMessageBg"): string {
-	if (!th?.bg) return "";
-	try {
-		const probe = th.bg(color, "");
-		const reset = "\x1b[49m";
-		return probe.endsWith(reset) ? probe.slice(0, -reset.length) : probe;
-	} catch {
-		return "";
-	}
-}
+// Kode pembuka bg bubble user (tanpa reset penutup) -> lib/ansi.ts (satu definisi).
 
 // Akar "block hitam" saat chat penuh: teks Markdown membawa \x1b[0m (reset semua)
 // di dalam baris -> spasi padding SETELAH reset kehilangan bg bubble dan tampil
@@ -90,7 +81,7 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 
 			// Perbaiki bg bubble dulu (baris Markdown ber-reset bikin padding gelap),
 			// baru tempel jam (yang sengaja membuang bg di area badge).
-			const bgOpen = bubbleBgOpen(activeThemeProxy);
+			const bgOpen = ansiBgOpen(activeThemeProxy, "userMessageBg");
 			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i], bgOpen);
 
 			const textKey = (this as { text?: string }).text?.trim() ?? "";
@@ -220,9 +211,9 @@ if (isMain) {
 	assert(clean.includes(`\x1b[0m${bg}`), "bg dipasang ulang setelah reset");
 	assert(clean.endsWith("\x1b[49m"), "bg bubble ditutup di akhir baris");
 	assert(repairBubbleBg("plain", "") === "plain", "tanpa bgOpen: tanpa perubahan");
-	assert(bubbleBgOpen(null) === "", "tanpa tema: bgOpen kosong");
+	assert(ansiBgOpen(null, "userMessageBg") === "", "tanpa tema: bgOpen kosong");
 	assert(
-		bubbleBgOpen({ bg: (_c, t) => `\x1b[48;2;52;53;61m${t}\x1b[49m` }) === "\x1b[48;2;52;53;61m",
+		ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;52;53;61m${t}\x1b[49m` }, "userMessageBg") === "\x1b[48;2;52;53;61m",
 		"bgOpen terambil dari probe tema",
 	);
 

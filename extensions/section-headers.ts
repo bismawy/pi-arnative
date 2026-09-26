@@ -1,9 +1,8 @@
 /**
- * Arnative Header Box & Tab System:
- * - Gaya box rounded corner (seperti chat/editor).
- * - Logo pi.dev ASCII art (hijau emerald pixelated compact, 4 baris).
+ * Arnative Header Box & Tab System (horizontal):
+ * - Box rounded corner, tinggi tetap 5 baris: logo "pi" 3x6 kolom di kiri,
+ *   pembatas vertikal, lalu 3 baris info rata kiri (versi/shortcut, tab, data).
  * - Baris info versi pi & shortcuts: [Esc], [Ctrl+c/d], [/], [!], [Ctrl+o].
- * - Divider box '├────┤'.
  * - Menu Tab interaktif (klik mouse):
  *    Model: <nama model> │ 󰋖 Context [N] │ 󰰡 Skills [N] │ 󰺨 Extensions [N] │ 󰹲 Themes [N].
  *   Icon pada tab = warna aksen, teks tab = warna tint.
@@ -24,11 +23,14 @@ import {
 import {
 	truncateToWidth,
 	visibleWidth,
+	Key,
 	type Component,
 	type TUI,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+import { renderBoxLines } from "../lib/box.ts";
+import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
 export type TabKey = "Model" | "Context" | "Skills" | "Extensions" | "Themes";
 
@@ -49,111 +51,6 @@ let activeThemeProxy: Themeish = null;
 
 const MODEL_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentModel");
 const THINKING_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentThinking");
-
-export function formatTokens(n: number): string {
-	if (!n || n <= 0) return "0";
-	if (n < 1000) return String(n);
-	if (n < 1_000_000) {
-		const k = n / 1000;
-		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-	}
-	if (n < 1_000_000_000) {
-		const m = n / 1_000_000;
-		return `${m.toFixed(1).replace(/\.0$/, "")}M`;
-	}
-	const b = n / 1_000_000_000;
-	return `${b.toFixed(1).replace(/\.0$/, "")}B`;
-}
-
-// Menghitung total semua penggunaan model tertentu (all-time seperti di /usage)
-export function getModelAllTimeUsage(
-	modelId?: string,
-	ctx?: ExtensionContext,
-): { input: number; output: number; cacheRead: number } {
-	let inp = 0;
-	let out = 0;
-	let read = 0;
-
-	// 1. Baca cache all-time dari arnative-usage-cache.json atau usage-extension-cache.json
-	try {
-		const arnativeCache = join(getAgentDir(), "arnative-usage-cache.json");
-		if (existsSync(arnativeCache)) {
-			const cache = JSON.parse(readFileSync(arnativeCache, "utf8")) as Record<string, { entries?: Array<{ model: string; input: number; output: number; cacheRead: number }> }>;
-			const target = (modelId || "").toLowerCase();
-			for (const file of Object.values(cache)) {
-				if (!file?.entries) continue;
-				for (const ent of file.entries) {
-					const mName = (ent.model || "").toLowerCase();
-					const matches =
-						!target ||
-						mName === target ||
-						mName.endsWith("/" + target) ||
-						mName.split(":")[0] === target ||
-						target.endsWith("/" + mName);
-					if (matches) {
-						inp += ent.input || 0;
-						out += ent.output || 0;
-						read += ent.cacheRead || 0;
-					}
-				}
-			}
-		} else {
-			const cachePath = join(getAgentDir(), "usage-extension-cache.json");
-			if (existsSync(cachePath)) {
-				const cache = JSON.parse(readFileSync(cachePath, "utf8")) as {
-					names?: string[];
-					files?: Record<string, { messages?: unknown[][] }>;
-				};
-				if (cache && Array.isArray(cache.names) && cache.files) {
-					const names = cache.names;
-					const target = (modelId || "").toLowerCase();
-					for (const file of Object.values(cache.files)) {
-						if (!file?.messages || !Array.isArray(file.messages)) continue;
-						for (const m of file.messages) {
-							if (!Array.isArray(m) || m.length < 6) continue;
-							const mName = String(names[m[1] as number] || "").toLowerCase();
-							const matches =
-								!target ||
-								mName === target ||
-								mName.endsWith("/" + target) ||
-								mName.split(":")[0] === target ||
-								target.endsWith("/" + mName);
-							if (matches) {
-								inp += Number(m[3]) || 0;
-								out += Number(m[4]) || 0;
-								read += Number(m[5]) || 0;
-							}
-						}
-					}
-				}
-			}
-		}
-	} catch {
-		// ignore
-	}
-
-	// 2. Tambahkan token sesi saat ini jika ada
-	try {
-		const entries = (ctx?.sessionManager as any)?.getBranch?.() ?? (ctx?.sessionManager as any)?.getEntries?.() ?? [];
-		for (const e of entries) {
-			if (e && typeof e === "object" && "type" in e && e.type === "message") {
-				const m = (e as { message?: unknown }).message;
-				if (m && typeof m === "object" && "role" in m && (m as any).role === "assistant" && "usage" in m) {
-					const u = (m as any).usage;
-					if (u) {
-						inp += u.input || 0;
-						out += u.output || 0;
-						read += u.cacheRead || 0;
-					}
-				}
-			}
-		}
-	} catch {
-		// ignore
-	}
-
-	return { input: inp, output: out, cacheRead: read };
-}
 
 // Ambil warna pertama yang benar-benar dipakai tema
 export function fgFirst(th: Themeish, names: string[], text: string): string {
@@ -178,39 +75,6 @@ export function sectionNameOf(text: string): "Context" | "Skills" | "Extensions"
 		return name;
 	}
 	return null;
-}
-
-export function sectionItemCount(body: string): number {
-	const plain = body.replace(ANSI_RE, "").trim();
-	return plain ? plain.split(/\n|, /).filter((s) => s.trim() !== "").length : 0;
-}
-
-export function rewriteSectionHeader(text: string, count: number, th: Themeish, keepBody = false): string {
-	const name = sectionNameOf(text);
-	const icon = name ? SECTION_ICONS[name] : undefined;
-	if (!name || !icon) return text;
-	const label = [
-		fgFirst(th, ["accent", "tint"], icon),
-		fgFirst(th, ["tint", "text"], name),
-		fgFirst(th, ["dim"], `[${count}]`),
-	].join(" ");
-	const nl = text.indexOf("\n");
-	const next = keepBody && nl !== -1 ? label + text.slice(nl) : label;
-	return next.includes(name) && next.trim() !== "" ? next : text;
-}
-
-function insertAtVisible(s: string, visibleIndex: number, text: string): string {
-	let seen = 0;
-	for (let i = 0; i < s.length; i += 1) {
-		if (seen === visibleIndex) return s.slice(0, i) + text + s.slice(i);
-		if (s[i] === "\x1b") {
-			const end = s.indexOf("m", i);
-			i = end === -1 ? s.length : end;
-			continue;
-		}
-		seen += 1;
-	}
-	return s + text;
 }
 
 export function packageNameOf(label: string): string | null {
@@ -253,21 +117,6 @@ export function installedVersion(
 	}
 	versionCache.set(name, version);
 	return version;
-}
-
-export function withExtensionVersions(body: string, resolve: (label: string) => string | null = installedVersion): string {
-	return body
-		.split(", ")
-		.map((label) => {
-			const visible = stripAnsi(label);
-			const colon = visible.indexOf(":");
-			const name = (colon === -1 ? visible : visible.slice(0, colon)).trim();
-			const version = name === "" || !packageNameOf(name) ? null : resolve(name);
-			if (!version) return label;
-			const at = colon === -1 ? visible.trimEnd().length : colon;
-			return insertAtVisible(label, at, `@${version}`);
-		})
-		.join(", ");
 }
 
 export function extractItemsFromBody(body: string, isExtensions = false): string[] {
@@ -339,6 +188,13 @@ export function buildLogoLines(th: Themeish): string[] {
 
 export const ASCII_LOGO_LINES = buildLogoLines(null);
 
+// Lebar kolom logo, diturunkan dari art-nya supaya tidak magic number.
+const LOGO_W = Math.max(...ASCII_LOGO_LINES.map((l) => visibleWidth(l)));
+// Kolom awal area info: "│ " (2) + logo (LOGO_W) + " │ " (3).
+const INFO_X = LOGO_W + 5;
+// Sisa kolom untuk info: width - "│ " - logo - " │ " - info - " │".
+const infoWidth = (width: number) => Math.max(8, width - LOGO_W - 7);
+
 // Singleton store untuk resource loaded
 const STORE_KEY = Symbol.for("pi-arnative.resourceStore");
 export const tabStore: Map<TabKey, string[]> =
@@ -405,7 +261,9 @@ export class ArnativeHeader implements Component {
 	getTabsData(width: number): Array<{ key: TabKey; name: string; icon: string; count: number; label: string }> {
 		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
 		const fullModelName = formatModelDisplayName(modelObj);
-		let modelLabel = `Model: ${fullModelName}`;
+		// Pangkas detail bertanda kurung/siku di ekor nama ("... Free (1M) [OpenCode] (Freeflow)"
+		// -> "Space Bunny Free"); detailnya tetap tampil di baris data tab Model.
+		let modelLabel = `Model: ${fullModelName.replace(/(\s*\([^()]*\)|\s*\[[^[\]]*\])+$/, "").trim()}`;
 		// Responsif di layar sedang: pangkas provider jika kolom < 112
 		if (width < 112 && modelLabel.includes(" (")) {
 			modelLabel = `Model: ${fullModelName.slice(0, fullModelName.indexOf(" (")).trim()}`;
@@ -448,6 +306,8 @@ export class ArnativeHeader implements Component {
 		];
 	}
 
+	// Shortcut didaftarkan lewat pi.registerShortcut (header bukan target input keyboard).
+
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event?.type !== "click" || event?.button !== "left") return undefined;
 		if (event.y === this.renderedTabLineY && this.renderedTabRegions.length > 0) {
@@ -484,58 +344,44 @@ export class ArnativeHeader implements Component {
 		const th = this.themeProxy || (activeThemeProxy as Themeish);
 		const side = fgFirst(th, ["dim"], "│");
 		const dash = "─".repeat(Math.max(0, width - 2));
-		const top = fgFirst(th, ["dim"], `╭${dash}╮`);
-		const div1 = fgFirst(th, ["dim"], `├${dash}┤`);
-		const div2 = fgFirst(th, ["dim"], `├${dash}┤`);
-		const bot = fgFirst(th, ["dim"], `╰${dash}╯`);
-		const blank = side + " ".repeat(Math.max(0, width - 2)) + side;
 
-		const out: string[] = [];
-		out.push(top);
-		out.push(blank);
+		// Kolom kiri memuat logo + pembatas vertikal, jadi area info hanya dapat
+		// width - LOGO_W - 7 kolom.
+		const infoW = infoWidth(width);
+		const infoLine = (text: string): string => {
+			const t = truncateToWidth(text, infoW);
+			return t + " ".repeat(infoW - visibleWidth(t));
+		};
 
-		// 1. Logo pi.dev ASCII art (P aksen, i tint)
-		const logoLines = buildLogoLines(th);
-		for (const line of logoLines) {
-			out.push(centerLine(line, width, side));
-		}
-		out.push(blank);
+		const out: string[] = [fgFirst(th, ["dim"], `╭${dash}╮`)];
+		const infoLines: string[] = [];
+		// Kotak dalam: baris menu tab dibingkai, isi(infoW - 2) kolom.
+		const innerW = Math.max(1, infoW - 2);
 
-		// 2. Baris versi pi & shortcuts
+		// 1. Baris versi pi + merek. Selalu utuh.
 		const versionStr = VERSION || "0.87.1";
 		const piPart = `${fgFirst(th, ["accent", "tint"], "\x1b[1mpi\x1b[22m")} ${fgFirst(th, ["dim"], `v${versionStr}`)}`;
-		const sep = fgFirst(th, ["dim"], " │ ");
-		const shortcutsFull = [
-			piPart,
+		infoLines.push(`${piPart}${fgFirst(th, ["dim"], " · ")}${fgFirst(th, ["dim"], "Arnative")}`);
+		const shortcutItems = [
 			`${fgFirst(th, ["tint"], "[Esc]")} ${fgFirst(th, ["dim"], "Interrupt")}`,
 			`${fgFirst(th, ["tint"], "[Ctrl+c/d]")} ${fgFirst(th, ["dim"], "Exit")}`,
 			`${fgFirst(th, ["tint"], "[/]")} ${fgFirst(th, ["dim"], "Commands")}`,
 			`${fgFirst(th, ["tint"], "[!]")} ${fgFirst(th, ["dim"], "Bash")}`,
 			`${fgFirst(th, ["tint"], "[Ctrl+o]")} ${fgFirst(th, ["dim"], "More/expand")}`,
+			`${fgFirst(th, ["tint"], "[Ctrl+alt+t]")} ${fgFirst(th, ["dim"], "Next tab")}`,
 		];
-		let scText = shortcutsFull.join(sep);
-		if (visibleWidth(scText) > width - 4) {
-			const shortcutsCompact = [
-				piPart,
-				`${fgFirst(th, ["tint"], "[Esc]")} ${fgFirst(th, ["dim"], "Interrupt")}`,
-				`${fgFirst(th, ["tint"], "[Ctrl+c/d]")} ${fgFirst(th, ["dim"], "Exit")}`,
-				`${fgFirst(th, ["tint"], "[/]")} ${fgFirst(th, ["dim"], "Commands")}`,
-				`${fgFirst(th, ["tint"], "[!]")} ${fgFirst(th, ["dim"], "Bash")}`,
-				`${fgFirst(th, ["tint"], "[Ctrl+o]")} ${fgFirst(th, ["dim"], "More")}`,
-			];
-			scText = shortcutsCompact.join(sep);
-			if (visibleWidth(scText) > width - 4) {
-				scText = shortcutsCompact.slice(0, 4).join(sep);
-			}
+		// Shortcut dipangkas dari kanan (prefix terpanjang yang masih muat) supaya
+		// layar sempit tidak memotong tab atau data.
+		let scText = "";
+		for (let i = 1; i <= shortcutItems.length; i++) {
+			const cand = shortcutItems.slice(0, i).join("  ");
+			if (visibleWidth(cand) <= infoW) scText = cand;
 		}
-		out.push(centerLine(scText, width, side));
+		infoLines.push(scText);
 
-		// 3. Divider 1 (tanpa baris model di atasnya untuk menghindari duplikasi)
-		out.push(div1);
-
-		// 4. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
+		// 2. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
 		const tabs = this.getTabsData(width);
-		const sepTabPlain = width >= 105 ? "  │  " : " │ ";
+		const sepTabPlain = " │ ";
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
 
 		const tabParts: Array<{ key: TabKey; plain: string; formatted: string }> = [];
@@ -552,26 +398,39 @@ export class ArnativeHeader implements Component {
 			tabParts.push({ key: t.key, plain, formatted });
 		}
 
-		const totalTabPlainWidth = tabParts.reduce(
-			(acc, t, idx) => acc + visibleWidth(t.plain) + (idx > 0 ? visibleWidth(sepTabPlain) : 0),
-			0,
-		);
-		const leftPadTab = Math.max(0, Math.floor((width - 2 - totalTabPlainWidth) / 2));
-		this.renderedTabRegions = [];
-		let curX = 1 + leftPadTab;
+		// Tab yang tak muat di layar sempit dibuang dari kanan (tab aktif selalu ikut).
+		const kept: typeof tabParts = [];
+		let usedWidth = 0;
 		for (const t of tabParts) {
+			const w = visibleWidth(t.plain) + (kept.length > 0 ? visibleWidth(sepTabPlain) : 0);
+			if (kept.length === 0 || usedWidth + w <= innerW) {
+				kept.push(t);
+				usedWidth += w;
+			}
+		}
+		this.renderedTabRegions = [];
+		let curX = INFO_X;
+		for (const t of kept) {
 			const w = visibleWidth(t.plain);
-			this.renderedTabRegions.push({ key: t.key, startX: curX, endX: curX + w });
+			this.renderedTabRegions.push({ key: t.key, startX: curX, endX: curX + w - 1 });
 			curX += w + visibleWidth(sepTabPlain);
 		}
-		this.renderedTabLineY = out.length;
-		const tabsFormattedLine = tabParts.map((t) => t.formatted).join(sepTab);
-		out.push(centerLine(tabsFormattedLine, width, side));
+		// Kotak tab selebar isinya, bukan selebar kolom info.
+		const tabText = ` ${kept.map((t) => t.formatted).join(sepTab)}`;
+		const tabInnerW = Math.min(innerW, visibleWidth(tabText) + 1);
+		const tabRow = (text: string): string => {
+			const t = truncateToWidth(text, tabInnerW);
+			return `${side}${t}${" ".repeat(tabInnerW - visibleWidth(t))}${side}`;
+		};
+		const tabRule = (l: string, r: string): string => fgFirst(th, ["dim"], `${l}${"─".repeat(tabInnerW)}${r}`);
+		infoLines.push(tabRule("╭", "╮"));
+		// Satu spasi dari batas kiri, lalu " │ " antar tab.
+		infoLines.push(tabRow(tabText));
+		// Baris tab = border atas (index 0) + infoLines sebelumnya + baris ini.
+		this.renderedTabLineY = infoLines.length;
+		infoLines.push(tabRule("╰", "╯"));
 
-		// 5. Divider 2
-		out.push(div2);
-
-		// 6. Data tab aktif (rata tengah, dibungkus rapi, warna tint)
+		// 3. Data tab aktif (rata kiri, dibungkus rapi, warna tint)
 		let activeItems: string[] = [];
 		if (this.activeTab === "Model") {
 			const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
@@ -579,10 +438,13 @@ export class ArnativeHeader implements Component {
 			const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
 			const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
 			const sep = fgFirst(th, ["dim"], " · ");
-			let line = `${fgFirst(th, ["tint", "text"], fullName)}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
+			// Nama model diwarnai tint, ekornya "(Provider)" dim.
+			const provSuffix = fullName.match(/(\s*\([^()]*\))$/)?.[1] ?? "";
+			const nameMain = provSuffix ? fullName.slice(0, -provSuffix.length) : fullName;
+			let line = `${fgFirst(th, ["tint", "text"], nameMain)}${provSuffix ? fgFirst(th, ["dim"], provSuffix) : ""}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
 
 			// Total semua penggunaan model itu (all-time seperti di /usage): ↑... ↓...  ...
-			const usage = getModelAllTimeUsage(modelObj?.id, this.ctx);
+			const usage = getModelAllTimeUsage(modelObj?.id);
 			const tokenParts: string[] = [];
 			if (usage.input > 0) {
 				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["tint", "text"], formatTokens(usage.input))}`);
@@ -603,24 +465,28 @@ export class ArnativeHeader implements Component {
 		}
 
 		if (activeItems.length === 0) {
-			const emptyMsg = fgFirst(th, ["tint"], "(kosong)");
-			out.push(centerLine(emptyMsg, width, side));
+			infoLines.push(fgFirst(th, ["tint"], "(kosong)"));
 		} else if (this.activeTab === "Model") {
 			// Tab Model sudah memuat styling tint + separator dim
-			for (const line of activeItems) {
-				out.push(centerLine(line, width, side));
-			}
+			infoLines.push(...activeItems);
 		} else {
-			const maxDataWidth = Math.max(10, width - 8);
-			const lines = wrapCommaItems(activeItems, maxDataWidth);
-			for (const line of lines) {
+			for (const line of wrapCommaItems(activeItems, infoW)) {
 				// Poin 5: warna pada data menu yg di select gunakan tint saja
-				out.push(centerLine(fgFirst(th, ["tint", "text"], line), width, side));
+				infoLines.push(fgFirst(th, ["tint", "text"], line));
 			}
 		}
 
-		// 7. Border bawah
-		out.push(bot);
+		// Susun baris: logo di kolom kiri, pembatas vertikal, info rata kiri.
+		// Logo lebih tinggi dari info -> sisanya dibiarkan kosong.
+		const logoLines = buildLogoLines(th);
+		const blankLogo = " ".repeat(LOGO_W);
+		for (let i = 0; i < Math.max(logoLines.length, infoLines.length); i++) {
+			const logo = logoLines[i] ?? blankLogo;
+			out.push(`${side} ${logo} ${side} ${infoLine(infoLines[i] ?? "")} ${side}`);
+		}
+
+		// Border bawah
+		out.push(fgFirst(th, ["dim"], `╰${dash}╯`));
 
 		return out;
 	}
@@ -662,6 +528,13 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 						activeHeaderInstance.tui.requestRender();
 					}
 				} else if ((this as Record<string, unknown>)._isLoadedResourcesContainer) {
+					// "[Extension issues]" dari pi core -> bungkus kotak ala arnative.
+					const text = String(child?.text ?? child?.content ?? (typeof child?.getText === "function" ? child.getText() : ""));
+					if (text.includes("[Extension issues]") && typeof child.render === "function") {
+						const origRender = child.render.bind(child);
+						child.render = (w: number) => renderBoxLines(activeThemeProxy, w, origRender(w), undefined, "warning");
+						return origAddChild.call(this, child);
+					}
 					// Setiap elemen lain di dalam loadedResourcesContainer (misal Spacer) juga disembunyikan
 					if (child && typeof child.render === "function") {
 						child.render = () => [];
@@ -676,6 +549,18 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 }
 
 export default function (pi: ExtensionAPI) {
+	// Ctrl+Shift+T: pindah ke tab berikutnya.
+	pi.registerShortcut(Key.ctrlAlt("t"), {
+		description: "Next header tab",
+		handler: async () => {
+			const hdr = activeHeaderInstance;
+			if (!hdr) return;
+			const order: TabKey[] = ["Model", "Context", "Skills", "Extensions", "Themes"];
+			hdr.activeTab = order[(order.indexOf(hdr.activeTab) + 1) % order.length];
+			hdr.tui?.requestRender?.();
+		},
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		activeThemeProxy = (ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme ?? activeThemeProxy;
 		// Daftarkan Custom Header
@@ -709,13 +594,6 @@ if (isMain) {
 
 	assert(sectionNameOf("\x1b[33m[Skills]\x1b[39m\n  a, b") === "Skills", "header [Skills] terdeteksi");
 	assert(sectionNameOf("pi v0.87.1") === null, "teks non-seksi tak terdeteksi");
-	assert(sectionItemCount("\x1b[2m  a, b, c\x1b[22m") === 3, "body collapsed (koma) = 3");
-	assert(sectionItemCount("  a\n  b\n  c") === 3, "body expanded (baris) = 3");
-	assert(sectionItemCount("") === 0, "body kosong = 0");
-
-	const fakeTheme = { fg: (c: string, t: string) => `<${c}:${t}>` };
-	const collapsedHdr = rewriteSectionHeader("\x1b[33m[Skills]\x1b[39m\n  a, b", 2, fakeTheme);
-	assert(collapsedHdr === "<accent:\uec21> <tint:Skills> <dim:[2]>", "tertutup: ikon=aksen, nama=tint, [jumlah]=dim");
 
 	// Parsing & wrapping
 	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody koma = 3");
@@ -768,40 +646,53 @@ if (isMain) {
 		thinkingLevel: "low",
 	};
 
-	const ansiTheme = { fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m` };
+	// Hanya "dim" yang diwarnai, supaya baris garis kotak bisa diuji warnanya.
+	const ansiTheme = { fg: (c: string, t: string) => (c === "dim" ? `\x1b[2m${t}\x1b[22m` : t) };
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
 	assert(hdr.activeTab === "Model", "default tab adalah Model");
 
 	const lines100 = hdr.render(100);
-	assert(lines100.length > 10, "render 100 menghasilkan baris-baris box");
+	assert(lines100.length === 8, "render 100 = border + 6 baris logo + border (3 baris info mengisi 3 baris logo)");
 	assert(lines100.every((l) => visibleWidth(l) === 100), "semua baris render 100 tepat 100 kolom");
 	assert(lines100[0]!.includes("╭") && lines100[0]!.includes("╮"), "border atas rounded");
-	assert(lines100.some((l) => l.includes("Model: Gemini 3.8 Flash")), "menu tab Model tampil");
-	assert(lines100.some((l) => l.includes("Gemini 3.8 Flash (Antigravity)")), "data tab aktif Model tampil langsung");
+	assert(lines100[7]!.includes("╰") && lines100[7]!.includes("╯"), "border bawah rounded");
+	const logoPlain = buildLogoLines(null);
+	assert(logoPlain.length === 6 && visibleWidth(logoPlain[0]!) === 13, "ascii Pi asli utuh (6 baris x 13 kolom)");
+	assert(
+		lines100.slice(1, 7).every((l, i) => stripAnsi(l).slice(2, 15) === logoPlain[i]),
+		"ascii Pi asli di kolom kiri, 6 baris",
+	);
+	assert(stripAnsi(lines100[1]!).includes("pi v") && stripAnsi(lines100[1]!).includes("Arnative"), "baris versi + merek");
+	assert(stripAnsi(lines100[4]!).includes("Model: Gemini 3.8 Flash"), "menu tab Model tampil");
+	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "data tab aktif Model tampil di baris info terakhir");
+	// Garis kotak dalam satu blok dim penuh (garis "─" ikut ter-warnai, bukan hanya sudut).
+	for (const i of [3, 5]) {
+		assert((lines100[i]!.match(/\x1b\[/g) ?? []).length === 8, `garis kotak dalam baris ${i} = satu blok dim penuh (garis "─" ikut ter-warnai, bukan hanya sudut)`);
+	}
 
 	// Tab regions: Model, Context, Skills, Extensions, Themes
 	const tabY = (hdr as any).renderedTabLineY;
 	assert(tabY > 0, "posisi Y baris tab tercatat");
 	const tabRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
-	assert(tabRegions.length === 5, "ada 5 region tab (termasuk Model)");
+	assert(tabRegions.length >= 4, "region tab terisi (tab paling kanan bisa terpotong di 100 kolom)");
 
-	// Klik tab Extensions
-	const extRegion = tabRegions.find((r) => r.key === "Extensions")!;
+	// Klik tab Extensions (kalau terpotong di 100 kolom, pakai tab paling kanan)
+	const extRegion = tabRegions.find((r) => r.key === "Extensions") ?? tabRegions[tabRegions.length - 1]!;
 	const clickExt = hdr.handleMouse({
 		type: "click",
 		button: "left",
 		x: Math.floor((extRegion.startX + extRegion.endX) / 2),
 		y: tabY,
 	} as any);
-	assert(clickExt?.handled === true, "klik mouse pada tab Extensions handled");
-	assert(hdr.activeTab === "Extensions", "activeTab berubah ke Extensions setelah klik");
+	assert(clickExt?.handled === true, "klik mouse pada tab handled");
+	assert(hdr.activeTab === extRegion.key, "activeTab berubah ke tab yang diklik");
 	assert(renderRequested === true, "requestRender dipanggil saat tab berganti");
 
 	const linesExt = hdr.render(100);
-	assert(linesExt.some((l) => l.includes("@bismawy/pi-agentrouter@1.6.1")), "data tab Extensions tampil");
+	assert(stripAnsi(linesExt[6]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "data tab aktif tampil di baris info terakhir");
 
 	// Klik tab Skills
-	const skillsRegion = tabRegions.find((r) => r.key === "Skills")!;
+	const skillsRegion = tabRegions.find((r) => r.key === "Skills") ?? tabRegions[0]!;
 	hdr.handleMouse({
 		type: "click",
 		button: "left",
@@ -811,10 +702,21 @@ if (isMain) {
 	assert(hdr.activeTab === "Skills", "activeTab berubah ke Skills setelah klik");
 
 	const linesSkills = hdr.render(100);
-	assert(linesSkills.some((l) => l.includes("agents-sdk, cloudflare")), "data tab Skills tampil");
-	const divIndices = linesSkills.map((l, i) => (l.includes("├") ? i : -1)).filter((i) => i !== -1);
-	const contentLines = linesSkills.slice(divIndices[1]! + 1, -1);
-	assert(!contentLines.some((l) => l.includes("Gemini 3.8 Flash (Antigravity)")), "data Model tidak tampil di konten tab Skills");
+	assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "data tab Skills tampil di baris info terakhir");
+	assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
+	assert(linesSkills[4]!.includes("Model: Gemini 3.8 Flash"), "menu tab tetap tampil saat tab lain aktif");
+
+	// Y baris tab harus menunjuk baris menu tab, bukan baris shortcut di atasnya
+	const rowsPlain = lines100.map((l) => stripAnsi(l));
+	assert(rowsPlain[tabY]!.includes("Model:"), "renderedTabLineY menunjuk baris menu tab");
+	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model:" : r.key)), "region tab rata dengan teks di baris itu");
+
+	// Layar sempit: versi + tab + data harus utuh, shortcut yang dipangkas
+	const narrow = hdr.render(60);
+	assert(narrow.every((l) => visibleWidth(l) === 60), "baris 60 kolom tetap 60");
+	assert(stripAnsi(narrow[1]!).includes("pi v"), "versi tetap utuh di 60 kolom");
+	assert(stripAnsi(narrow[1]!).includes("More/expand") === false, "shortcut panjang dibuang di 60 kolom");
+	assert(stripAnsi(narrow[4]!).includes("Model:"), "tab Model tetap tampil di 60 kolom");
 
 	// Intercept addChild: data masuk dan child di-suppress
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };

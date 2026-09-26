@@ -18,6 +18,7 @@ import {
 	CustomMessageComponent,
 	getMarkdownTheme,
 	initTheme,
+	InteractiveMode,
 	keyText,
 	Theme,
 	UserMessageComponent,
@@ -30,12 +31,15 @@ import {
 	Spacer,
 	Text,
 	TuiAltScreen,
+	visibleWidth,
 	type Component,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
+import { ansiBgOpen } from "../lib/ansi.ts";
+export { ansiBgOpen };
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
@@ -58,19 +62,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 	}
 }
 
-// Kode pembuka bg (tanpa reset penutup) - probe dari tema aktif.
-// Duplikat kecil dari timestamps.ts: tiap file ekstensi berdiri sendiri
-// (tanpa import antar-file, agar loader pi tetap sesederhana sekarang).
-export function ansiBgOpen(th: { bg?(c: string, t: string): string } | null, color: string): string {
-	if (!th?.bg) return "";
-	try {
-		const probe = th.bg(color, "");
-		const reset = "\x1b[49m";
-		return probe.endsWith(reset) ? probe.slice(0, -reset.length) : probe;
-	} catch {
-		return "";
-	}
-}
+// Kode pembuka bg (tanpa reset penutup) -> lib/ansi.ts (satu definisi).
 
 // Seleksi teks drag-select di pi fullscreen: pi hanya membungkus irisan dengan
 // reverse video (\x1b[7m) — di terminal/tema tertentu teks jadi tak terbaca.
@@ -178,6 +170,50 @@ export default function uiRenderTweaks(pi: ExtensionAPI) {
 		const raw = customMessageText(message.content);
 		return new JevReviewBoxComponent(raw, Boolean(expanded), th);
 	});
+}
+
+// Notifikasi "Package Updates Available": pi membungkus teksnya dengan
+// DynamicBorder (garis penuh, bukan kotak). Diganti jadi kotak arnative
+// (╭─╮ │ ╰─╯) lewat patch prototype InteractiveMode; warna kuning (warning)
+// pada judul & bingkai tetap, isi teks sama seperti bawaan pi.
+export class PackageUpdateBoxComponent implements Component {
+	private packages: string[];
+	private th: { fg(c: string, t: string): string };
+
+	constructor(packages: string[], th: { fg(c: string, t: string): string }) {
+		this.packages = packages;
+		this.th = th;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const th = this.th;
+		const rows = [
+			th.fg("warning", "\x1b[1m\uf449  Package Updates Available\x1b[22m"),
+			`${th.fg("muted", "Package updates are available. Run ")}${th.fg("accent", "pi update --extensions")}`,
+			th.fg("muted", "Packages:"),
+			...this.packages.map((pkg) => `- ${pkg}`),
+		];
+		return renderBoxLines(th, width, rows, undefined, "warning");
+	}
+}
+
+const PACKAGE_BOX_KEY = Symbol.for("pi-arnative.packageUpdateBox");
+if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKAGE_BOX_KEY]) {
+	(globalThis as Record<symbol, boolean>)[PACKAGE_BOX_KEY] = true;
+	const proto = InteractiveMode.prototype as unknown as {
+		showPackageUpdateNotification(packages: string[]): void;
+	};
+	proto.showPackageUpdateNotification = function (packages: string[]) {
+		const self = this as unknown as {
+			chatContainer: { addChild(c: unknown): void };
+			ui: { requestRender(): void };
+		};
+		self.chatContainer.addChild(new Spacer(1));
+		self.chatContainer.addChild(new PackageUpdateBoxComponent(packages, activeThemeProxy ?? Theme));
+		self.ui.requestRender();
+	};
 }
 
 // Helper border box ala arnative -> lib/box.ts (satu definisi untuk semua kotak)
@@ -301,7 +337,7 @@ if (isMain) {
 		}
 	};
 	// Box reload bawaan pi tersembunyi penuh (bukan baris demi baris)
-	assert(shouldHideReloadBox(["┌──┐", "│ Reloading keybindings, extensions, skills... │"]) === true, "box reload terdeteksi");
+	assert(shouldHideReloadBox(["╭──╮", "│ Reloading keybindings, extensions, skills... │"]) === true, "box reload terdeteksi");
 	assert(shouldHideReloadBox(["hello", "world"]) === false, "baris biasa lolos");
 
 	// Seleksi: reverse video diganti warna eksplisit (bg selectedBg + fg text)
@@ -500,9 +536,20 @@ if (isMain) {
 	);
 	const cLines = contractCollapsed.render(120).map((l: string) => l.trimEnd());
 	assert(
-		cLines[0].startsWith("┌") && cLines[cLines.length - 1].startsWith("└") && cLines[1].includes("[click to expand]"),
+		cLines[0].startsWith("╭") && cLines[cLines.length - 1].startsWith("╰") && cLines[1].includes("[click to expand]"),
 		"pesan kontrak collapsed: kotak border dengan teks [click to expand]",
 	);
+
+	// Notifikasi pembaruan paket: kotak arnative, isi & warna kuning tetap
+	const upd = new PackageUpdateBoxComponent(["github.com/bismawy/pi-arnative", "pkg-dua"], {
+		fg: (c: string, t: string) => (c === "warning" ? `\x1b[33m${t}\x1b[39m` : t),
+	}).render(60);
+	assert(upd[0]!.includes("\x1b[33m") && upd[0]!.includes("╭"), "kotak pembaruan: bingkai bulat + warna warning");
+	assert(upd[upd.length - 1]!.includes("╰"), "kotak pembaruan: bingkai bawah");
+	assert(upd[1]!.includes("Package Updates Available"), "judul pembaruan di dalam kotak");
+	assert(upd[1]!.includes("\uf449"), "ikon \uf449 pada judul pembaruan");
+	assert(upd.some((l: string) => l.includes("- github.com/bismawy/pi-arnative")), "daftar paket di dalam kotak");
+	assert(upd.every((l: string) => visibleWidth(l) === 60), "kotak pembaruan selebar 60");
 
 	// Test invalidate and handleMouse click toggle
 	contractCollapsed.invalidate();
@@ -519,7 +566,7 @@ if (isMain) {
 	);
 	const expLines = contractExpanded.render(120).map((l: string) => l.trimEnd());
 	assert(
-		expLines[0].startsWith("┌") && expLines[expLines.length - 1].startsWith("└") && expLines.some((l: string) => l.includes("Bahasa ikut user")),
+		expLines[0].startsWith("╭") && expLines[expLines.length - 1].startsWith("╰") && expLines.some((l: string) => l.includes("Bahasa ikut user")),
 		"pesan kontrak expanded: kotak border dengan isi lengkap",
 	);
 	console.log("ui-render-tweaks.ts self-check OK");

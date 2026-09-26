@@ -1,83 +1,14 @@
 /**
- * Arnative Usage Dashboard (/usage):
- * - Memindai langsung riwayat sesi lokal Pi (~/.pi/agent/sessions/*.jsonl).
- * - Cache cepat berbasis mtime & size di ~/.pi/agent/arnative-usage-cache.json.
- * - Zero dependency ke ekstensi luar.
- * - Desain tabel Rounded Box Arnative dengan expandable provider/model.
- * - Mengekspor getModelAllTimeUsage() untuk header dan komponen lainnya.
+ * Arnative Usage Dashboard (/usage): UI tabel + komando /usage.
+ * Data layer (scan sesi + cache + agregasi) di lib/usage-store.ts — dipakai
+ * bersama header Model; API lama tetap diekspor dari modul ini (kompatibilitas).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
-import { boxDim, boxEdge, boxRow } from "../lib/box.ts";
-
-export interface UsageEntry {
-	provider: string;
-	model: string;
-	input: number;
-	output: number;
-	cacheRead: number;
-	cost: number;
-}
-
-export interface FileCacheItem {
-	mtimeMs: number;
-	size: number;
-	v?: number;
-	entries: UsageEntry[];
-}
-
-export interface UsageModelStats {
-	name: string;
-	sessions: number;
-	msgs: number;
-	input: number;
-	output: number;
-	cacheRead: number;
-	totalTokens: number;
-	cost: number;
-}
-
-export interface UsageProviderStats {
-	name: string;
-	sessions: number;
-	msgs: number;
-	input: number;
-	output: number;
-	cacheRead: number;
-	totalTokens: number;
-	cost: number;
-	models: UsageModelStats[];
-}
-
-export interface UsageSummary {
-	providers: UsageProviderStats[];
-	totals: {
-		sessions: number;
-		msgs: number;
-		input: number;
-		output: number;
-		cacheRead: number;
-		totalTokens: number;
-		cost: number;
-	};
-}
-
-export function formatTokens(n: number): string {
-	if (!n || n <= 0) return "-";
-	if (n < 1000) return String(n);
-	if (n < 1_000_000) {
-		const k = n / 1000;
-		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-	}
-	if (n < 1_000_000_000) {
-		const m = n / 1_000_000;
-		return `${m.toFixed(1).replace(/\.0$/, "")}M`;
-	}
-	const b = n / 1_000_000_000;
-	return `${b.toFixed(1).replace(/\.0$/, "")}B`;
-}
+import { boxEdge, boxRow } from "../lib/box.ts";
+import { collectUsageSummary, formatTokens, getModelAllTimeUsage, type UsageSummary } from "../lib/usage-store.ts";
+export { collectUsageSummary, formatTokens, getModelAllTimeUsage };
+export type { UsageEntry, UsageModelStats, UsageProviderStats, UsageSummary } from "../lib/usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -89,302 +20,6 @@ export function formatCost(n: number): string {
 export function formatCount(n: number): string {
 	return n > 0 ? n.toLocaleString("en-US") : "-";
 }
-
-const CACHE_FILE_PATH = join(getAgentDir(), "arnative-usage-cache.json");
-const CACHE_VERSION = 2; // v2: menambahkan cost per entri
-
-function loadDiskCache(): Map<string, FileCacheItem> {
-	const map = new Map<string, FileCacheItem>();
-	try {
-		if (existsSync(CACHE_FILE_PATH)) {
-			const raw = JSON.parse(readFileSync(CACHE_FILE_PATH, "utf8")) as Record<string, FileCacheItem>;
-			for (const [k, v] of Object.entries(raw)) {
-				map.set(k, v);
-			}
-		}
-	} catch {
-		// ignore
-	}
-	return map;
-}
-
-function saveDiskCache(map: Map<string, FileCacheItem>): void {
-	try {
-		const obj: Record<string, FileCacheItem> = {};
-		for (const [k, v] of map.entries()) {
-			obj[k] = v;
-		}
-		const dir = dirname(CACHE_FILE_PATH);
-		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-		writeFileSync(CACHE_FILE_PATH, JSON.stringify(obj), "utf8");
-	} catch {
-		// ignore
-	}
-}
-
-function scanSessionFiles(dir: string): string[] {
-	const files: string[] = [];
-	try {
-		if (!existsSync(dir)) return files;
-		const list = readdirSync(dir, { withFileTypes: true });
-		for (const ent of list) {
-			const full = join(dir, ent.name);
-			if (ent.isDirectory()) {
-				files.push(...scanSessionFiles(full));
-			} else if (ent.isFile() && ent.name.endsWith(".jsonl")) {
-				files.push(full);
-			}
-		}
-	} catch {
-		// ignore
-	}
-	return files;
-}
-
-function parseSessionFile(filePath: string): UsageEntry[] {
-	const entries: UsageEntry[] = [];
-	try {
-		const content = readFileSync(filePath, "utf8");
-		const lines = content.split("\n");
-		for (const line of lines) {
-			if (!line || !line.includes('"role":"assistant"')) continue;
-			try {
-				const obj = JSON.parse(line);
-				const m = obj?.message;
-				if (m?.role === "assistant") {
-					const provider = String(m.provider || "unknown");
-					const model = String(m.model || "unknown");
-					const u = m.usage || {};
-					entries.push({
-						provider,
-						model,
-						input: Number(u.input) || 0,
-						output: Number(u.output) || 0,
-						cacheRead: Number(u.cacheRead) || 0,
-						cost: Number(u.cost?.total) || 0,
-					});
-				}
-			} catch {
-				// ignore line parse error
-			}
-		}
-	} catch {
-		// ignore file read error
-	}
-	return entries;
-}
-
-let cachedSummary: UsageSummary | null = null;
-let lastScanMs = 0;
-
-export function collectUsageSummary(forceScan = false): UsageSummary {
-	const now = Date.now();
-	if (!forceScan && cachedSummary && now - lastScanMs < 5000) {
-		return cachedSummary;
-	}
-
-	const sessionsDir = join(getAgentDir(), "sessions");
-	const files = scanSessionFiles(sessionsDir);
-	const diskCache = loadDiskCache();
-	let cacheDirty = false;
-
-	const providerMap = new Map<
-		string,
-		{
-			sessions: Set<string>;
-			msgs: number;
-			input: number;
-			output: number;
-			cacheRead: number;
-			cost: number;
-			models: Map<string, { sessions: Set<string>; msgs: number; input: number; output: number; cacheRead: number; cost: number }>;
-		}
-	>();
-
-	for (const file of files) {
-		let stat;
-		try {
-			stat = statSync(file);
-		} catch {
-			continue;
-		}
-
-		let fileEntries: UsageEntry[];
-		const cached = diskCache.get(file);
-		if (cached && cached.v === CACHE_VERSION && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-			fileEntries = cached.entries;
-		} else {
-			fileEntries = parseSessionFile(file);
-			diskCache.set(file, {
-				mtimeMs: stat.mtimeMs,
-				size: stat.size,
-				v: CACHE_VERSION,
-				entries: fileEntries,
-			});
-			cacheDirty = true;
-		}
-
-		for (const ent of fileEntries) {
-			if (!providerMap.has(ent.provider)) {
-				providerMap.set(ent.provider, {
-					sessions: new Set(),
-					msgs: 0,
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cost: 0,
-					models: new Map(),
-				});
-			}
-			const p = providerMap.get(ent.provider)!;
-			p.sessions.add(file);
-			p.msgs++;
-			p.input += ent.input;
-			p.output += ent.output;
-			p.cacheRead += ent.cacheRead;
-			p.cost += ent.cost;
-
-			if (!p.models.has(ent.model)) {
-				p.models.set(ent.model, {
-					sessions: new Set(),
-					msgs: 0,
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cost: 0,
-				});
-			}
-			const m = p.models.get(ent.model)!;
-			m.sessions.add(file);
-			m.msgs++;
-			m.input += ent.input;
-			m.output += ent.output;
-			m.cacheRead += ent.cacheRead;
-			m.cost += ent.cost;
-		}
-	}
-
-	if (cacheDirty) {
-		saveDiskCache(diskCache);
-	}
-
-	// Agregasi hasil dan hitung total
-	let totalSessions = 0;
-	let totalMsgs = 0;
-	let totalInp = 0;
-	let totalOut = 0;
-	let totalCache = 0;
-	let totalCost = 0;
-
-	const allSessions = new Set<string>();
-	const providers: UsageProviderStats[] = [];
-
-	for (const [pName, pData] of providerMap.entries()) {
-		for (const s of pData.sessions) allSessions.add(s);
-		totalMsgs += pData.msgs;
-		totalInp += pData.input;
-		totalOut += pData.output;
-		totalCache += pData.cacheRead;
-		totalCost += pData.cost;
-
-		const models: UsageModelStats[] = [];
-		for (const [mName, mData] of pData.models.entries()) {
-			models.push({
-				name: mName,
-				sessions: mData.sessions.size,
-				msgs: mData.msgs,
-				input: mData.input,
-				output: mData.output,
-				cacheRead: mData.cacheRead,
-				totalTokens: mData.input + mData.output,
-				cost: mData.cost,
-			});
-		}
-		models.sort((a, b) => b.totalTokens - a.totalTokens);
-
-		providers.push({
-			name: pName,
-			sessions: pData.sessions.size,
-			msgs: pData.msgs,
-			input: pData.input,
-			output: pData.output,
-			cacheRead: pData.cacheRead,
-			totalTokens: pData.input + pData.output,
-			cost: pData.cost,
-			models,
-		});
-	}
-
-	totalSessions = allSessions.size;
-	providers.sort((a, b) => b.totalTokens - a.totalTokens);
-
-	cachedSummary = {
-		providers,
-		totals: {
-			sessions: totalSessions,
-			msgs: totalMsgs,
-			input: totalInp,
-			output: totalOut,
-			cacheRead: totalCache,
-			totalTokens: totalInp + totalOut,
-			cost: totalCost,
-		},
-	};
-	lastScanMs = now;
-	return cachedSummary;
-}
-
-// API Publik untuk header dan ekstensi lain
-export function getModelAllTimeUsage(
-	modelId?: string,
-	ctx?: ExtensionContext,
-): { input: number; output: number; cacheRead: number } {
-	const summary = collectUsageSummary();
-	let inp = 0;
-	let out = 0;
-	let read = 0;
-
-	const target = (modelId || "").toLowerCase();
-	for (const p of summary.providers) {
-		for (const m of p.models) {
-			const mName = m.name.toLowerCase();
-			const matches =
-				!target ||
-				mName === target ||
-				mName.endsWith("/" + target) ||
-				mName.split(":")[0] === target ||
-				target.endsWith("/" + mName);
-			if (matches) {
-				inp += m.input;
-				out += m.output;
-				read += m.cacheRead;
-			}
-		}
-	}
-
-	// Tambahkan penggunaan dari sesi saat ini jika ada
-	try {
-		const entries = (ctx?.sessionManager as any)?.getBranch?.() ?? (ctx?.sessionManager as any)?.getEntries?.() ?? [];
-		for (const e of entries) {
-			if (e && typeof e === "object" && "type" in e && e.type === "message") {
-				const m = (e as { message?: unknown }).message;
-				if (m && typeof m === "object" && "role" in m && (m as any).role === "assistant" && "usage" in m) {
-					const u = (m as any).usage;
-					if (u) {
-						inp += u.input || 0;
-						out += u.output || 0;
-						read += u.cacheRead || 0;
-					}
-				}
-			}
-		}
-	} catch {
-		// ignore
-	}
-
-	return { input: inp, output: out, cacheRead: read };
-}
-
 // =============================================================================
 // Komponen TUI /usage
 // =============================================================================
@@ -510,13 +145,13 @@ export class UsageModalComponent implements Component {
 	render(width: number): string[] {
 		const th = this.theme;
 		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		// Kotak ala kolom chat arnative (┌─┐ │ │ └─┘) membungkus judul + tabel + hint
-		// Border dari lib/box.ts (satu definisi, sama dengan kotak tool call).
-		const boxW = Math.min(width, 93);
-		const dim = boxDim(th);
-		const hline = (l: string, r: string) => boxEdge(l, r, boxW, dim);
-		const row = (text: string) => boxRow(text, boxW, dim);
-		const rule = () => row(dim("─".repeat(Math.max(0, boxW - 4))));
+		// Kotak ala kolom chat arnative membungkus judul + tabel + hint, full width.
+		// Ujung membulat (╭─╮ / ╰─╯), sisi + divider dari lib/box.ts (satu definisi).
+		const boxW = width;
+		const tint = (s: string) => th.fg("tint", s);
+		const hline = (l: string, r: string) => boxEdge(l, r, boxW, tint);
+		const row = (text: string) => boxRow(text, boxW, tint);
+		const rule = () => hline("├", "┤");
 
 		const rows = this.buildFlatRows();
 		if (this.selectedIndex >= rows.length) {
@@ -554,9 +189,9 @@ export class UsageModalComponent implements Component {
 			formatCol(th.fg("dim", "Cost"), colW.cost);
 
 		const out: string[] = [];
-		out.push(hline("┌", "┐"));
-		out.push(row("  " + th.fg("accent", bold("LLM Usage"))));
-		out.push(row("  " + th.fg("muted", "Token, message & cache usage across all local Pi sessions.")));
+		out.push(hline("╭", "╮"));
+		out.push(row(th.fg("accent", bold("LLM Usage"))));
+		out.push(row(th.fg("muted", "Token, message & cache usage across all local Pi sessions.")));
 		out.push(row(""));
 		out.push(row(headerText));
 		out.push(rule());
@@ -606,8 +241,8 @@ export class UsageModalComponent implements Component {
 		out.push(row("  " + totalName + totalSess + totalMsgs + totalToks + totalInp + totalOut + totalCache + totalCost));
 
 		out.push(row(""));
-		out.push(row("  " + th.fg("dim", "[↑↓] Navigation  [Enter] Open/close  [q/Esc] Exit")));
-		out.push(hline("└", "┘"));
+		out.push(row(th.fg("dim", "[↑↓] Navigation  [Enter] Open/close  [q/Esc] Exit")));
+		out.push(hline("╰", "╯"));
 
 		return out.map((line) => truncateToWidth(line, width, ""));
 	}
@@ -661,16 +296,17 @@ if (isMain) {
 	const modal = new UsageModalComponent(fakeTheme, () => {}, () => {});
 	const lines = modal.render(100);
 	assert(lines.length >= 10, "render modal menghasilkan baris-baris tabel");
-	assert(lines[0]!.includes("┌") && lines[0]!.includes("┐"), "kotak chat: border atas");
+	assert(lines[0]!.includes("╭") && lines[0]!.includes("╮"), "border atas membulat");
+	assert(visibleWidth(lines[0]!) === 100, "border kotak full width (100 kolom)");
 	assert(lines[1]!.includes("LLM Usage"), "judul LLM Usage di dalam kotak");
 	assert(lines[2]!.includes("sessions"), "deskripsi di bawah judul");
-	assert(lines[lines.length - 1]!.includes("└") && lines[lines.length - 1]!.includes("┘"), "kotak chat: border bawah");
+	assert(lines[lines.length - 1]!.includes("╰") && lines[lines.length - 1]!.includes("╯"), "border bawah membulat");
 	assert(
 		lines.every((l) => visibleWidth(l) <= 100),
 		"semua baris muat dalam lebar 100",
 	);
 	assert(
-		lines.every((l) => l.includes("┌") || l.includes("│") || l.includes("└")),
+		lines.every((l) => ["╭", "│", "├", "╰"].some((c) => l.includes(c))),
 		"tidak ada baris tanpa sisi kotak (garis aksen hilang)",
 	);
 
