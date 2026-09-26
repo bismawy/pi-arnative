@@ -885,18 +885,18 @@ if (isMain) {
 	const todoCall = () => ({ render: () => ["todo → Test subject"] });
 	const todoResult = () => ({ render: () => ["● completed"] });
 	const todoTool = { toolName: "todo", toolDefinition: { renderCall: todoCall, renderResult: todoResult } };
-	const thBg: Theme = {
+	const thBgTodo: Theme = {
 		fg: (_c, s) => s,
 		bg: (c, s) => `[bg:${c}]${s}[/bg]`,
 	};
-	const todoCallOut = (ToolExecutionComponent.prototype.getCallRenderer.call(todoTool) as any)({}, thBg, { state: {} }).render(60);
+	const todoCallOut = (ToolExecutionComponent.prototype.getCallRenderer.call(todoTool) as any)({}, thBgTodo, { state: {} }).render(60);
 	assert(todoCallOut[0].includes("[bg:toolPendingBg]"), "todo call: background pending");
 	assert(todoCallOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo call: ikon \uf14a di judul");
 
 	const todoResultOut = (ToolExecutionComponent.prototype.getResultRenderer.call(todoTool) as any)(
 		{ content: [] },
 		{ expanded: false, isPartial: false },
-		thBg,
+		thBgTodo,
 		{ state: {}, args: {} },
 	).render(60);
 	assert(todoResultOut[0].includes("[bg:toolSuccessBg]"), "todo result: background success");
