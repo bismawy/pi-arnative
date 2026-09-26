@@ -217,19 +217,22 @@ export function centerLine(text: string, width: number, side = "│"): string {
 	return side + " ".repeat(left) + text + " ".repeat(right) + side;
 }
 
-// Logo pi.dev ASCII art (gradasi hijau emerald pixelated compact, 4 baris, proporsi pixel presisi)
-const G1 = "\x1b[38;2;74;222;128m";
-const G2 = "\x1b[38;2;52;211;153m";
-const G3 = "\x1b[38;2;34;197;94m";
-const G4 = "\x1b[38;2;16;185;129m";
-const R = "\x1b[39m";
+// Logo pi.dev ASCII art: P menggunakan aksen tema, i menggunakan tint tema
+export function buildLogoLines(th: Themeish): string[] {
+	const p = (s: string) => fgFirst(th, ["accent"], s);
+	const i = (s: string) => fgFirst(th, ["tint", "text"], s);
 
-export const ASCII_LOGO_LINES = [
-	`${G1}██████    ${R}`,
-	`${G1}██  ${G2}██    ${R}`,
-	`${G2}██████  ${G3}██${R}`,
-	`${G3}██      ${G4}██${R}`,
-];
+	return [
+		`${p("██████████")}   `,
+		`${p("██████████")}   `,
+		`${p("████   ███")}   `,
+		`${p("███████")}   ${i("███")}`,
+		`${p("███")}       ${i("███")}`,
+		`${p("███")}       ${i("███")}`,
+	];
+}
+
+export const ASCII_LOGO_LINES = buildLogoLines(null);
 
 // Singleton store untuk resource loaded
 const STORE_KEY = Symbol.for("pi-arnative.resourceStore");
@@ -386,8 +389,9 @@ export class ArnativeHeader implements Component {
 		out.push(top);
 		out.push(blank);
 
-		// 1. Logo pi.dev ASCII art (compact 4 baris)
-		for (const line of ASCII_LOGO_LINES) {
+		// 1. Logo pi.dev ASCII art (P aksen, i tint)
+		const logoLines = buildLogoLines(th);
+		for (const line of logoLines) {
 			out.push(centerLine(line, width, side));
 		}
 		out.push(blank);
@@ -468,11 +472,10 @@ export class ArnativeHeader implements Component {
 			const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
 			const fullName = formatModelDisplayName(modelObj);
 			const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
-			const thinkStr = thLvl && thLvl !== "off" ? `${capitalize(thLvl)} Thinking` : "No Thinking";
-			activeItems = [
-				fullName,
-				`Thinking: ${thinkStr}${modelObj?.id ? `  │  ID: ${modelObj.id}` : ""}`,
-			];
+			const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
+			const sep = fgFirst(th, ["dim"], " · ");
+			const line = `${fgFirst(th, ["tint", "text"], fullName)}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
+			activeItems = [line];
 		} else {
 			activeItems = tabStore.get(this.activeTab) ?? [];
 		}
@@ -480,6 +483,11 @@ export class ArnativeHeader implements Component {
 		if (activeItems.length === 0) {
 			const emptyMsg = fgFirst(th, ["tint"], "(kosong)");
 			out.push(centerLine(emptyMsg, width, side));
+		} else if (this.activeTab === "Model") {
+			// Tab Model sudah memuat styling tint + separator dim
+			for (const line of activeItems) {
+				out.push(centerLine(line, width, side));
+			}
 		} else {
 			const maxDataWidth = Math.max(10, width - 8);
 			const lines = wrapCommaItems(activeItems, maxDataWidth);

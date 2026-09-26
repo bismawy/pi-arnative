@@ -238,15 +238,16 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 // hanya bila tool tidak punya renderCall/renderResult sendiri (tool bawaan kita
 // dan pi-web-access dll. tak tersentuh).
 //
-// Pengecualian: dua tool pi-web-access yang tampil beda dari kotak kita
-// (`fetch_content`, `get_search_content`; nama tampilannya di-hardcode oleh paket
-// itu sebagai "fetch "/"get_content "). Isi renderer mereka dipakai apa adanya dan
-// hanya dibungkus kotak kita. `web_search`/`source_check` sengaja TIDAK dipaksa:
+// Pengecualian: tool pi-web-access yang tampil beda dari kotak kita
+// (`web_search`, `fetch_content`, `get_search_content`; nama tampilannya di-hardcode oleh paket
+// itu sebagai "search "/"fetch "/"get_content "). Isi renderer mereka dipakai apa adanya dan
+// hanya dibungkus kotak kita. `source_check` sengaja TIDAK dipaksa:
 // fase partial-nya (kurator: URL + status persetujuan) akan hilang karena jalur
 // partial kita mengembalikan kosong.
 // Tool `todo` (@juicesharp/rpiv-todo) dibungkus kotak dengan ikon check-square (\uf14a)
 // dan background tema toolPendingBg/toolSuccessBg.
 const BOXED_TOOLS = new Map([
+	["web_search", "search"],
 	["fetch_content", "fetch"],
 	["get_search_content", "get_content"],
 	["todo", "todo"],
@@ -712,7 +713,7 @@ if (isMain) {
 	assert(bgLines.every((l) => visibleWidth(l.replace(/[<>]/g, "")) === 20), "bg tidak merusak lebar baris kotak");
 	assert(bgLines[0]!.replace(/[<>]/g, "").startsWith("┌"), "garis atas tetap utuh");
 
-	// pi-web-access fetch_content/get_search_content: isi renderer mereka, kotak kita
+	// pi-web-access web_search/fetch_content/get_search_content: isi renderer mereka, kotak kita
 	const paResult: any = { render: () => ["\x1b[32mPi Coding Agent\x1b[39m (77 matches, 77 shown)"] };
 	const paCall: any = { render: () => ["\x1b[1mget_content \x1b[22m\x1b[36mfind 4\x1b[39m"] };
 	const boxedRes = {
@@ -722,6 +723,14 @@ if (isMain) {
 	assert(
 		ToolExecutionComponent.prototype.getRenderShell.call(boxedRes) === "self",
 		"pi-web-access: shell dipaksa self (ikut kotak kita, bukan blok bg)",
+	);
+	const searchRes = {
+		toolName: "web_search",
+		toolDefinition: { renderCall: () => ({ render: () => ["\x1b[1msearch \x1b[22m\x1b[36m\"site:pi.dev\"\x1b[39m"] }), renderResult: () => ({ render: () => ["\x1b[32m5 sources\x1b[39m"] }) },
+	};
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(searchRes) === "self",
+		"web_search: shell dipaksa self (ikut kotak kita)",
 	);
 	const bRes = ToolExecutionComponent.prototype.getResultRenderer.call(boxedRes) as any;
 	const bOut = bRes(
@@ -770,10 +779,10 @@ if (isMain) {
 		"pi-web-access: baris args renderer mereka masuk kotak",
 	);
 
-	// Guard: web_search/source_check SENGAJA tidak dipaksa — fase partial kurator
+	// Guard: source_check SENGAJA tidak dipaksa — fase partial kurator
 	// memuat URL + status persetujuan, sedangkan jalur partial kita mengosongkan.
 	// Tanpa assert ini, penyuntingan BOXED_TOOLS di kemudian hari bisa menelannya diam-diam.
-	for (const n of ["web_search", "source_check"]) {
+	for (const n of ["source_check"]) {
 		const theirs = () => "renderer-mereka";
 		assert(
 			ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: n, toolDefinition: { renderResult: theirs } })() ===
@@ -828,10 +837,10 @@ if (isMain) {
 		registerMessageRenderer: () => {},
 	} as never);
 	assert(
-		OWN_BOX.has("bash") && OWN_BOX.has("read") && OWN_BOX.has("edit") && OWN_BOX.has("fetch_content"),
+		OWN_BOX.has("bash") && OWN_BOX.has("read") && OWN_BOX.has("edit") && OWN_BOX.has("fetch_content") && OWN_BOX.has("web_search"),
 		"OWN_BOX: tool kotak kita + tool boxed terdaftar",
 	);
-	assert(!OWN_BOX.has("mcp") && !OWN_BOX.has("web_search"), "OWN_BOX: renderer pihak lain tidak dirapatkan");
+	assert(!OWN_BOX.has("mcp") && !OWN_BOX.has("source_check"), "OWN_BOX: renderer pihak lain tidak dirapatkan");
 	assert(hasOwnRendererDef(mcpTool) && !hasOwnRendererDef(noRenderer), "patokan rapat: definisi renderer tool");
 	assert(
 		capped(th, ["a", "b", "c"], false).length === CALL_ROWS + 1 &&
