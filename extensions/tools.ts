@@ -88,6 +88,13 @@ const textOf = (r: TResult): string =>
 
 const firstLine = (s: string): string => s.split("\n").find((l) => l.trim()) ?? "";
 
+// Ringkasan = baris pertama yang BERISI. Baris hanya-tanda-baca (mis. `{` tunggal
+// dari JSON pretty-print MCP) tidak menjelaskan apa-apa -> ambil baris berikutnya.
+const firstMeaningful = (s: string): string => {
+	const lines = s.split("\n").filter((l) => l.trim());
+	return lines.find((l) => !/^[\s{}\[\],;:]+$/.test(l)) ?? lines[0] ?? "";
+};
+
 const countLines = (s: string): number => (s ? s.split("\n").filter(Boolean).length : 0);
 
 // Filter path folder / link URL -> tint; sisanya default.
@@ -168,7 +175,7 @@ const firstHeading = (s: unknown): string =>
 // judul seksi yang baru ditulis (dari args.content) supaya baris hasil menyebut
 // APA yang tertulis, bukan cuma "Appended to MEMORY.md".
 export function toolSummary(name: string, text: string, args?: any): string {
-	const head = firstLine(text);
+	const head = firstMeaningful(text).trim();
 	const title = name === "memory_write" ? firstHeading(args?.content) : "";
 	return title ? `${head}. ${title}` : head;
 }
@@ -634,6 +641,16 @@ if (isMain) {
 		"memory_write daily: tanpa judul tetap baris pertama",
 	);
 	assert(toolSummary("todo", "line1\nline2") === "line1", "tool lain: baris pertama saja");
+	assert(
+		toolSummary("mcp", '{\n  "url": "https://example.com",\n  "ok": true\n}') === '"url": "https://example.com",',
+		"baris pertama hanya '{' -> ringkasan baris berikutnya (JSON MCP)",
+	);
+	assert(
+		toolSummary("mcp", '{\n  "url": "https://example.com",\n  "ok": true\n}', {}) === '"url": "https://example.com",' &&
+			toolSummary("mcp", "{") === "{",
+		"ringkasan JSON: pakai baris berisi, fallback ke baris pertama",
+	);
+	assert(toolSummary("memory_write", "Appended to MEMORY.md") === "Appended to MEMORY.md", "ballast: ringkasan biasa utuh");
 
 	// pi-web-access fetch_content/get_search_content: isi renderer mereka, kotak kita
 	const paResult: any = { render: () => ["\x1b[32mPi Coding Agent\x1b[39m (77 matches, 77 shown)"] };
