@@ -266,7 +266,14 @@ for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
 // of lines. A 1-line summary + [ctrl+o to expand] is tighter; their args lines
 // still feed the call box so the invoked MCP tool stays visible.
 const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
-const pakaiCallMereka = (name: string): boolean => BOXED_TOOLS.has(name) || MCP_TOOL(name);
+
+// pi-fff "override" mode re-registers `find`/`grep` with its own renderers, replacing our
+// boxed versions -> plain text again. Box theirs too; ours carry renderShell "self" (minimal).
+const FFF_OVERRIDE = ["find", "grep"];
+const pakaiCallMereka = (self: any): boolean =>
+	BOXED_TOOLS.has(self.toolName) ||
+	MCP_TOOL(self.toolName) ||
+	(FFF_OVERRIDE.includes(self.toolName) && self.toolDefinition?.renderShell !== "self");
 
 // The MCP box title names the invoked tool (full args when expanded).
 const mcpInfo = (name: string, args: any, th: Theme): string => {
@@ -326,14 +333,15 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	};
 
 	proto.getRenderShell = function (): string {
-		if (pakaiCallMereka(this.toolName)) return "self";
+		if (pakaiCallMereka(this)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
 	};
 
 	proto.getCallRenderer = function () {
 		const name: string = this.toolName;
+		const mine = pakaiCallMereka(this);
 		const own = origCall.call(this);
-		if (own && !pakaiCallMereka(name)) return own;
+		if (own && !mine) return own;
 		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
@@ -341,7 +349,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const theirs = own ? componentLines(own.call(this, args, th, ctx), width - 6) : [];
 				if (name === "todo" && theirs.length)
 					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
-				if (pakaiCallMereka(name) && theirs.length)
+				if (mine && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
 				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false), boxBgOf(name));
@@ -351,8 +359,10 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	proto.getResultRenderer = function () {
 		const name: string = this.toolName;
 		const own = origResult.call(this);
+		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
+		const fff = FFF_OVERRIDE.includes(name) && this.toolDefinition?.renderShell !== "self";
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).
-		if (own && !pakaiCallMereka(name)) return own;
+		if (own && !pakaiCallMereka(this)) return own;
 		const boxed = BOXED_TOOLS.has(name);
 		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
 			if (opts.isPartial) return EMPTY;
@@ -364,7 +374,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 			// Errors use our own path: pi-web-access' own error box is a box inside a
 			// box. Their renderer content is only used on success.
 			const theirs =
-				boxed && !isErr
+				(boxed || fff) && !isErr
 					? own.call(this, { content: result.content, details: result.details }, opts, th, ctx)
 					: null;
 			return new Lines((width) => {
@@ -372,6 +382,10 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const inner = Math.max(8, width - 4);
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
+				if (fff && boxed2.length) {
+					const callLines = componentLines(origCall.call(this)?.call(this, ctx.args, th, ctx), width - 6);
+					return box(th, width, boxedRows(icon, [callLines[0]?.trim() || displayName(name), ...boxed2]));
+				}
 				if (name === "todo" && boxed2.length) {
 					// todo call result (status completed / in_progress)
 					const callComp = origCall.call(this)?.call(this, ctx.args, th, ctx);
@@ -786,6 +800,31 @@ if (isMain) {
 	assert(
 		bCallOut[0].startsWith("╭") && bCallOut.some((l: string) => l.includes("find 4")),
 		"pi-web-access: baris args renderer mereka masuk kotak",
+	);
+
+	// pi-fff override mode: find/grep re-registered with own renderers, no renderShell
+	const fffCall = { render: () => ["\x1b[1mfind \x1b[22m\x1b[36m*.ts in D:/Pi/x\x1b[39m"] };
+	const fffRes = { render: () => ["src/a.ts \x1b[2m... (6 more lines)\x1b[22m"] };
+	const fffFind = { toolName: "find", toolDefinition: { renderCall: () => fffCall, renderResult: () => fffRes } };
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(fffFind) === "self",
+		"pi-fff find: shell dipaksa self (ikut kotak kita)",
+	);
+	const fffOut = (ToolExecutionComponent.prototype.getResultRenderer.call(fffFind) as any)(
+		{ content: [{ type: "text", text: "src/a.ts\nsrc/b.ts" }] },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { pattern: "*.ts", path: "D:/Pi/x" }, state: {} },
+	).render(60);
+	assert(fffOut[0].startsWith("╭") && fffOut[fffOut.length - 1].startsWith("╰"), "pi-fff find: hasil dibungkus kotak");
+	assert(fffOut.some((l: string) => l.includes("*.ts in D:/Pi/x")), "pi-fff find: judul renderCall ikut masuk kotak");
+	assert(fffOut.some((l: string) => l.includes("6 more lines")), "pi-fff find: ringkasan renderResult ikut masuk kotak");
+
+	const oursFind = { toolName: "find", toolDefinition: { renderShell: "self", renderCall: () => fffCall, renderResult: () => fffRes } };
+	assert(
+		(ToolExecutionComponent.prototype.getCallRenderer.call(oursFind) as any)() === fffCall &&
+			(ToolExecutionComponent.prototype.getResultRenderer.call(oursFind) as any)() === fffRes,
+		"find kita (renderShell self): renderer sendiri apa adanya, tak dibungkus kotak lagi",
 	);
 
 	// Guard: source_check is deliberately NOT boxed — its curator partial carries
