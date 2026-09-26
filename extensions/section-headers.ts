@@ -466,10 +466,34 @@ export class ArnativeHeader implements Component {
 		}
 		out.push(centerLine(scText, width, side));
 
-		// 3. Divider 1
+		// 3. Baris Model, Thinking, & Token Penggunaan
+		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
+		const fullName = formatModelDisplayName(modelObj);
+		const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
+		const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
+		const dotSep = fgFirst(th, ["dim"], " · ");
+		let modelInfoLine = `${fgFirst(th, ["tint", "text"], fullName)}${dotSep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
+
+		const usage = getSessionTokenUsage(this.ctx);
+		const tokenParts: string[] = [];
+		if (usage.input > 0) {
+			tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["tint", "text"], formatTokens(usage.input))}`);
+		}
+		if (usage.output > 0) {
+			tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${fgFirst(th, ["tint", "text"], formatTokens(usage.output))}`);
+		}
+		if (usage.cacheRead > 0) {
+			tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${fgFirst(th, ["tint", "text"], formatTokens(usage.cacheRead))}`);
+		}
+		if (tokenParts.length > 0) {
+			modelInfoLine += `${dotSep}${tokenParts.join(" ")}`;
+		}
+		out.push(centerLine(modelInfoLine, width, side));
+
+		// 4. Divider 1
 		out.push(div1);
 
-		// 4. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
+		// 5. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
 		const tabs = this.getTabsData(width);
 		const sepTabPlain = width >= 105 ? "  │  " : " │ ";
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
@@ -748,7 +772,9 @@ if (isMain) {
 
 	const linesSkills = hdr.render(100);
 	assert(linesSkills.some((l) => l.includes("agents-sdk, cloudflare")), "data tab Skills tampil");
-	assert(!linesSkills.some((l) => l.includes("Gemini 3.8 Flash (Antigravity)")), "data Model tidak tampil di tab Skills");
+	const divIndices = linesSkills.map((l, i) => (l.includes("├") ? i : -1)).filter((i) => i !== -1);
+	const contentLines = linesSkills.slice(divIndices[1]! + 1, -1);
+	assert(!contentLines.some((l) => l.includes("Gemini 3.8 Flash (Antigravity)")), "data Model tidak tampil di konten tab Skills");
 
 	// Intercept addChild: data masuk dan child di-suppress
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };
