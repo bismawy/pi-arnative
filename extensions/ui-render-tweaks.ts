@@ -23,7 +23,19 @@ import {
 	UserMessageComponent,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, MouseRegion, Spacer, Text, TuiAltScreen, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	Container,
+	Markdown,
+	MouseRegion,
+	Spacer,
+	Text,
+	TuiAltScreen,
+	visibleWidth,
+	wrapTextWithAnsi,
+	type Component,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
@@ -184,55 +196,45 @@ export function renderBoxLines(theme: { fg(c: string, t: string): string; bg?(c:
 	return lines;
 }
 
-export class JevReviewBoxComponent extends Container {
+export class JevReviewBoxComponent implements Component {
 	private text: string;
 	private th: { fg(c: string, t: string): string; bg?(c: string, t: string): string };
 	public isExpanded: boolean;
 
 	constructor(text: string, isExpanded: boolean, th: { fg(c: string, t: string): string; bg?(c: string, t: string): string }) {
-		super();
 		this.text = text;
 		this.isExpanded = isExpanded;
 		this.th = th;
-		this.rebuild();
 	}
 
-	private rebuild(): void {
-		this.clear();
-		const th = this.th;
-		const self = this;
-		const view = new (class {
-			render(width: number): string[] {
-				const tag = th.fg("customMessageLabel", "\x1b[1m[pi-jev-eye]\x1b[22m");
-				if (!self.isExpanded) {
-					const title = th.fg("customMessageText", "Reviewed turn contract.");
-					const hint = th.fg("dim", "[click to expand]");
-					return renderBoxLines(th, width, [`${tag} ${title} ${hint}`]);
-				}
-				// Expanded: tampilkan seluruh baris isi
-				const raw = self.text;
-				// Jika baris pertama dimulai dengan `[pi-jev-eye]`, sesuaikan styling-nya
-				const lines = raw.split("\n");
-				const formattedRows = lines.map((line, idx) => {
-					if (idx === 0 && line.startsWith("[pi-jev-eye]")) {
-						const rest = line.slice("[pi-jev-eye]".length).trim();
-						return `${tag} ${th.fg("customMessageText", rest)}`;
-					}
-					return th.fg("customMessageText", line);
-				});
-				return renderBoxLines(th, width, formattedRows);
+	render(width: number): string[] {
+		const tag = this.th.fg("customMessageLabel", "\x1b[1m[pi-jev-eye]\x1b[22m");
+		if (!this.isExpanded) {
+			const title = this.th.fg("customMessageText", "Reviewed turn contract.");
+			const hint = this.th.fg("dim", "[click to expand]");
+			return renderBoxLines(this.th, width, [`${tag} ${title} ${hint}`]);
+		}
+		// Expanded: tampilkan seluruh baris isi
+		const lines = this.text.split("\n");
+		const formattedRows = lines.map((line, idx) => {
+			if (idx === 0 && line.startsWith("[pi-jev-eye]")) {
+				const rest = line.slice("[pi-jev-eye]".length).trim();
+				return `${tag} ${this.th.fg("customMessageText", rest)}`;
 			}
-		})();
-
-		this.addChild(
-			new MouseRegion(view as any, (event: any) => {
-				if (event.type !== "click" || event.button !== "left") return undefined;
-				this.isExpanded = !this.isExpanded;
-				this.rebuild();
-				return { handled: true };
-			}),
-		);
+			return this.th.fg("customMessageText", line);
+		});
+		return renderBoxLines(this.th, width, formattedRows);
 	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type === "click" && event.button === "left") {
+			this.isExpanded = !this.isExpanded;
+			return { handled: true };
+		}
+		return undefined;
+	}
+
+	invalidate(): void {}
 }
 
 // 3. Pesan compaction: satu baris, bukan tiga (label, spacer, teks).
@@ -438,6 +440,14 @@ if (isMain) {
 		cLines[0].startsWith("┌") && cLines[cLines.length - 1].startsWith("└") && cLines[1].includes("[click to expand]"),
 		"pesan kontrak collapsed: kotak border dengan teks [click to expand]",
 	);
+
+	// Test invalidate and handleMouse click toggle
+	contractCollapsed.invalidate();
+	const mouseRes = contractCollapsed.handleMouse({ type: "click", button: "left" });
+	assert(mouseRes?.handled === true, "klik kiri handled");
+	assert(contractCollapsed.isExpanded === true, "klik kiri toggle expanded");
+	const toggledLines = contractCollapsed.render(120).map((l: string) => l.trimEnd());
+	assert(toggledLines.some((l: string) => l.includes("Bahasa ikut user")), "setelah klik: isi lengkap tampil");
 
 	const contractExpanded = fakePi.renderers["pi-jev-eye-review"](
 		{ customType: "pi-jev-eye-review", content: "[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user" },

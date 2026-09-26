@@ -11,7 +11,7 @@
  * - Isi data tab aktif (rata tengah, dibungkus rapi, warna tint, tidak bertumpuk).
  * - Sembunyikan daftar tumpukan bawaan pi di loadedResourcesContainer.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -58,14 +58,59 @@ export function formatTokens(n: number): string {
 		const k = n / 1000;
 		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
 	}
-	const m = n / 1_000_000;
-	return `${m.toFixed(1).replace(/\.0$/, "")}M`;
+	if (n < 1_000_000_000) {
+		const m = n / 1_000_000;
+		return `${m.toFixed(1).replace(/\.0$/, "")}M`;
+	}
+	const b = n / 1_000_000_000;
+	return `${b.toFixed(1).replace(/\.0$/, "")}B`;
 }
 
-export function getSessionTokenUsage(ctx?: ExtensionContext): { input: number; output: number; cacheRead: number } {
+// Menghitung total semua penggunaan model tertentu (all-time seperti di /usage)
+export function getModelAllTimeUsage(
+	modelId?: string,
+	ctx?: ExtensionContext,
+): { input: number; output: number; cacheRead: number } {
 	let inp = 0;
 	let out = 0;
 	let read = 0;
+
+	// 1. Baca cache all-time dari usage-extension-cache.json (dibuat oleh /usage)
+	try {
+		const cachePath = join(getAgentDir(), "usage-extension-cache.json");
+		if (existsSync(cachePath)) {
+			const cache = JSON.parse(readFileSync(cachePath, "utf8")) as {
+				names?: string[];
+				files?: Record<string, { messages?: unknown[][] }>;
+			};
+			if (cache && Array.isArray(cache.names) && cache.files) {
+				const names = cache.names;
+				const target = (modelId || "").toLowerCase();
+				for (const file of Object.values(cache.files)) {
+					if (!file?.messages || !Array.isArray(file.messages)) continue;
+					for (const m of file.messages) {
+						if (!Array.isArray(m) || m.length < 6) continue;
+						const mName = String(names[m[1] as number] || "").toLowerCase();
+						const matches =
+							!target ||
+							mName === target ||
+							mName.endsWith("/" + target) ||
+							mName.split(":")[0] === target ||
+							target.endsWith("/" + mName);
+						if (matches) {
+							inp += Number(m[3]) || 0;
+							out += Number(m[4]) || 0;
+							read += Number(m[5]) || 0;
+						}
+					}
+				}
+			}
+		}
+	} catch {
+		// ignore
+	}
+
+	// 2. Tambahkan token sesi saat ini jika ada
 	try {
 		const entries = (ctx?.sessionManager as any)?.getBranch?.() ?? (ctx?.sessionManager as any)?.getEntries?.() ?? [];
 		for (const e of entries) {
@@ -84,10 +129,7 @@ export function getSessionTokenUsage(ctx?: ExtensionContext): { input: number; o
 	} catch {
 		// ignore
 	}
-	if (inp === 0 && out === 0 && read === 0) {
-		const snap = (globalThis as Record<symbol, any>)[USAGE_SNAPSHOT_KEY];
-		if (snap) return snap;
-	}
+
 	return { input: inp, output: out, cacheRead: read };
 }
 
@@ -313,7 +355,7 @@ export function formatModelDisplayName(model?: { id?: string; name?: string; pro
 }
 
 export class ArnativeHeader implements Component {
-	public activeTab: TabKey = "Extensions";
+	public activeTab: TabKey = "Model";
 	private renderedTabLineY = -1;
 	private renderedTabRegions: Array<{ key: TabKey; startX: number; endX: number }> = [];
 
@@ -466,34 +508,10 @@ export class ArnativeHeader implements Component {
 		}
 		out.push(centerLine(scText, width, side));
 
-		// 3. Baris Model, Thinking, & Token Penggunaan
-		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
-		const fullName = formatModelDisplayName(modelObj);
-		const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
-		const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
-		const dotSep = fgFirst(th, ["dim"], " · ");
-		let modelInfoLine = `${fgFirst(th, ["tint", "text"], fullName)}${dotSep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
-
-		const usage = getSessionTokenUsage(this.ctx);
-		const tokenParts: string[] = [];
-		if (usage.input > 0) {
-			tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["tint", "text"], formatTokens(usage.input))}`);
-		}
-		if (usage.output > 0) {
-			tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${fgFirst(th, ["tint", "text"], formatTokens(usage.output))}`);
-		}
-		if (usage.cacheRead > 0) {
-			tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${fgFirst(th, ["tint", "text"], formatTokens(usage.cacheRead))}`);
-		}
-		if (tokenParts.length > 0) {
-			modelInfoLine += `${dotSep}${tokenParts.join(" ")}`;
-		}
-		out.push(centerLine(modelInfoLine, width, side));
-
-		// 4. Divider 1
+		// 3. Divider 1 (tanpa baris model di atasnya untuk menghindari duplikasi)
 		out.push(div1);
 
-		// 5. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
+		// 4. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
 		const tabs = this.getTabsData(width);
 		const sepTabPlain = width >= 105 ? "  │  " : " │ ";
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
@@ -541,8 +559,8 @@ export class ArnativeHeader implements Component {
 			const sep = fgFirst(th, ["dim"], " · ");
 			let line = `${fgFirst(th, ["tint", "text"], fullName)}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
 
-			// Total token penggunaan jika ada: ↑2.9M ↓94k  26.3M
-			const usage = getSessionTokenUsage(this.ctx);
+			// Total semua penggunaan model itu (all-time seperti di /usage): ↑... ↓...  ...
+			const usage = getModelAllTimeUsage(modelObj?.id, this.ctx);
 			const tokenParts: string[] = [];
 			if (usage.input > 0) {
 				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["tint", "text"], formatTokens(usage.input))}`);
@@ -730,14 +748,14 @@ if (isMain) {
 
 	const ansiTheme = { fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m` };
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
-	assert(hdr.activeTab === "Extensions", "default tab adalah Extensions");
+	assert(hdr.activeTab === "Model", "default tab adalah Model");
 
 	const lines100 = hdr.render(100);
 	assert(lines100.length > 10, "render 100 menghasilkan baris-baris box");
 	assert(lines100.every((l) => visibleWidth(l) === 100), "semua baris render 100 tepat 100 kolom");
 	assert(lines100[0]!.includes("╭") && lines100[0]!.includes("╮"), "border atas rounded");
 	assert(lines100.some((l) => l.includes("Model: Gemini 3.8 Flash")), "menu tab Model tampil");
-	assert(lines100.some((l) => l.includes("@bismawy/pi-agentrouter@1.6.1")), "data tab aktif Extensions tampil");
+	assert(lines100.some((l) => l.includes("Gemini 3.8 Flash (Antigravity)")), "data tab aktif Model tampil langsung");
 
 	// Tab regions: Model, Context, Skills, Extensions, Themes
 	const tabY = (hdr as any).renderedTabLineY;
@@ -745,20 +763,20 @@ if (isMain) {
 	const tabRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
 	assert(tabRegions.length === 5, "ada 5 region tab (termasuk Model)");
 
-	// Klik tab Model
-	const modelRegion = tabRegions.find((r) => r.key === "Model")!;
-	const clickModel = hdr.handleMouse({
+	// Klik tab Extensions
+	const extRegion = tabRegions.find((r) => r.key === "Extensions")!;
+	const clickExt = hdr.handleMouse({
 		type: "click",
 		button: "left",
-		x: Math.floor((modelRegion.startX + modelRegion.endX) / 2),
+		x: Math.floor((extRegion.startX + extRegion.endX) / 2),
 		y: tabY,
 	} as any);
-	assert(clickModel?.handled === true, "klik mouse pada tab Model handled");
-	assert(hdr.activeTab === "Model", "activeTab berubah ke Model setelah klik");
+	assert(clickExt?.handled === true, "klik mouse pada tab Extensions handled");
+	assert(hdr.activeTab === "Extensions", "activeTab berubah ke Extensions setelah klik");
 	assert(renderRequested === true, "requestRender dipanggil saat tab berganti");
 
-	const linesModel = hdr.render(100);
-	assert(linesModel.some((l) => l.includes("Gemini 3.8 Flash (Antigravity)")), "data tab Model tampil");
+	const linesExt = hdr.render(100);
+	assert(linesExt.some((l) => l.includes("@bismawy/pi-agentrouter@1.6.1")), "data tab Extensions tampil");
 
 	// Klik tab Skills
 	const skillsRegion = tabRegions.find((r) => r.key === "Skills")!;
