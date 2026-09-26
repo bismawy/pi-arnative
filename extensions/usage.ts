@@ -581,8 +581,7 @@ export class UsageModalComponent implements Component {
 
 		// Footer Petunjuk Navigasi
 		const hint = th.fg("dim", "[↑↓] navigasi  │  [Enter] buka/tutup  │  [q/Esc] tutup");
-		const hintPad = Math.max(0, Math.floor((boxW - visibleWidth(hint)) / 2));
-		out.push(" ".repeat(hintPad) + hint);
+		out.push("  " + hint);
 
 		return out;
 	}
