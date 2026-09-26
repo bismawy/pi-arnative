@@ -17,11 +17,13 @@ export interface UsageEntry {
 	input: number;
 	output: number;
 	cacheRead: number;
+	cost: number;
 }
 
 export interface FileCacheItem {
 	mtimeMs: number;
 	size: number;
+	v?: number;
 	entries: UsageEntry[];
 }
 
@@ -33,6 +35,7 @@ export interface UsageModelStats {
 	output: number;
 	cacheRead: number;
 	totalTokens: number;
+	cost: number;
 }
 
 export interface UsageProviderStats {
@@ -43,6 +46,7 @@ export interface UsageProviderStats {
 	output: number;
 	cacheRead: number;
 	totalTokens: number;
+	cost: number;
 	models: UsageModelStats[];
 }
 
@@ -55,6 +59,7 @@ export interface UsageSummary {
 		output: number;
 		cacheRead: number;
 		totalTokens: number;
+		cost: number;
 	};
 }
 
@@ -73,11 +78,19 @@ export function formatTokens(n: number): string {
 	return `${b.toFixed(1).replace(/\.0$/, "")}B`;
 }
 
+export function formatCost(n: number): string {
+	if (!n || n <= 0) return "-";
+	if (n < 0.01) return "<$0.01";
+	if (n < 1000) return `$${n.toFixed(2)}`;
+	return `$${(n / 1000).toFixed(1)}k`;
+}
+
 export function formatCount(n: number): string {
 	return n > 0 ? n.toLocaleString("en-US") : "-";
 }
 
 const CACHE_FILE_PATH = join(getAgentDir(), "arnative-usage-cache.json");
+const CACHE_VERSION = 2; // v2: menambahkan cost per entri
 
 function loadDiskCache(): Map<string, FileCacheItem> {
 	const map = new Map<string, FileCacheItem>();
@@ -147,6 +160,7 @@ function parseSessionFile(filePath: string): UsageEntry[] {
 						input: Number(u.input) || 0,
 						output: Number(u.output) || 0,
 						cacheRead: Number(u.cacheRead) || 0,
+						cost: Number(u.cost?.total) || 0,
 					});
 				}
 			} catch {
@@ -181,7 +195,8 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			input: number;
 			output: number;
 			cacheRead: number;
-			models: Map<string, { sessions: Set<string>; msgs: number; input: number; output: number; cacheRead: number }>;
+			cost: number;
+			models: Map<string, { sessions: Set<string>; msgs: number; input: number; output: number; cacheRead: number; cost: number }>;
 		}
 	>();
 
@@ -195,13 +210,14 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 
 		let fileEntries: UsageEntry[];
 		const cached = diskCache.get(file);
-		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+		if (cached && cached.v === CACHE_VERSION && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
 			fileEntries = cached.entries;
 		} else {
 			fileEntries = parseSessionFile(file);
 			diskCache.set(file, {
 				mtimeMs: stat.mtimeMs,
 				size: stat.size,
+				v: CACHE_VERSION,
 				entries: fileEntries,
 			});
 			cacheDirty = true;
@@ -215,6 +231,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 					input: 0,
 					output: 0,
 					cacheRead: 0,
+					cost: 0,
 					models: new Map(),
 				});
 			}
@@ -224,6 +241,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			p.input += ent.input;
 			p.output += ent.output;
 			p.cacheRead += ent.cacheRead;
+			p.cost += ent.cost;
 
 			if (!p.models.has(ent.model)) {
 				p.models.set(ent.model, {
@@ -232,6 +250,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 					input: 0,
 					output: 0,
 					cacheRead: 0,
+					cost: 0,
 				});
 			}
 			const m = p.models.get(ent.model)!;
@@ -240,6 +259,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			m.input += ent.input;
 			m.output += ent.output;
 			m.cacheRead += ent.cacheRead;
+			m.cost += ent.cost;
 		}
 	}
 
@@ -253,6 +273,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	let totalInp = 0;
 	let totalOut = 0;
 	let totalCache = 0;
+	let totalCost = 0;
 
 	const allSessions = new Set<string>();
 	const providers: UsageProviderStats[] = [];
@@ -263,6 +284,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		totalInp += pData.input;
 		totalOut += pData.output;
 		totalCache += pData.cacheRead;
+		totalCost += pData.cost;
 
 		const models: UsageModelStats[] = [];
 		for (const [mName, mData] of pData.models.entries()) {
@@ -274,6 +296,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 				output: mData.output,
 				cacheRead: mData.cacheRead,
 				totalTokens: mData.input + mData.output,
+				cost: mData.cost,
 			});
 		}
 		models.sort((a, b) => b.totalTokens - a.totalTokens);
@@ -286,6 +309,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			output: pData.output,
 			cacheRead: pData.cacheRead,
 			totalTokens: pData.input + pData.output,
+			cost: pData.cost,
 			models,
 		});
 	}
@@ -302,6 +326,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			output: totalOut,
 			cacheRead: totalCache,
 			totalTokens: totalInp + totalOut,
+			cost: totalCost,
 		},
 	};
 	lastScanMs = now;
@@ -374,6 +399,7 @@ export interface RowItem {
 	input: number;
 	output: number;
 	cacheRead: number;
+	cost: number;
 	expanded?: boolean;
 }
 
@@ -419,6 +445,7 @@ export class UsageModalComponent implements Component {
 				input: p.input,
 				output: p.output,
 				cacheRead: p.cacheRead,
+				cost: p.cost,
 				expanded: isExpanded,
 			});
 
@@ -435,6 +462,7 @@ export class UsageModalComponent implements Component {
 						input: m.input,
 						output: m.output,
 						cacheRead: m.cacheRead,
+						cost: m.cost,
 					});
 				}
 			}
@@ -481,7 +509,7 @@ export class UsageModalComponent implements Component {
 	render(width: number): string[] {
 		const th = this.theme;
 		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		const boxW = Math.max(60, Math.min(width, 100));
+		const boxW = Math.min(width, 91);
 		const innerW = boxW - 2;
 
 		const dash = "─".repeat(innerW);
@@ -495,8 +523,7 @@ export class UsageModalComponent implements Component {
 			this.selectedIndex = Math.max(0, rows.length - 1);
 		}
 
-		// Kolom tata letak (lebar karakter)
-		// Provider / Model: 30, Sessions: 8, Msgs: 8, Tokens: 9, ↑In: 9, ↓Out: 8, Cache: 8
+		// Kolom tata letak (lebar karakter) — total 89 karakter isi tabel
 		const colW = {
 			name: 28,
 			sessions: 8,
@@ -505,6 +532,7 @@ export class UsageModalComponent implements Component {
 			inp: 9,
 			out: 8,
 			cache: 8,
+			cost: 9,
 		};
 
 		const formatCol = (text: string, w: number, alignRight = true) => {
@@ -530,7 +558,8 @@ export class UsageModalComponent implements Component {
 			formatCol(th.fg("dim", "Tokens"), colW.tokens) +
 			formatCol(th.fg("dim", "↑In"), colW.inp) +
 			formatCol(th.fg("dim", "↓Out"), colW.out) +
-			formatCol(th.fg("dim", "Cache"), colW.cache);
+			formatCol(th.fg("dim", "Cache"), colW.cache) +
+			formatCol(th.fg("dim", "Cost"), colW.cost);
 
 		const padHdr = Math.max(0, innerW - visibleWidth(headerText));
 		out.push(side + headerText + " ".repeat(padHdr) + side);
@@ -559,9 +588,10 @@ export class UsageModalComponent implements Component {
 			const cInp = formatCol(th.fg(valColor, formatTokens(row.input)), colW.inp);
 			const cOut = formatCol(th.fg(valColor, formatTokens(row.output)), colW.out);
 			const cCache = formatCol(th.fg(valColor, formatTokens(row.cacheRead)), colW.cache);
+			const cCost = formatCol(th.fg(valColor, formatCost(row.cost)), colW.cost);
 
 			const prefix = isSelected ? th.fg("accent", "▸ ") : "  ";
-			const rowLine = prefix + cName + cSess + cMsgs + cToks + cInp + cOut + cCache;
+			const rowLine = prefix + cName + cSess + cMsgs + cToks + cInp + cOut + cCache + cCost;
 			const padRow = Math.max(0, innerW - visibleWidth(rowLine));
 			out.push(side + rowLine + " ".repeat(padRow) + side);
 		}
@@ -577,8 +607,9 @@ export class UsageModalComponent implements Component {
 		const totalInp = formatCol(th.fg("tint", bold(formatTokens(t.input))), colW.inp);
 		const totalOut = formatCol(th.fg("tint", bold(formatTokens(t.output))), colW.out);
 		const totalCache = formatCol(th.fg("tint", bold(formatTokens(t.cacheRead))), colW.cache);
+		const totalCost = formatCol(th.fg("tint", bold(formatCost(t.cost))), colW.cost);
 
-		const totalLine = "  " + totalName + totalSess + totalMsgs + totalToks + totalInp + totalOut + totalCache;
+		const totalLine = "  " + totalName + totalSess + totalMsgs + totalToks + totalInp + totalOut + totalCache + totalCost;
 		const padTotal = Math.max(0, innerW - visibleWidth(totalLine));
 		out.push(side + totalLine + " ".repeat(padTotal) + side);
 
@@ -589,7 +620,7 @@ export class UsageModalComponent implements Component {
 		out.push("  " + hint);
 		out.push(...accentBorder.render(width));
 
-		return out;
+		return out.map((line) => truncateToWidth(line, width, ""));
 	}
 }
 
@@ -620,11 +651,16 @@ if (isMain) {
 	assert(formatTokens(2500) === "2.5k", "formatTokens 2500 = 2.5k");
 	assert(formatTokens(2900000) === "2.9M", "formatTokens 2900000 = 2.9M");
 	assert(formatTokens(1863163057) === "1.9B", "formatTokens 1.86B = 1.9B");
+	assert(formatCost(0) === "-", "formatCost 0 = -");
+	assert(formatCost(0.004) === "<$0.01", "formatCost 0.004 = <$0.01");
+	assert(formatCost(12.345) === "$12.35", "formatCost 12.345 = $12.35");
+	assert(formatCost(1234.5) === "$1.2k", "formatCost 1234.5 = $1.2k");
 
 	const summary = collectUsageSummary();
 	assert(summary.providers.length > 0, "collectUsageSummary mendeteksi providers");
 	assert(summary.totals.sessions > 0, "collectUsageSummary mendeteksi total sessions");
 	assert(summary.totals.msgs > 0, "collectUsageSummary mendeteksi total msgs");
+	assert(summary.totals.cost >= 0, "collectUsageSummary menghitung cost");
 
 	const modelUsage = getModelAllTimeUsage("gemini-3.8-flash");
 	assert(modelUsage.input > 0, "getModelAllTimeUsage mengambil input tokens gemini-3.8-flash");
