@@ -455,7 +455,13 @@ export default function (pi: ExtensionAPI) {
 					// Kotak memakan 5 kolom: 2 sisi + 3 prompt " > ". Isi dirender 5 kolom lebih sempit.
 					const visible = (this as unknown as { renderedVisibleLineCount?: number }).renderedVisibleLineCount;
 					if (typeof visible !== "number" || width < 11) return super.render(width);
-					return boxEditorLines(super.render(width - 5), visible, (t) => this.borderColor(t));
+					let prompt = " > ";
+					try {
+						prompt = this.getActiveTheme()?.fg("dim", prompt) ?? prompt;
+					} catch {
+						// tema tak siap -> prompt tanpa warna
+					}
+					return boxEditorLines(super.render(width - 5), visible, (t) => this.borderColor(t), prompt);
 				}
 			}
 			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
@@ -591,6 +597,10 @@ if (isMain) {
 	assert(boxed[2] === "\u2502     lo    \u2502", "kotak editor: baris lanjutan indent, tanpa > kedua");
 	assert(boxed[3] === `\u2570${D}\u2500\u2500\u2500\u256f`, "kotak editor: korner bawah");
 	assert(boxed[4] === "  /mo ", "baris autocomplete tetap di luar kotak");
+	const dimP = (s: string) => `\x1b[2m${s}\x1b[0m`;
+	const boxedDim = boxEditorLines([D, "  hi    ", D], 1, plain, dimP(" > "));
+	assert(visibleWidth(boxedDim[1]!) === visibleWidth(D) + 5, "prompt ber-ANSI (dim) tak menggeser lebar");
+	assert(boxedDim[1]!.startsWith(`\u2502${dimP(" > ")}`), "prompt dim dipertahankan apa adanya");
 
 	// Self-check: getToolWorkingMessage
 	assert(getToolWorkingMessage("edit") === "Editing", "edit -> Editing");
