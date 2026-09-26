@@ -18,10 +18,12 @@ import {
 	getMarkdownTheme,
 	initTheme,
 	keyText,
+	Theme,
 	UserMessageComponent,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, MouseRegion, Spacer, Text, TuiAltScreen } from "@earendil-works/pi-tui";
+import { readFileSync } from "node:fs";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
@@ -79,22 +81,27 @@ export function ansiFgOpen(th: { fg?(c: string, t: string): string } | null, col
 }
 
 // Pil `↓ Jump to latest message` (fullscreen): pi mewarnainya bg `selectedBg`
-// (kelabu). Diganti bg aksen; teks memakai kanvas tergelap tema supaya kontras
-// 9.6:1 (WCAG AA). Bukan token semantik — pi tak punya token "teks di atas aksen".
+// (kelabu). Diganti bg aksen + teks kanvas tergelap (kontras 9.6:1, WCAG AA).
+// Catatan: pi hanya punya 7 token latar (selectedBg/userMessageBg/customMessageBg/
+// toolPendingBg/toolSuccessBg/toolErrorBg/searchMatchBg) — `accent` token teks,
+// jadi arah escape SGR-nya ditukar. `bg("accent")` pasti melempar "Unknown theme
+// background color" dan dulu ditelan catch -> pil tak berubah.
 const PILL_KEY = Symbol.for("pi-arnative.accentPill");
 const PILL_MARK = "↓ Jump to latest message";
 const PILL_INK = "toolPendingBg";
+
+const asBg = (seq: string) => seq.replace(/\x1b\[38;/g, "\x1b[48;");
+const asFg = (seq: string) => seq.replace(/\x1b\[48;/g, "\x1b[38;");
 
 export function accentPill(
 	text: string,
 	th: { fg?(c: string, t: string): string; bg?(c: string, t: string): string } | null,
 ): string {
 	if (!text.includes(PILL_MARK) || !th?.fg || !th?.bg) return text;
-	try {
-		return th.bg("accent", th.fg(PILL_INK, text.replace(/\x1b\[[0-9;]*m/g, "")));
-	} catch {
-		return text;
-	}
+	const accentBg = asBg(ansiFgOpen(th, "accent"));
+	const inkFg = asFg(ansiBgOpen(th, PILL_INK));
+	if (!accentBg || !inkFg) return text; // token tak ada di tema -> biarkan bawaan pi
+	return `${accentBg}${inkFg}${text.replace(/\x1b\[[0-9;]*m/g, "")}\x1b[39m\x1b[49m`;
 }
 
 // TuiAltScreen membuat pil lewat callback instance `scrollToEndIndicator` (field
@@ -251,18 +258,42 @@ if (isMain) {
 	assert(ansiFgOpen({ fg: (_c, t) => `\x1b[38;2;1;2;3m${t}\x1b[39m` }) === "\x1b[38;2;1;2;3m", "fgOpen terambil dari probe tema");
 	assert(ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;9;9;9m${t}\x1b[49m` }, "selectedBg") === "\x1b[48;2;9;9;9m", "bgOpen selectedBg terambil");
 
-	// Pil "Jump to latest message": bg aksen + teks kanvas (bukan selectedBg kelabu)
-	const thPil = { fg: (c: string, t: string) => `<F:${c}>${t}`, bg: (c: string, t: string) => `<B:${c}>${t}` };
-	const pilAsli = "\x1b[48;5;236m ↓ Jump to latest message · End \x1b[49m";
+	// Pil "Jump to latest message": bg aksen + teks kanvas (bukan selectedBg kelabu).
+	// Pakai Theme ASLI: stub permisif dulu meloloskan `bg("accent")` yang di pi melempar.
+	const temaJson = JSON.parse(readFileSync(new URL("../themes/arnative.json", import.meta.url), "utf8")) as {
+		vars: Record<string, string>;
+		colors: Record<string, string>;
+	};
+	const hex = (tok: string) => temaJson.vars[temaJson.colors[tok] ?? tok];
+	// Theme bawaan menambal fallback (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
+	// jadi peta fg harus lengkap; ambil seluruh palet seperti loader pi.
+	const fgPalet = Object.fromEntries(Object.entries(temaJson.colors).map(([k, v]) => [k, temaJson.vars[v] ?? v]));
+	const thPil = new Theme(fgPalet, { toolPendingBg: hex("toolPendingBg"), selectedBg: hex("selectedBg") }, "truecolor");
+	const pilAsli = thPil.bg("selectedBg", thPil.fg("text", " ↓ Jump to latest message · End "));
+	const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(";");
 	assert(
-		accentPill(pilAsli, thPil) === `<B:accent><F:${PILL_INK}> ↓ Jump to latest message · End `,
+		accentPill(pilAsli, thPil) ===
+			`\x1b[48;2;${rgb(hex("accent"))}m\x1b[38;2;${rgb(hex("toolPendingBg"))}m ↓ Jump to latest message · End \x1b[39m\x1b[49m`,
 		"pil: bg aksen + teks kanvas, ANSI lama dibuang",
 	);
+	let ditolak = false;
+	try {
+		thPil.bg("accent", "x");
+	} catch {
+		ditolak = true;
+	}
+	assert(ditolak, "pi memang menolak bg('accent') -> arah SGR harus ditukar");
 	assert(accentPill("teks lain", thPil) === "teks lain", "pil: teks non-pil tak disentuh");
 	assert(accentPill(pilAsli, null) === pilAsli, "pil: tanpa tema -> apa adanya");
+	const thKosong = new Theme(
+		{ muted: "#808080", text: "#d4d4d4", thinkingXhigh: "#20caee" },
+		{ selectedBg: "#3a3a4a" },
+		"truecolor",
+	);
+	assert(accentPill(pilAsli, thKosong) === pilAsli, "pil: token absen -> apa adanya");
 	const hostPil: { scrollToEndIndicator?: () => string } = { scrollToEndIndicator: () => pilAsli };
 	const dalamPil = withAccentPill(hostPil, () => hostPil.scrollToEndIndicator?.(), thPil);
-	assert(dalamPil === `<B:accent><F:${PILL_INK}> ↓ Jump to latest message · End `, "pil: callback instance disisipi");
+	assert(dalamPil.includes("\x1b[48;2;0;215;255m"), "pil: callback instance disisipi bg aksen");
 	assert(hostPil.scrollToEndIndicator?.() === pilAsli, "pil: callback asli dipulihkan setelah render");
 
 	// compaction: tiga baris bawaan pi -> satu baris
