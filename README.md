@@ -1,70 +1,107 @@
+<div align="center">
+
 # pi-arnative
 
-Paket Pi: tema aksen cyan plus footer jam dan model yang dipakai.
+An arnative look for [pi](https://github.com/earendil-works/pi-coding-agent) — 11 warm-neutral themes, rounded tool boxes, a branded header with clickable tabs, a 2-line footer, a transcript clock, and a `/usage` dashboard.
 
-## Prasyarat
+[pi package](https://github.com/bismawy/pi-arnative) · [Issues](https://github.com/bismawy/pi-arnative/issues)
 
-**Install [JetBrains Mono Nerd Font](https://www.nerdfonts.com/font-downloads) dulu sebelum memakai paket ini.**
+![license](https://img.shields.io/badge/license-MIT-green)
 
-Seluruh ikon di paket ini (ikon tab header `󰋖 󰺨 󰰡 󰹲`, ikon tool `󰔟 󱞩 ✓`, ikon footer `󰃭 󰍛 󰣇`, logo kotak, sudut kotak bulat `╭─╮`) adalah glyph Nerd Font — tanpa font ini ikon tampil sebagai kotak kosong (□) atau karakter acak.
+</div>
 
-Pasang:
-1. Unduh **JetBrainsMono Nerd Font** dari [nerdfonts.com/font-downloads](https://www.nerdfonts.com/font-downloads).
-2. Ekstrak lalu install font-nya (Linux: salin ke `~/.local/share/fonts/` lalu `fc-cache -f`; Windows: klik kanan → Install).
-3. Set terminal Anda memakai **JetBrainsMono NF** (atau varian Nerd Font lain) sebagai font utama.
+## What it does
 
-## Isi
+pi-arnative replaces pi's chrome with one visual language — box drawing, dim borders, cyan accent, tint for values — without touching session data.
 
-- `themes/arnative.json` — salinan tema dark; ubahan: `vars.accent` jadi `#00d7ff` plus slot `tint` (`vars.softCyan` `#7db9cd`) untuk teks nilai yang lembut.
-- `themes/gen-themes.mjs` — generator semua varian: sumber struktur = `themes/arnative.json`, sumber palet = tabel `PALET` di berkas itu. `npm run themes` menulis ulang berkas varian; `npm test` menjalankan mode `--check` sehingga JSON tak bisa melenceng dari generator.
-- `themes/arnative-*.json` — varian warna (semuanya dari base yang sama; tiap tema mengisi penuh vars/colors/export, jadi tak ada warna yang diam-diam mewarisi base):
-  - `sun` amber hangat · `zinc` netral abu · `violet` ungu · `emerald` hijau
-  - `matrix` hijau fosfor monokrom di kanvas hampir hitam
-  - `cyberpunk` neon magenta/cyan di indigo pekat
-  - `synthwave` retro 80-an (pink neon + cyan, kanvas ungu tua)
-  - `gruvbox` retro hangat (emas + aqua + merah bata)
-  - `nord` dingin (frost blue + aurora)
-  - `dracula` ungu gelap (pink + mint)
-- Self-check `extensions/ui-render-tweaks.ts` memvalidasi **semua** `themes/*.json`: `name` = nama berkas, warna wajib lengkap, tiap nilai `colors` wajib hex/var yang benar-benar ada, dan kontras vs kanvas tema itu sendiri (konten ≥ 3.0, teks sekunder ≥ 2.0, ramp `thinking*` 1.3–4.0, pil aksen ≥ 4.5). Khusus: teks isi kotak tool ≥ 4.5 di latar sukses **dan** error, pesan error ≥ 4.5 di kotak error, latar kotak error sepadan bobotnya dengan kotak sukses, `scrollbarThumb` ≠ `scrollbarTrack`, dan `searchMatchBg` ≠ `selectedBg`.
+- **11 themes, one generator:** `arnative` plus 10 variants (`sun`, `zinc`, `violet`, `emerald`, `matrix`, `cyberpunk`, `synthwave`, `gruvbox`, `nord`, `dracula`), all generated from a single base file so their structure can never drift.
+- **Header box with tabs:** replaces pi's stacked resource list with a 5-line box — logo, version + shortcuts, and a clickable `Model / Context / Skills / Extensions / Themes` tab menu.
+- **Tool boxes:** every tool call renders in its own rounded box — spinner while running, then `✓`/`x`, right-aligned duration, and a one-line summary. Click or `ctrl+e` for the full output.
+- **2-line footer:** `cwd | duration | branch/tag/status` on the first line, extension status + tok/s + cache + tokens on the second, plus a full-box editor with a `> ` prompt.
+- **Transcript clock:** user and assistant messages get a right-aligned time, and the user bubble background is repaired where Markdown resets would otherwise leave black blocks.
+- **Render fixes:** hidden reload box, readable drag selection, single-line compaction messages, and a higher-contrast `↓ Jump to latest message` pill.
+- **Contrast-checked themes:** the self-check measures every `themes/*.json` against its own canvas, so no variant ships an unreadable box.
 
-## Perbaikan kontras base (2026-09-26)
+## Install
 
-Base `arnative` (dan ikut ke semua varian) diperbaiki berdasarkan pengukuran, bukan selera:
+**Install [JetBrains Mono Nerd Font](https://www.nerdfonts.com/font-downloads) first.** Every icon in this package (tab icons `󰋖 󰺨 󰰡 󰹲`, tool icons `󰔟 󱞩 ✓`, footer icons `󰃭 󰍛 󰣇`, and the rounded box corners `╭─╮`) is a Nerd Font glyph — without the font they render as empty boxes (□) or random characters.
 
-| Sebelum | Sesudah | Efek |
-| :--- | :--- | :--- |
-| `gray` `#808080` | `#8d8d8d` | teks isi kotak tool 3.48–3.81 → **4.53** (AA); ikut memperbaiki `muted`, `mdQuote`, `mdHr`, `thinkingText`, `toolDiffContext` |
-| `red` `#cc6666` | `#d07272` | pesan error di kotak error 3.71 → **4.53**; di kanvas 4.05 → 4.53 |
-| `toolErrorBg` `#3c2828` | `#342222` | bobot kotak error sepadan kotak sukses (L .026 → .020 vs .020) |
-| `scrollbarTrack`/`Thumb` = `#7db9cd` | `#505050` / `#8d8d8d` | thumb terlihat di atas track (sebelumnya identik) |
-| `searchMatchBg` = `selectedBg` | `#386168` (var `searchBg`) | highlight pencarian beda dari seleksi; teks 4.60 |
-- `extensions/footer.ts` — footer `jam | model-id`, tanpa timer. Jam dibaca saat render dan disegarkan tiap perubahan branch.
+1. Download **JetBrainsMono Nerd Font** from [nerdfonts.com/font-downloads](https://www.nerdfonts.com/font-downloads).
+2. Extract and install it (Linux: copy into `~/.local/share/fonts/` then `fc-cache -f`; Windows: right click → Install).
+3. Set your terminal to **JetBrainsMono NF** (or another Nerd Font) as the primary font.
 
-## Coba langsung
+```bash
+pi install github:bismawy/pi-arnative
+```
+
+Pick a theme in `/settings` > Theme > `arnative` (or any `arnative-*` variant). Everything else — header, footer, tool boxes, clock — turns itself on at session start.
+
+To try it without installing, from this directory:
 
 ```bash
 pi --extension ./extensions/footer.ts
 ```
 
-## Install sebagai paket
+## Commands
 
-Dari direktori induk paket ini:
+| Command | Action |
+| :--- | :--- |
+| `/usage` | Token, message & cache usage across all local Pi sessions |
+
+| Shortcut | Action |
+| :--- | :--- |
+| `ctrl+alt+t` | Cycle the header tab (Model → Context → Skills → Extensions → Themes) |
+| click a header tab | Open that tab |
+| click a tool box / `ctrl+e` | Toggle full title and output |
+
+## How it works
+
+<details>
+<summary><b>Extensions</b></summary>
+
+| File | Role |
+| :--- | :--- |
+| `extensions/tools.ts` | Tool call boxes, summaries, spinner, duration, per-tool backgrounds |
+| `extensions/section-headers.ts` | Header box, logo, tab menu, and the interception of pi's resource list |
+| `extensions/footer.ts` | 2-line footer and the full-box editor |
+| `extensions/timestamps.ts` | Transcript clock and user bubble background repair |
+| `extensions/ui-render-tweaks.ts` | Reload box, drag selection, compaction, Jev review box, contrast self-check |
+| `extensions/usage.ts` | `/usage` table dashboard |
+
+`lib/box.ts` and `lib/ansi.ts` hold the single definitions shared by all of them. They live outside `extensions/` so pi never loads them as extensions.
+
+</details>
+
+<details>
+<summary><b>Themes</b></summary>
+
+- `themes/arnative.json` is both the default theme and the structure source of truth — it is never rewritten by the generator.
+- `themes/gen-themes.mjs` holds the palette table and writes the variants by text substitution on the base, so the original formatting is preserved.
+- `npm run themes` rewrites every variant; `npm test` runs the same generator in `--check` mode, so a hand-edited variant file cannot drift.
+- Every variant fills all `vars`/`colors`/`export` keys, so no color can silently inherit the base.
+
+Palette: `sun` warm amber · `zinc` neutral grey · `violet` purple · `emerald` green · `matrix` monochrome phosphor green on near-black · `cyberpunk` neon magenta/cyan on deep indigo · `synthwave` 80s retro · `gruvbox` warm retro · `nord` cool frost blue · `dracula` dark purple.
+
+Contrast rules enforced by the self-check (measured against each theme's own `userMessageBg` canvas): content ≥ 3.0, secondary text ≥ 2.0, `thinking*` ramp 1.3–4.0, accent pill ≥ 4.5, tool box text ≥ 4.5 on both success and error backgrounds, error box weight matched to the success box, and `scrollbarThumb` / `searchMatchBg` distinguishable from their track / selection.
+
+</details>
+
+<details>
+<summary><b>Development</b></summary>
 
 ```bash
-pi install ./pi-arnative
+npm test        # every self-check + theme generator --check
+npm run themes  # rewrite all theme variants
 ```
 
-Lalu pilih tema lewat `/settings` > Theme > `arnative` (atau salah satu varian `arnative-*`).
-Footer aktif otomatis tiap sesi dimulai.
+Each extension is also a standalone self-check: `node extensions/tools.ts`.
 
-## Struktur
+</details>
 
-```text
-pi-arnative/
-├── package.json          # manifest pi: extensions/*.ts, themes/*.json; script themes/test
-├── extensions/*.ts
-├── themes/arnative.json  # tema default
-├── themes/arnative-*.json # 10 varian (lihat daftar di atas)
-├── themes/gen-themes.mjs # generator varian
-└── README.md
-```
+## License
+
+Distributed under the **MIT** license.
+
+## Developer
+
+Developed and maintained by [Bisma](https://github.com/bismawy).

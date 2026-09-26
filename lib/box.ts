@@ -1,9 +1,7 @@
 /**
- * Satu definisi border box ala kolom chat arnative (dim, ujung bulat ╭─╮ │ ╰─╯).
- * Dipakai tools.ts (kotak tool call), ui-render-tweaks.ts (Jev review box),
- * usage.ts (modal /usage) - ubah di sini, semua ikut.
- * File ini BUKAN extension: diletakkan di luar `extensions/*.ts` supaya pi
- * tidak memuatnya sebagai extension.
+ * Single arnative box border (dim, round ends). Used by tools.ts, ui-render-tweaks.ts
+ * and usage.ts — edit here, all follow. Lives outside `extensions/*.ts` so pi
+ * never loads it as an extension.
  */
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
@@ -13,7 +11,7 @@ export type Dim = (s: string) => string;
 export const boxEdge = (l: string, r: string, width: number, dim: Dim): string =>
 	dim(`${l}${"─".repeat(Math.max(0, width - 2))}${r}`);
 
-/** Baris isi: │ <teks> │, lebarnya pas `width`. */
+/** Content row: │ <text> │, exactly `width` wide. */
 export const boxRow = (content: string, width: number, dim: Dim): string => {
 	const pad = Math.max(0, width - visibleWidth(content) - 4);
 	return `${dim("│")} ${content}${" ".repeat(pad)} ${dim("│")}`;
@@ -24,11 +22,7 @@ const applyBg = (line: string, width: number, bgFn: (text: string) => string): s
 	return bgFn(line + " ".repeat(pad));
 };
 
-/**
- * Bungkus `rows` ( teks polos / sudah ber-warna ANSI ) jadi kotak.
- * Baris panjang di-wrap; `bgType` = nama warna bg tema (optional, diam kalau
- * tema tak punya `bg`); `borderColor` = warna garis bingkai.
- */
+/** Wrap `rows` (plain or ANSI-colored) into a box. `bgType` = theme bg name (no-op when the theme has no `bg`); `borderColor` = border color. */
 export function renderBoxLines(theme: BoxTheme, width: number, rows: string[], bgType?: string, borderColor = "dim"): string[] {
 	const dim = (s: string) => theme.fg(borderColor, s);
 	const inner = Math.max(8, width - 4);

@@ -1,11 +1,11 @@
 /**
- * Arnative footer (dipaksa 2 baris) + editor kustom.
- * Baris 1: cwd | durasi | branch/tag/status ...... model + thinking level.
- * Baris 2: status ekstensi lain (mcp dulu) ...... tok/s · cache · token.
+ * Arnative footer (forced to 2 lines) + custom editor.
+ * Line 1: cwd | duration | branch/tag/status ...... model + thinking level.
+ * Line 2: other extension status (mcp first) ...... tok/s · cache · token.
  *
- * Jam transkrip & bg bubble: extensions/timestamps.ts
- * Header seksi /new: extensions/section-headers.ts
- * Seleksi + box reload: extensions/ui-render-tweaks.ts
+ * Transcript clock & bubble bg: extensions/timestamps.ts
+ * /new header: extensions/section-headers.ts
+ * Selection + box reload: extensions/ui-render-tweaks.ts
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -13,7 +13,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { formatTokens } from "../lib/usage-store.ts";
 
-// Intercept built-in FooterComponent agar murni 2 baris
+// Intercept the built-in FooterComponent to force a pure 2-line footer
 const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
 if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[PATCHED_KEY]) {
 	(globalThis as Record<symbol, boolean>)[PATCHED_KEY] = true;
@@ -123,15 +123,15 @@ export function formatDuration(ms: number): string {
 	return `${s}s`;
 }
 
-// Editor sebagai kotak penuh + prompt `> `. pi bawaan hanya menggambar garis
-// atas+bawah (pi-tui editor.js: "no side borders, just horizontal lines above
-// and below") tanpa karakter prompt, jadi sisi `│`, korner bulat `╭╮╰╯`, dan
-// prompt ditambahkan di sini.
-// `lines` sudah dirender pi pada lebar SEMPIT (width - 5): 2 kolom untuk sisi,
-// 3 kolom untuk prompt " > "; border lalu ditambal dash agar selebar isi.
-// `visible` = jumlah baris isi editor (field privat `renderedVisibleLineCount`);
-// baris autocomplete berada SETELAH border bawah dan sengaja dibiarkan di luar kotak.
-// Catatan: JetBrainsMono Nerd Font punya glyph korner bulat (dicek via fontconfig).
+// Full box editor + `> ` prompt. pi only draws lines above and below
+// (pi-tui editor.js: "no side borders, just horizontal lines above and below")
+// and no prompt char, so the `│` sides, the round ╭╮╰╯ corners and the prompt
+// are added here.
+// `lines` are already rendered by pi at the NARROWER width - 5: 2 columns for the
+// sides, 3 for the " > " prompt; the border is then patched with dashes to match.
+// `visible` = editor content line count (private `renderedVisibleLineCount`);
+// autocomplete lines come AFTER the bottom border and are deliberately outside the box.
+// JetBrainsMono Nerd Font has the round corner glyphs (verified via fontconfig).
 export function boxEditorLines(
 	lines: readonly string[],
 	visible: number,
@@ -161,8 +161,8 @@ let usageScanAt = 0;
 let usageScanLen = -1;
 let usageScanNums = { inp: 0, out: 0, read: 0 };
 
-// Cache 2 dtk + panjang branch: footer di-render tiap poke/stream tick,
-// tanpa ini tiap frame = scan seluruh branch (O(N) per frame).
+// 2s cache + branch length: the footer renders on every poke/stream tick, so
+// without this every frame rescans the whole branch (O(N) per frame).
 function getUsage(
 	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	acc: (t: string) => string,
@@ -214,14 +214,14 @@ function poke(): void {
 }
 
 /**
- * Pemetaan nama tool ke teks progres aktif (gerund).
- * Fallback jika tidak terdaftar: "Working".
+ * Tool name → active progress text (gerund).
+ * Fallback when unregistered: "Working".
  */
 export function getToolWorkingMessage(toolName: string, args?: any): string {
 	const n = (toolName ?? "").trim();
 	if (!n) return "Working";
 
-	// Tool standar / file ops
+	// Standard / file tools
 	if (n === "edit") return "Editing";
 	if (n === "write") return "Writing";
 	if (n === "read") return "Reading";
@@ -236,7 +236,7 @@ export function getToolWorkingMessage(toolName: string, args?: any): string {
 	if (n.startsWith("chrome_devtools_")) return "Browsing";
 	if (n === "ask_user_question" || n === "plan_mode_question") return "Waiting for input";
 
-	// Tool MCP (mcp / mcpScript / mcp__*)
+	// MCP tools (mcp / mcpScript / mcp__*)
 	if (n === "mcpScript") return "Running script";
 	if (n === "mcp") {
 		const sub = typeof args === "object" && args ? (args.tool || args.search || args.describe || args.action) : "";
@@ -263,7 +263,7 @@ export function getToolWorkingMessage(toolName: string, args?: any): string {
 export default function (pi: ExtensionAPI) {
 	let runtimeGen = 0;
 
-	// Timer kecepatan asisten (timestamp pesan user dicatat di extensions/timestamps.ts)
+	// Assistant speed timer (user message timestamps come from extensions/timestamps.ts)
 	pi.on("message_start", async (event) => {
 		if (event.message.role === "assistant") {
 			assistantStartMs = Date.now();
@@ -458,14 +458,15 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				render(width: number): string[] {
-					// Kotak memakan 5 kolom: 2 sisi + 3 prompt " > ". Isi dirender 5 kolom lebih sempit.
+					// The box eats 5 columns: 2 sides + the 3-column " > " prompt, so the
+					// content is rendered 5 columns narrower.
 					const visible = (this as unknown as { renderedVisibleLineCount?: number }).renderedVisibleLineCount;
 					if (typeof visible !== "number" || width < 11) return super.render(width);
 					let prompt = " > ";
 					try {
 						prompt = this.getActiveTheme()?.fg("dim", prompt) ?? prompt;
 					} catch {
-						// tema tak siap -> prompt tanpa warna
+						// theme not ready -> uncolored prompt
 					}
 					return boxEditorLines(super.render(width - 5), visible, (t) => this.borderColor(t), prompt);
 				}
@@ -510,7 +511,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("message_update", async (event) => {
 		if (event.message.role === "assistant") {
-			// Timer mulai lazy bila message_start tidak terpicu (pasangan event rapuh)
+			// Timer starts lazily if message_start never fired (fragile event pairing)
 			if (assistantStartMs === null) assistantStartMs = Date.now();
 			const streamEvent = (event as { assistantMessageEvent?: { type?: string; delta?: string } }).assistantMessageEvent;
 			if (streamEvent?.delta) {

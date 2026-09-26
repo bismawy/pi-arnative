@@ -1,11 +1,10 @@
 /**
- * Data layer pemakaian token (satu-satunya sumber untuk /usage + header Model):
- * - Memindai riwayat sesi lokal Pi (~/.pi/agent/sessions/*.jsonl).
- * - Cache cepat berbasis mtime & size di ~/.pi/agent/arnative-usage-cache.json.
- * - Cache disk dibaca SATU KALI ke memori (dulu: readFileSync+JSON.parse 4MB
- *   di setiap frame render header -> ±50ms/frame, biang lag chat panjang).
- * - Tanpa dobel hitung: entri sesi aktif SUDAH ada di file sesinya sendiri,
- *   jadi TIDAK ditambah ulang dari sessionManager (bug angka ↑↓ membengkak).
+ * Token usage data layer — the single source for /usage and the Model tab.
+ * - Scans local Pi session history (~/.pi/agent/sessions/*.jsonl).
+ * - mtime+size keyed cache in ~/.pi/agent/arnative-usage-cache.json, read into
+ *   memory once (parsing 4MB per header frame cost ~50ms and lagged long chats).
+ * - No double counting: the active session is already in its own file, so it is
+ *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -63,7 +62,7 @@ export interface UsageSummary {
 	};
 }
 
-/** Format angka token (satuan k/M/B); 0/negatif = "-". */
+/** Token count with k/M/B units; 0 or negative = "-". */
 export function formatTokens(n: number): string {
 	if (!n || n <= 0) return "-";
 	if (n < 1000) return String(n);
@@ -80,9 +79,9 @@ export function formatTokens(n: number): string {
 }
 
 const CACHE_FILE_PATH = join(getAgentDir(), "arnative-usage-cache.json");
-const CACHE_VERSION = 2; // v2: menambahkan cost per entri
+const CACHE_VERSION = 2; // v2: per-entry cost
 
-// Cache disk dimuat sekali ke memori; save menulis memori + disk sekaligus.
+// Disk cache is memoized; save writes memory + disk together.
 let diskMemo: Map<string, FileCacheItem> | null = null;
 
 function loadDiskCache(): Map<string, FileCacheItem> {
@@ -158,11 +157,11 @@ function parseSessionFile(filePath: string): UsageEntry[] {
 					});
 				}
 			} catch {
-				// ignore line parse error
+				// unparsable line
 			}
 		}
 	} catch {
-		// ignore file read error
+		// unreadable file
 	}
 	return entries;
 }
@@ -261,7 +260,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		saveDiskCache(diskCache);
 	}
 
-	// Agregasi hasil dan hitung total
+	// Fold per-provider results into totals
 	let totalMsgs = 0;
 	let totalInp = 0;
 	let totalOut = 0;
@@ -325,7 +324,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	return cachedSummary;
 }
 
-// Kecocokan nama model lintas bentuk id ("gemini-3.8-flash", "vendor/gemini-…").
+// Match model names across id shapes ("gemini-3.8-flash", "vendor/gemini-…").
 const modelMatches = (mNameLower: string, targetLower: string): boolean =>
 	!targetLower ||
 	mNameLower === targetLower ||
@@ -333,10 +332,7 @@ const modelMatches = (mNameLower: string, targetLower: string): boolean =>
 	mNameLower.split(":")[0] === targetLower ||
 	targetLower.endsWith("/" + mNameLower);
 
-/**
- * Total penggunaan satu model (all-time, seperti /usage).
- * Sesi aktif sudah termasuk di file sesinya — tanpa koreksi manual.
- */
+/** All-time usage for one model (same numbers as /usage; the active session is already in its own file). */
 export function getModelAllTimeUsage(modelId?: string): { input: number; output: number; cacheRead: number } {
 	const summary = collectUsageSummary();
 	let inp = 0;

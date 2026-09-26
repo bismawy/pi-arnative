@@ -1,14 +1,13 @@
 /**
- * Arnative Header Box & Tab System (horizontal):
- * - Box rounded corner, tinggi tetap 5 baris: logo "pi" 3x6 kolom di kiri,
- *   pembatas vertikal, lalu 3 baris info rata kiri (versi/shortcut, tab, data).
- * - Baris info versi pi & shortcuts: [Esc], [Ctrl+c/d], [/], [!], [Ctrl+o].
- * - Menu Tab interaktif (klik mouse):
- *    Model: <nama model> │ 󰋖 Context [N] │ 󰰡 Skills [N] │ 󰺨 Extensions [N] │ 󰹲 Themes [N].
- *   Icon pada tab = warna aksen, teks tab = warna tint.
- * - Divider box '├────┤'.
- * - Isi data tab aktif (rata tengah, dibungkus rapi, warna tint, tidak bertumpuk).
- * - Sembunyikan daftar tumpukan bawaan pi di loadedResourcesContainer.
+ * Arnative header box & horizontal tab system:
+ * - Round-corner box, fixed height 5 lines: "pi" 3x6 logo on the left, a vertical
+ *   divider, then 3 left-aligned info lines (version/shortcuts, tabs, data).
+ * - Info line 1: pi version & shortcuts [Esc], [Ctrl+c/d], [/], [!], [Ctrl+o].
+ * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Themes
+ *   with item counts. Tab icon = accent, tab text = tint.
+ * - Box divider '├────┤'.
+ * - Active tab content (left-aligned, neatly wrapped, tint, never stacked).
+ * - Hides pi's built-in stacked list in loadedResourcesContainer.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +51,7 @@ let activeThemeProxy: Themeish = null;
 const MODEL_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentModel");
 const THINKING_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentThinking");
 
-// Ambil warna pertama yang benar-benar dipakai tema
+// First theme color that the theme really defines
 export function fgFirst(th: Themeish, names: string[], text: string): string {
 	if (!th?.fg) return text;
 	for (const name of names) {
@@ -60,7 +59,7 @@ export function fgFirst(th: Themeish, names: string[], text: string): string {
 			const out = th.fg(name, text);
 			if (typeof out === "string" && out.includes(text)) return out;
 		} catch {
-			// coba nama warna berikutnya
+			// try the next color name
 		}
 	}
 	return text;
@@ -171,7 +170,7 @@ export function centerLine(text: string, width: number, side = "│"): string {
 	return side + " ".repeat(left) + text + " ".repeat(right) + side;
 }
 
-// Logo pi.dev ASCII art: P menggunakan aksen tema, i menggunakan tint tema
+// pi.dev ASCII logo: P in the theme accent, i in the theme tint
 export function buildLogoLines(th: Themeish): string[] {
 	const p = (s: string) => fgFirst(th, ["accent"], s);
 	const i = (s: string) => fgFirst(th, ["tint", "text"], s);
@@ -188,14 +187,14 @@ export function buildLogoLines(th: Themeish): string[] {
 
 export const ASCII_LOGO_LINES = buildLogoLines(null);
 
-// Lebar kolom logo, diturunkan dari art-nya supaya tidak magic number.
+// Logo column width, derived from the art so it is not a magic number.
 const LOGO_W = Math.max(...ASCII_LOGO_LINES.map((l) => visibleWidth(l)));
-// Kolom awal area info: "│ " (2) + logo (LOGO_W) + " │ " (3).
+// Info area starts at column: "│ " (2) + logo (LOGO_W) + " │ " (3).
 const INFO_X = LOGO_W + 5;
-// Sisa kolom untuk info: width - "│ " - logo - " │ " - info - " │".
+// Columns left for info: width - "│ " - logo - " │ " - info - " │".
 const infoWidth = (width: number) => Math.max(8, width - LOGO_W - 7);
 
-// Singleton store untuk resource loaded
+// Singleton store for loaded resources
 const STORE_KEY = Symbol.for("pi-arnative.resourceStore");
 export const tabStore: Map<TabKey, string[]> =
 	(globalThis as Record<symbol, Map<TabKey, string[]>>)[STORE_KEY] ??
@@ -214,7 +213,7 @@ function capitalize(s: string): string {
 	return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
 }
 
-// Format nama model persis seperti di footer: Gemini 3.8 Flash (Antigravity), Deepseek V4.1 Flash (Yarz), dsb.
+// Model name formatted exactly like in the footer: Gemini 3.8 Flash (Antigravity), Deepseek V4.1 Flash (Yarz), etc.
 export function formatModelDisplayName(model?: { id?: string; name?: string; provider?: string }): string {
 	if (!model) return "No Model";
 	let name = model.name || model.id || "Model";
@@ -261,14 +260,14 @@ export class ArnativeHeader implements Component {
 	getTabsData(width: number): Array<{ key: TabKey; name: string; icon: string; count: number; label: string }> {
 		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
 		const fullModelName = formatModelDisplayName(modelObj);
-		// Pangkas detail bertanda kurung/siku di ekor nama ("... Free (1M) [OpenCode] (Freeflow)"
-		// -> "Space Bunny Free"); detailnya tetap tampil di baris data tab Model.
+		// Drop bracketed details from the tail of the name ("... Free (1M) [OpenCode] (Freeflow)"
+		// -> "Space Bunny Free"); the details still show in the Model tab data line.
 		let modelLabel = `Model: ${fullModelName.replace(/(\s*\([^()]*\)|\s*\[[^[\]]*\])+$/, "").trim()}`;
-		// Responsif di layar sedang: pangkas provider jika kolom < 112
+		// Responsive on medium screens: drop the provider when columns < 112
 		if (width < 112 && modelLabel.includes(" (")) {
 			modelLabel = `Model: ${fullModelName.slice(0, fullModelName.indexOf(" (")).trim()}`;
 		}
-		// Di layar sempit < 88 kolom: ringkas nama model
+		// Below 88 columns: shorten the model name
 		if (width < 88 && modelLabel.length > 18) {
 			modelLabel = `Model: ${modelLabel.slice(7, 18).trim()}…`;
 		}
@@ -306,7 +305,7 @@ export class ArnativeHeader implements Component {
 		];
 	}
 
-	// Shortcut didaftarkan lewat pi.registerShortcut (header bukan target input keyboard).
+	// Shortcuts are registered through pi.registerShortcut (the header is not a keyboard input target).
 
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
 		if (event?.type !== "click" || event?.button !== "left") return undefined;
@@ -345,8 +344,8 @@ export class ArnativeHeader implements Component {
 		const side = fgFirst(th, ["dim"], "│");
 		const dash = "─".repeat(Math.max(0, width - 2));
 
-		// Kolom kiri memuat logo + pembatas vertikal, jadi area info hanya dapat
-		// width - LOGO_W - 7 kolom.
+		// The left column holds the logo + vertical divider, so the info area only
+		// gets width - LOGO_W - 7 columns.
 		const infoW = infoWidth(width);
 		const infoLine = (text: string): string => {
 			const t = truncateToWidth(text, infoW);
@@ -355,10 +354,10 @@ export class ArnativeHeader implements Component {
 
 		const out: string[] = [fgFirst(th, ["dim"], `╭${dash}╮`)];
 		const infoLines: string[] = [];
-		// Kotak dalam: baris menu tab dibingkai, isi(infoW - 2) kolom.
+		// Inner box: the tab menu line is framed, content is (infoW - 2) columns.
 		const innerW = Math.max(1, infoW - 2);
 
-		// 1. Baris versi pi + merek. Selalu utuh.
+		// 1. pi version + brand line. Always intact.
 		const versionStr = VERSION || "0.87.1";
 		const piPart = `${fgFirst(th, ["accent", "tint"], "\x1b[1mpi\x1b[22m")} ${fgFirst(th, ["dim"], `v${versionStr}`)}`;
 		infoLines.push(`${piPart}${fgFirst(th, ["dim"], " · ")}${fgFirst(th, ["dim"], "Arnative")}`);
@@ -370,8 +369,8 @@ export class ArnativeHeader implements Component {
 			`${fgFirst(th, ["tint"], "[Ctrl+o]")} ${fgFirst(th, ["dim"], "More/expand")}`,
 			`${fgFirst(th, ["tint"], "[Ctrl+alt+t]")} ${fgFirst(th, ["dim"], "Next tab")}`,
 		];
-		// Shortcut dipangkas dari kanan (prefix terpanjang yang masih muat) supaya
-		// layar sempit tidak memotong tab atau data.
+		// Shortcut list is trimmed from the right (longest prefix that still fits) so
+		// narrow screens never clip the tabs or the data.
 		let scText = "";
 		for (let i = 1; i <= shortcutItems.length; i++) {
 			const cand = shortcutItems.slice(0, i).join("  ");
@@ -379,7 +378,7 @@ export class ArnativeHeader implements Component {
 		}
 		infoLines.push(scText);
 
-		// 2. Menu Tab: Icon = warna aksen, Teks = warna tint (bold jika aktif)
+		// 2. Tab menu: icon = accent, text = tint (bold when active)
 		const tabs = this.getTabsData(width);
 		const sepTabPlain = " │ ";
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
@@ -398,7 +397,7 @@ export class ArnativeHeader implements Component {
 			tabParts.push({ key: t.key, plain, formatted });
 		}
 
-		// Tab yang tak muat di layar sempit dibuang dari kanan (tab aktif selalu ikut).
+		// Tabs that don't fit on narrow screens are dropped from the right (the active tab always stays).
 		const kept: typeof tabParts = [];
 		let usedWidth = 0;
 		for (const t of tabParts) {
@@ -415,7 +414,7 @@ export class ArnativeHeader implements Component {
 			this.renderedTabRegions.push({ key: t.key, startX: curX, endX: curX + w - 1 });
 			curX += w + visibleWidth(sepTabPlain);
 		}
-		// Kotak tab selebar isinya, bukan selebar kolom info.
+		// The tab box is as wide as its content, not as wide as the info column.
 		const tabText = ` ${kept.map((t) => t.formatted).join(sepTab)}`;
 		const tabInnerW = Math.min(innerW, visibleWidth(tabText) + 1);
 		const tabRow = (text: string): string => {
@@ -424,13 +423,13 @@ export class ArnativeHeader implements Component {
 		};
 		const tabRule = (l: string, r: string): string => fgFirst(th, ["dim"], `${l}${"─".repeat(tabInnerW)}${r}`);
 		infoLines.push(tabRule("╭", "╮"));
-		// Satu spasi dari batas kiri, lalu " │ " antar tab.
+		// One space from the left border, then " │ " between tabs.
 		infoLines.push(tabRow(tabText));
-		// Baris tab = border atas (index 0) + infoLines sebelumnya + baris ini.
+		// Tab line = top border (index 0) + the infoLines above + this line.
 		this.renderedTabLineY = infoLines.length;
 		infoLines.push(tabRule("╰", "╯"));
 
-		// 3. Data tab aktif (rata kiri, dibungkus rapi, warna tint)
+		// 3. Active tab data (left-aligned, neatly wrapped, tint)
 		let activeItems: string[] = [];
 		if (this.activeTab === "Model") {
 			const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
@@ -438,12 +437,12 @@ export class ArnativeHeader implements Component {
 			const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
 			const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
 			const sep = fgFirst(th, ["dim"], " · ");
-			// Nama model diwarnai tint, ekornya "(Provider)" dim.
+			// Model name in tint, its "(Provider)" tail dim.
 			const provSuffix = fullName.match(/(\s*\([^()]*\))$/)?.[1] ?? "";
 			const nameMain = provSuffix ? fullName.slice(0, -provSuffix.length) : fullName;
 			let line = `${fgFirst(th, ["tint", "text"], nameMain)}${provSuffix ? fgFirst(th, ["dim"], provSuffix) : ""}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
 
-			// Total semua penggunaan model itu (all-time seperti di /usage): ↑... ↓...  ...
+			// All-time usage of that model (same as /usage): ↑... ↓...  ...
 			const usage = getModelAllTimeUsage(modelObj?.id);
 			const tokenParts: string[] = [];
 			if (usage.input > 0) {
@@ -467,17 +466,17 @@ export class ArnativeHeader implements Component {
 		if (activeItems.length === 0) {
 			infoLines.push(fgFirst(th, ["tint"], "(kosong)"));
 		} else if (this.activeTab === "Model") {
-			// Tab Model sudah memuat styling tint + separator dim
+			// The Model tab already carries tint styling + a dim separator
 			infoLines.push(...activeItems);
 		} else {
 			for (const line of wrapCommaItems(activeItems, infoW)) {
-				// Poin 5: warna pada data menu yg di select gunakan tint saja
+				// Point 5: selected menu data uses tint only
 				infoLines.push(fgFirst(th, ["tint", "text"], line));
 			}
 		}
 
-		// Susun baris: logo di kolom kiri, pembatas vertikal, info rata kiri.
-		// Logo lebih tinggi dari info -> sisanya dibiarkan kosong.
+		// Compose lines: logo in the left column, vertical divider, left-aligned info.
+		// The logo is taller than the info -> the rest is left blank.
 		const logoLines = buildLogoLines(th);
 		const blankLogo = " ".repeat(LOGO_W);
 		for (let i = 0; i < Math.max(logoLines.length, infoLines.length); i++) {
@@ -485,14 +484,14 @@ export class ArnativeHeader implements Component {
 			out.push(`${side} ${logo} ${side} ${infoLine(infoLines[i] ?? "")} ${side}`);
 		}
 
-		// Border bawah
+		// Bottom border
 		out.push(fgFirst(th, ["dim"], `╰${dash}╯`));
 
 		return out;
 	}
 }
 
-// Intercept loadedResourcesContainer: tangkap data untuk Tab dan sembunyikan tampilan lama
+// Intercept loadedResourcesContainer: capture data for the tabs and hide pi's own display
 const SECTION_HEADER_KEY = Symbol.for("pi-arnative.sectionHeadersRewritten");
 if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[SECTION_HEADER_KEY]) {
 	(globalThis as Record<symbol, boolean>)[SECTION_HEADER_KEY] = true;
@@ -512,7 +511,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 					(sectionName === null ? false : SECTION_ICONS[sectionName] !== undefined);
 
 				if (isSection && sectionName) {
-					// Tandai container ini sebagai loadedResourcesContainer
+					// Mark this container as the loadedResourcesContainer
 					(this as Record<string, unknown>)._isLoadedResourcesContainer = true;
 
 					const origCollapsed = child.getCollapsedText.bind(child) as () => string;
@@ -520,22 +519,22 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 					const items = extractItemsFromBody(rawBody, sectionName === "Extensions");
 					tabStore.set(sectionName, items);
 
-					// Sembunyikan child ini dari tampilan bawaan agar tidak menumpuk di bawah header
+					// Hide this child from the built-in display so it does not stack under the header
 					child.render = () => [];
 
-					// Trigger re-render header bila sudah terpasang
+					// Re-render the header when it is already installed
 					if (activeHeaderInstance?.tui) {
 						activeHeaderInstance.tui.requestRender();
 					}
 				} else if ((this as Record<string, unknown>)._isLoadedResourcesContainer) {
-					// "[Extension issues]" dari pi core -> bungkus kotak ala arnative.
+					// pi core's "[Extension issues]" -> wrap in an arnative box.
 					const text = String(child?.text ?? child?.content ?? (typeof child?.getText === "function" ? child.getText() : ""));
 					if (text.includes("[Extension issues]") && typeof child.render === "function") {
 						const origRender = child.render.bind(child);
 						child.render = (w: number) => renderBoxLines(activeThemeProxy, w, origRender(w), undefined, "warning");
 						return origAddChild.call(this, child);
 					}
-					// Setiap elemen lain di dalam loadedResourcesContainer (misal Spacer) juga disembunyikan
+					// Any other element inside loadedResourcesContainer (e.g. Spacer) is hidden too
 					if (child && typeof child.render === "function") {
 						child.render = () => [];
 					}
@@ -549,7 +548,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 }
 
 export default function (pi: ExtensionAPI) {
-	// Ctrl+Shift+T: pindah ke tab berikutnya.
+	// ctrl+alt+t: next tab.
 	pi.registerShortcut(Key.ctrlAlt("t"), {
 		description: "Next header tab",
 		handler: async () => {
@@ -575,7 +574,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_end", async () => {
-		// Usage dibaca ulang saat render (collectUsageSummary cache 5 dtk), cukup poke render.
+		// Usage is re-read at render time (collectUsageSummary caches 5s), so poking a render is enough.
 		if (activeHeaderInstance?.tui) {
 			activeHeaderInstance.tui.requestRender();
 		}
@@ -607,7 +606,7 @@ if (isMain) {
 	assert(visibleWidth(cLine) === 20, "centerLine tepat 20 kolom");
 	assert(cLine.startsWith("│") && cLine.endsWith("│"), "centerLine diawali dan diakhiri │");
 
-	// Format model name
+	// Model name formatting
 	assert(
 		formatModelDisplayName({ name: "Gemini 3.8 Flash", provider: "antigravity" }) ===
 			"Gemini 3.8 Flash (Antigravity)",
@@ -629,7 +628,7 @@ if (isMain) {
 	assert(installedVersion("uji/arnative", join(gitTmp, "npm"), join(gitTmp, "git")) === "9.9.9", "versi dari klon git");
 	rmSync(gitTmp, { recursive: true, force: true });
 
-	// Komponen ArnativeHeader & mouse tab click
+	// ArnativeHeader component & mouse tab click
 	tabStore.set("Context", ["AGENTS.md"]);
 	tabStore.set("Skills", ["agents-sdk", "cloudflare"]);
 	tabStore.set("Extensions", ["@bismawy/pi-agentrouter@1.6.1", "footer.ts"]);
@@ -646,7 +645,7 @@ if (isMain) {
 		thinkingLevel: "low",
 	};
 
-	// Hanya "dim" yang diwarnai, supaya baris garis kotak bisa diuji warnanya.
+	// Only "dim" is colored, so the box line colors can be asserted.
 	const ansiTheme = { fg: (c: string, t: string) => (c === "dim" ? `\x1b[2m${t}\x1b[22m` : t) };
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
 	assert(hdr.activeTab === "Model", "default tab adalah Model");
@@ -665,7 +664,7 @@ if (isMain) {
 	assert(stripAnsi(lines100[1]!).includes("pi v") && stripAnsi(lines100[1]!).includes("Arnative"), "baris versi + merek");
 	assert(stripAnsi(lines100[4]!).includes("Model: Gemini 3.8 Flash"), "menu tab Model tampil");
 	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "data tab aktif Model tampil di baris info terakhir");
-	// Garis kotak dalam satu blok dim penuh (garis "─" ikut ter-warnai, bukan hanya sudut).
+	// The inner box lines are one fully dimmed block (the "─" runs are colored too, not just the corners).
 	for (const i of [3, 5]) {
 		assert((lines100[i]!.match(/\x1b\[/g) ?? []).length === 8, `garis kotak dalam baris ${i} = satu blok dim penuh (garis "─" ikut ter-warnai, bukan hanya sudut)`);
 	}
@@ -676,7 +675,7 @@ if (isMain) {
 	const tabRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
 	assert(tabRegions.length >= 4, "region tab terisi (tab paling kanan bisa terpotong di 100 kolom)");
 
-	// Klik tab Extensions (kalau terpotong di 100 kolom, pakai tab paling kanan)
+	// Click the Extensions tab (when truncated at 100 columns, use the rightmost tab)
 	const extRegion = tabRegions.find((r) => r.key === "Extensions") ?? tabRegions[tabRegions.length - 1]!;
 	const clickExt = hdr.handleMouse({
 		type: "click",
@@ -691,7 +690,7 @@ if (isMain) {
 	const linesExt = hdr.render(100);
 	assert(stripAnsi(linesExt[6]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "data tab aktif tampil di baris info terakhir");
 
-	// Klik tab Skills
+	// Click the Skills tab
 	const skillsRegion = tabRegions.find((r) => r.key === "Skills") ?? tabRegions[0]!;
 	hdr.handleMouse({
 		type: "click",
@@ -706,19 +705,19 @@ if (isMain) {
 	assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
 	assert(linesSkills[4]!.includes("Model: Gemini 3.8 Flash"), "menu tab tetap tampil saat tab lain aktif");
 
-	// Y baris tab harus menunjuk baris menu tab, bukan baris shortcut di atasnya
+	// The Y of a tab must point at the tab menu line, not the shortcut line above
 	const rowsPlain = lines100.map((l) => stripAnsi(l));
 	assert(rowsPlain[tabY]!.includes("Model:"), "renderedTabLineY menunjuk baris menu tab");
 	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model:" : r.key)), "region tab rata dengan teks di baris itu");
 
-	// Layar sempit: versi + tab + data harus utuh, shortcut yang dipangkas
+	// Narrow screen: version + tabs + data stay intact, shortcuts get trimmed
 	const narrow = hdr.render(60);
 	assert(narrow.every((l) => visibleWidth(l) === 60), "baris 60 kolom tetap 60");
 	assert(stripAnsi(narrow[1]!).includes("pi v"), "versi tetap utuh di 60 kolom");
 	assert(stripAnsi(narrow[1]!).includes("More/expand") === false, "shortcut panjang dibuang di 60 kolom");
 	assert(stripAnsi(narrow[4]!).includes("Model:"), "tab Model tetap tampil di 60 kolom");
 
-	// Intercept addChild: data masuk dan child di-suppress
+	// Intercept addChild: capture the data and suppress the child
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };
 	const container: any = { children: [] as any[], addChild: proto.addChild as (c: any) => unknown };
 	const fakeSection = {

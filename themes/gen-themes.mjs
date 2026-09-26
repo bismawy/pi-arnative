@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 /**
- * Generator varian tema arnative.
+ * Generates the arnative theme variants.
  *
- * Sumber kebenaran STRUKTUR = `themes/arnative.json` (berkas itu sendiri = tema
- * default, tidak pernah ditulis ulang di sini). Sumber kebenaran PALET = tabel
- * PALET di bawah. Berkas varian ditulis dengan substitusi teks pada base, jadi
- * format asli (tab + baris kosong pengelompokan) tetap sama persis.
+ * Structure source of truth = `themes/arnative.json` (also the default theme,
+ * never rewritten here). Palette source of truth = the PALET table below.
+ * Variants are text substitutions on the base, so its original formatting
+ * (tabs + grouping blank lines) is preserved.
  *
- *   node themes/gen-themes.mjs           tulis ulang semua varian
- *   node themes/gen-themes.mjs --check   gagal bila berkas di disk beda hasil generate
+ *   node themes/gen-themes.mjs           rewrite all variants
+ *   node themes/gen-themes.mjs --check   fail when a file differs from the generated output
  *
- * Validasi warna (kontras, kelengkapan kunci) ada di self-check
- * `extensions/ui-render-tweaks.ts` supaya tidak ada dua sumber aturan.
+ * Color validation (contrast, required keys) lives in the self-check in
+ * `extensions/ui-render-tweaks.ts` to keep one source of rules.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -19,8 +19,7 @@ const baseUrl = new URL("arnative.json", import.meta.url);
 const baseText = readFileSync(baseUrl, "utf8");
 const base = JSON.parse(baseText);
 
-// Setiap tema wajib mengisi SEMUA kunci ini (supaya tak ada warna yang diam-diam
-// mewarisi base dan lolos dari pemeriksaan visual).
+// Every theme must set ALL of these, so no color silently inherits the base.
 const KUNCI_VARS = [
 	"accent", "cyan", "blue", "green", "red", "yellow", "text", "gray", "dimGray", "darkGray",
 	"softCyan", "searchBg", "selectedBg", "userMsgBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "customMsgBg",
@@ -33,12 +32,9 @@ const KUNCI_COLORS = [
 ];
 const KUNCI_EXPORT = ["pageBg", "cardBg", "infoBg"];
 
-/**
- * Palet per tema. `vars.cyan`/`vars.blue` = borderAccent/border, `vars.softCyan` = tint,
- * `vars.green/red/yellow` = semantik success/error/warning + diff.
- */
+/** Per-theme palette. `vars.cyan`/`vars.blue` = borderAccent/border, `vars.softCyan` = tint, `vars.green/red/yellow` = success/error/warning + diff. */
 const PALET = {
-	// --- varian hue dasar (sejak awal) -------------------------------------
+	// --- base hue variants -------------------------------------------------
 	"arnative-sun": {
 		vars: {
 			accent: "#ffb454", cyan: "#ffd166", blue: "#da9b2f", green: "#b5bd68", red: "#d07272",
@@ -108,8 +104,8 @@ const PALET = {
 		export: { pageBg: "#18181e", cardBg: "#1e1e24", infoBg: "#3c3728" },
 	},
 
-	// --- tema bernuansa kuat ----------------------------------------------
-	// Hijau fosfor monokrom di kanvas hampir hitam.
+	// --- strongly themed ----------------------------------------------------
+	// Monochrome phosphor green on a near-black canvas.
 	"arnative-matrix": {
 		vars: {
 			accent: "#00ff41", cyan: "#8dffab", blue: "#1f8f4f", green: "#47ff7a", red: "#ff5555",
@@ -127,7 +123,7 @@ const PALET = {
 		},
 		export: { pageBg: "#050a06", cardBg: "#0a1410", infoBg: "#123018" },
 	},
-	// Neon magenta/cyan/kuning di kanvas indigo pekat.
+	// Neon magenta/cyan/yellow on a deep indigo canvas.
 	"arnative-cyberpunk": {
 		vars: {
 			accent: "#ff2e97", cyan: "#00f0ff", blue: "#2a7fd4", green: "#00ff9f", red: "#ff4d6d",
@@ -145,7 +141,7 @@ const PALET = {
 		},
 		export: { pageBg: "#0d0b16", cardBg: "#16131f", infoBg: "#3a2a10" },
 	},
-	// Retro 80-an: ungu tua, pink neon, cyan.
+	// 80s retro: deep purple, neon pink, cyan.
 	"arnative-synthwave": {
 		vars: {
 			accent: "#ff7edb", cyan: "#36f9f6", blue: "#7a5fd6", green: "#72f1b8", red: "#ff5f7e",
@@ -163,7 +159,7 @@ const PALET = {
 		},
 		export: { pageBg: "#1f1830", cardBg: "#2a2138", infoBg: "#443a63" },
 	},
-	// Retro hangat: kanvas abu kecoklatan, emas + aqua + merah bata.
+	// Warm retro: brownish grey canvas, gold + aqua + brick.
 	"arnative-gruvbox": {
 		vars: {
 			accent: "#fabd2f", cyan: "#8ec07c", blue: "#83a598", green: "#b8bb26", red: "#fc6654",
@@ -181,7 +177,7 @@ const PALET = {
 		},
 		export: { pageBg: "#1d2021", cardBg: "#282828", infoBg: "#3c3836" },
 	},
-	// Dingin & tenang ala Nord: frost blue + aurora.
+	// Cool and calm Nord: frost blue + aurora.
 	"arnative-nord": {
 		vars: {
 			accent: "#88c0d0", cyan: "#8fbcbb", blue: "#5e81ac", green: "#a3be8c", red: "#d4979d",
@@ -199,7 +195,7 @@ const PALET = {
 		},
 		export: { pageBg: "#272c36", cardBg: "#2e3440", infoBg: "#3b4252" },
 	},
-	// Ungu gelap klasik: pink + cyan + hijau mint.
+	// Classic dark purple: pink + cyan + mint.
 	"arnative-dracula": {
 		vars: {
 			accent: "#bd93f9", cyan: "#8be9fd", blue: "#6272a4", green: "#50fa7b", red: "#ff6363",
@@ -219,7 +215,7 @@ const PALET = {
 	},
 };
 
-/** Substitusi teks pada base; tiap target wajib muncul tepat sekali. */
+/** Text substitution on the base; each target must appear exactly once. */
 function render(nama, palet) {
 	let out = baseText;
 	const tukar = (oldS, newS, apa) => {

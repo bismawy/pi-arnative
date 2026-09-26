@@ -1,7 +1,7 @@
 /**
- * Arnative Usage Dashboard (/usage): UI tabel + komando /usage.
- * Data layer (scan sesi + cache + agregasi) di lib/usage-store.ts — dipakai
- * bersama header Model; API lama tetap diekspor dari modul ini (kompatibilitas).
+ * Arnative Usage Dashboard (/usage): table UI + the /usage command.
+ * Data layer (session scan + cache + aggregation) lives in lib/usage-store.ts —
+ * shared with the Model tab; the old API is still re-exported here (compatibility).
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
@@ -21,7 +21,7 @@ export function formatCount(n: number): string {
 	return n > 0 ? n.toLocaleString("en-US") : "-";
 }
 // =============================================================================
-// Komponen TUI /usage
+// /usage TUI component
 // =============================================================================
 
 export interface RowItem {
@@ -57,7 +57,7 @@ export class UsageModalComponent implements Component {
 		this.onDone = onDone;
 		this.requestRender = requestRender;
 		this.summary = collectUsageSummary(true);
-		// Default: expand provider pertama jika ada
+		// Default: expand the first provider when there is one
 		if (this.summary.providers.length > 0) {
 			this.expandedProviders.add(this.summary.providers[0]!.name);
 		}
@@ -145,8 +145,8 @@ export class UsageModalComponent implements Component {
 	render(width: number): string[] {
 		const th = this.theme;
 		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		// Kotak ala kolom chat arnative membungkus judul + tabel + hint, full width.
-		// Ujung membulat (╭─╮ / ╰─╯), sisi + divider dari lib/box.ts (satu definisi).
+		// arnative chat-column box wraps title + table + hint, full width.
+		// Round ends (╭─╮ / ╰─╯); sides + divider from lib/box.ts (single definition).
 		const boxW = width;
 		const tint = (s: string) => th.fg("tint", s);
 		const hline = (l: string, r: string) => boxEdge(l, r, boxW, tint);
@@ -158,7 +158,7 @@ export class UsageModalComponent implements Component {
 			this.selectedIndex = Math.max(0, rows.length - 1);
 		}
 
-		// Kolom tata letak (lebar karakter) — total 89 karakter isi tabel
+		// Layout columns (character widths) — 89 characters of table content in total
 		const colW = {
 			name: 28,
 			sessions: 8,
@@ -176,7 +176,7 @@ export class UsageModalComponent implements Component {
 			return alignRight ? " ".repeat(diff) + str : str + " ".repeat(diff);
 		};
 
-		// Header Table
+		// Table header
 		const headerText =
 			"  " +
 			formatCol(th.fg("dim", "Provider / Model"), colW.name, false) +
@@ -196,7 +196,7 @@ export class UsageModalComponent implements Component {
 		out.push(row(headerText));
 		out.push(rule());
 
-		// Baris data (dengan batas tinggi tampilan agar tidak overflow)
+		// Data rows (with a display height cap so it cannot overflow)
 		const maxVisibleRows = 16;
 		let startIdx = 0;
 		if (rows.length > maxVisibleRows) {
@@ -227,7 +227,7 @@ export class UsageModalComponent implements Component {
 
 		out.push(rule());
 
-		// Total Row
+		// Total row
 		const t = this.summary.totals;
 		const totalName = formatCol(th.fg("tint", bold("Total")), colW.name, false);
 		const totalSess = formatCol(th.fg("tint", bold(formatCount(t.sessions))), colW.sessions);

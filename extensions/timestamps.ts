@@ -1,13 +1,13 @@
 /**
- * Jam transkrip chat (jam, bukan timestamp penuh):
- * - User: jam rata kanan di kolom paling kanan, warna aksen, tanpa background.
- *   Konten tidak pernah dipotong; bila baris pertama penuh, jam turun ke baris
- *   padding ATAS bubble.
- * - Assistant: jam hanya pada respons akhir (pesan tanpa toolCall), bukan di
- *   Thinking... atau giliran perantara.
+ * Chat transcript clock (time only, not a full timestamp):
+ * - User: right-aligned in the last column, accent color, no background.
+ *   Content is never truncated; if the first line is full the clock moves to the
+ *   bubble's TOP padding line.
+ * - Assistant: clock only on the final reply (a message with no toolCall), not on
+ *   Thinking... or intermediate turns.
  *
- * Sekaligus menambal bg bubble user: teks Markdown membawa \x1b[0m di tengah
- * baris -> padding setelah reset tampil gelap (block hitam).
+ * Also patches the user bubble bg: Markdown text carries \x1b[0m mid-line, so
+ * padding after the reset renders dark (a black block).
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -35,12 +35,12 @@ export function formatTimeBadge(timeStr: string, th: { fg(color: string, text: s
 	return `\x1b[36m${timeStr}\x1b[39m`;
 }
 
-// Kode pembuka bg bubble user (tanpa reset penutup) -> lib/ansi.ts (satu definisi).
+// User bubble bg open code (no closing reset) -> lib/ansi.ts (single definition).
 
-// Akar "block hitam" saat chat penuh: teks Markdown membawa \x1b[0m (reset semua)
-// di dalam baris -> spasi padding SETELAH reset kehilangan bg bubble dan tampil
-// gelap selebar sisa baris. Pasang ulang bg bubble setelah tiap reset, tutup bg
-// di akhir baris agar tidak bocor. Pola sama InputBgEditor di bawah.
+// Root cause of the "black block" in a full chat: Markdown text carries a mid-line
+// \x1b[0m (full reset), so padding AFTER the reset loses the bubble bg and renders
+// dark for the rest of the line. Re-apply the bubble bg after every reset and close
+// it at end of line so it cannot leak. Same pattern as InputBgEditor below.
 export function repairBubbleBg(line: string, bgOpen: string): string {
 	if (!bgOpen) return line;
 	const patched = line.split("\x1b[0m").join(`\x1b[0m${bgOpen}`).split("\x1b[49m").join(`\x1b[49m${bgOpen}`);
@@ -48,9 +48,9 @@ export function repairBubbleBg(line: string, bgOpen: string): string {
 }
 
 /**
- * Tempel jam di ujung kanan sebuah baris dengan margin 1 kolom dari tepi kanan.
- * Jika `bgOpen` disediakan (misal untuk chat user), area padding dan jam
- * menggunakan background bubble tersebut sehingga tidak ada block hitam/kotak terpotong.
+ * Paste the clock at the right end of a line, 1 column from the right edge.
+ * When `bgOpen` is given (e.g. user chat) the padding and the clock use that bubble
+ * background, so there is no black block / clipped box.
  */
 export function placeTimeAtRight(
 	line: string,
@@ -79,8 +79,8 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			const lines = origRender.call(this, width);
 			if (lines.length < 2) return lines;
 
-			// Perbaiki bg bubble dulu (baris Markdown ber-reset bikin padding gelap),
-			// baru tempel jam (yang sengaja membuang bg di area badge).
+			// Fix the bubble bg first (reset Markdown lines make padding dark),
+			// then paste the clock (which deliberately drops the bg in the badge area).
 			const bgOpen = ansiBgOpen(activeThemeProxy, "userMessageBg");
 			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i], bgOpen);
 
@@ -90,18 +90,18 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			const badge = formatTimeBadge(timeStr, activeThemeProxy);
 			const timeW = visibleWidth(timeStr);
 
-			// Baris teks pertama ada di index 1 (di bawah top-padding box)
+			// First text line sits at index 1 (below the box top padding)
 			const contentLine = lines[1];
 			const cleanContent = contentLine.replace(/\x1b\[[0-9;]*m/g, "").trimEnd();
 			const contentW = visibleWidth(cleanContent);
 			const minGap = 2;
 
 			if (contentW + minGap + timeW <= width) {
-				// Muat di baris teks pertama: tempel rata kanan persis dengan margin 1 spasi
+				// Fits on the first text line: paste right-aligned with a 1-space margin
 				lines[1] = placeTimeAtRight(contentLine, width, badge, timeW, bgOpen);
 			} else {
-				// Baris teks pertama penuh: JANGAN potong konten!
-				// Jam ke baris padding ATAS (selalu kosong, barisan pertama bubble)
+				// First text line is full: NEVER truncate content!
+				// Clock goes to the TOP padding line (always empty, first line of the bubble)
 				const topLine = lines[0];
 				const oscMatch = topLine.match(/^(\x1b\]133;[A-Z]\x07)+/);
 				const prefix = oscMatch ? oscMatch[0] : "";
@@ -118,11 +118,11 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			const lines = origRender.call(this, width);
 			const lastMsg = (this as { lastMessage?: AssistantMessage }).lastMessage;
 
-			// Jam hanya ditampilkan di respons akhir (pesan yang tidak memiliki toolCall)
+			// Clock only on the final reply (a message with no toolCall)
 			const hasToolCalls = lastMsg?.content?.some((c) => c.type === "toolCall");
 			if (hasToolCalls) return lines;
 
-			// Dan hanya jika ada teks jawaban yang nyata (bukan hanya thinking)
+			// and only when there is real answer text (not thinking only)
 			const hasText = lastMsg?.content?.some((c) => c.type === "text" && c.text.trim());
 			if (!hasText || lines.length === 0) return lines;
 
@@ -130,11 +130,11 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			const badge = formatTimeBadge(timeStr, activeThemeProxy);
 			const timeW = visibleWidth(timeStr);
 
-			// Cari baris teks pertama yang bukan zona OSC dan bukan header thinking
+			// First text line that is neither an OSC zone nor a thinking header
 			let targetIdx = -1;
 			for (let i = 0; i < lines.length; i++) {
 				const cleaned = lines[i].replace(/^(\x1b\]133;[A-Z]\x07)+/, "").trim();
-				// Jangan tempel di baris "Thinking..."
+				// Never paste onto the "Thinking..." line
 				if (cleaned.length > 0 && !/^thinking\b/i.test(cleaned)) {
 					targetIdx = i;
 					break;
@@ -164,7 +164,7 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 }
 
 export default function (pi: ExtensionAPI) {
-	// Catat timestamp pesan user (dibaca render UserMessageComponent di atas)
+	// Record the user message timestamp (read by the UserMessageComponent render above)
 	pi.on("message_start", async (event) => {
 		if (event.message.role !== "user") return;
 		const text = typeof event.message.content === "string"
@@ -175,7 +175,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Tema aktif diambil ulang tiap sesi (ctx.ui.theme); render membacanya lazy.
+	// The active theme is re-read per session (ctx.ui.theme); render reads it lazily.
 	pi.on("session_start", async (_event, ctx) => {
 		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
 	});
@@ -193,19 +193,19 @@ if (isMain) {
 	const badge = "\x1b[36m17:09\x1b[39m";
 	const badgeW = 5;
 
-	// Penempatan jam persis rata kanan dengan margin 1 spasi
+	// Clock flush right with a 1-space margin
 	const res1 = placeTimeAtRight("Short text", 30, badge, badgeW, "");
 	assert(visibleWidth(res1) === 30, "panjang baris pas selebar terminal");
 	assert(res1.endsWith(badge + " "), "badge berjarak 1 spasi dari ujung kanan");
 
-	// Dengan background bubble user
+	// With the user bubble background
 	const bg = "\x1b[48;2;52;53;61m";
 	const res2 = placeTimeAtRight(`${bg}Short text`, 30, badge, badgeW, bg);
 	assert(res2.includes(badge + " \x1b[49m"), "jam diikuti spasi margin lalu reset bg");
 	assert(res2.endsWith("\x1b[49m"), "background ditutup di akhir baris");
 	assert(visibleWidth(res2) === 30, "panjang baris tetap pas lebar");
 
-	// repair bg bubble: spasi setelah [0m] wajib ber-bg, baris ditutup [49m]
+	// bubble bg repair: padding after [0m] must be bg'd, line closed with [49m]
 	const dirty = `${bg}Hello\x1b[0m${" ".repeat(5)}\x1b[49m`;
 	const clean = repairBubbleBg(dirty, bg);
 	assert(clean.includes(`\x1b[0m${bg}`), "bg dipasang ulang setelah reset");
@@ -217,7 +217,7 @@ if (isMain) {
 		"bgOpen terambil dari probe tema",
 	);
 
-	// Teks panjang: sliceByColumn tidak merusak lebar
+	// Long text: sliceByColumn keeps the width intact
 	const res3 = placeTimeAtRight("a".repeat(40), 30, badge, badgeW, false);
 	assert(visibleWidth(res3) === 30, "teks panjang dipotong pas di targetCol");
 	console.log("timestamps.ts self-check OK");

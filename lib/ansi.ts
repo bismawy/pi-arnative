@@ -1,4 +1,4 @@
-/** Probe escape latar tema: kode pembuka bg (tanpa reset penutup \x1b[49m). */
+/** Theme bg open-code, stripped of its trailing \x1b[49m reset. */
 export function ansiBgOpen(th: { bg?(color: string, text: string): string } | null, color: string): string {
 	if (!th?.bg) return "";
 	try {

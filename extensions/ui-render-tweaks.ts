@@ -1,17 +1,17 @@
 /**
- * Empat tambalan kecil pada renderer pi fullscreen (semua di lapisan render, tanpa
- * mengubah data sesi):
- * 1. Sembunyikan box "Reloading keybindings, extensions, skills..." bawaan pi
- *    (hardcoded di handleReloadCommand, tak ada auto-hide).
- * 2. Seleksi drag: pi hanya membungkus irisan dengan reverse video (\x1b[7m) —
- *    di terminal/tema tertentu teks jadi tak terbaca. Ganti jadi warna eksplisit
- *    (bg selectedBg + fg text) supaya teks selalu terlihat.
- * 3. Pesan compaction: bawaan pi = label + baris kosong + teks (3 baris). Kita
- *    rapatkan jadi satu baris `[compaction] Compacted from N tokens (ctrl+o to expand)`.
- * 4. Pesan custom `pi-jev-eye-review`: bawaan pi menambah label `[pi-jev-eye-review]` +
- *    baris kosong di dalam kotak ungu; renderer kita tampilkan isi apa adanya.
- * 5. Pil `↓ Jump to latest message` (fullscreen): bg `selectedBg` (kelabu) -> aksen,
- *    teks dibuat gelap (kanvas tema) supaya kontras tetap tinggi (9.6:1).
+ * Five small patches to pi's fullscreen renderer (render layer only, session data
+ * untouched):
+ * 1. Hide pi's built-in "Reloading keybindings, extensions, skills..." box
+ *    (hardcoded in handleReloadCommand, no auto-hide).
+ * 2. Drag selection: pi only wraps the selection in reverse video (\x1b[7m), which
+ *    is unreadable in some terminals/themes. Replaced with explicit colors
+ *    (bg selectedBg + fg text) so text always stays visible.
+ * 3. Compaction message: pi's built-in is label + blank line + text (3 lines);
+ *    we squeeze it into one line: `[compaction] Compacted from N tokens (ctrl+o to expand)`.
+ * 4. Custom `pi-jev-eye-review` message: pi adds a `[pi-jev-eye-review]` label +
+ *    blank line inside a purple box; our renderer shows the content as-is.
+ * 5. `↓ Jump to latest message` pill (fullscreen): bg selectedBg (grey) -> accent,
+ *    text darkened (theme canvas) so contrast stays high (9.6:1).
  */
 import {
 	CompactionSummaryMessageComponent,
@@ -43,9 +43,9 @@ export { ansiBgOpen };
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
-// Sembunyikan box "Reloading keybindings, extensions, skills..." bawaan pi
-// (hardcoded di handleReloadCommand, tak ada auto-hide). Patch render Container
-// via rantai prototype (Container tak diekspor); drop seluruh box saat match.
+// Hide pi's built-in "Reloading keybindings, extensions, skills..." box
+// (hardcoded in handleReloadCommand, no auto-hide). Patches Container.render
+// through the prototype chain (Container is not exported) and drops the whole box on match.
 export function shouldHideReloadBox(lines: readonly string[]): boolean {
 	return lines.some((l) => l.includes("Reloading keybindings"));
 }
@@ -62,11 +62,11 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 	}
 }
 
-// Kode pembuka bg (tanpa reset penutup) -> lib/ansi.ts (satu definisi).
+// bg open code (no closing reset) -> lib/ansi.ts (single definition).
 
-// Seleksi teks drag-select di pi fullscreen: pi hanya membungkus irisan dengan
-// reverse video (\x1b[7m) — di terminal/tema tertentu teks jadi tak terbaca.
-// Ganti jadi warna eksplisit (bg selectedBg + fg text) supaya teks selalu terlihat.
+// Drag selection in pi fullscreen: pi only wraps the selection in reverse video
+// (\x1b[7m), unreadable in some terminals/themes. Replaced with explicit colors
+// (bg selectedBg + fg text) so text always stays visible.
 const SELECTION_COLOR_KEY = Symbol.for("pi-arnative.selectionColorsPatched");
 
 export function recolorSelection(highlighted: string, fgOpen: string, bgOpen: string): string {
@@ -84,12 +84,12 @@ export function ansiFgOpen(th: { fg?(c: string, t: string): string } | null, col
 	}
 }
 
-// Pil `↓ Jump to latest message` (fullscreen): pi mewarnainya bg `selectedBg`
-// (kelabu). Diganti bg aksen + teks kanvas tergelap (kontras 9.6:1, WCAG AA).
-// Catatan: pi hanya punya 7 token latar (selectedBg/userMessageBg/customMessageBg/
-// toolPendingBg/toolSuccessBg/toolErrorBg/searchMatchBg) — `accent` token teks,
-// jadi arah escape SGR-nya ditukar. `bg("accent")` pasti melempar "Unknown theme
-// background color" dan dulu ditelan catch -> pil tak berubah.
+// `↓ Jump to latest message` pill (fullscreen): pi colors it with bg `selectedBg`
+// (grey). Switched to accent bg + darkened canvas text (contrast 9.6:1, WCAG AA).
+// Note: pi only has 7 background tokens (selectedBg/userMessageBg/customMessageBg/
+// toolPendingBg/toolSuccessBg/toolErrorBg/searchMatchBg) — `accent` is a text
+// token, so the SGR escapes are swapped. `bg("accent")` would throw "Unknown theme
+// background color" and the pill would silently stay unchanged.
 const PILL_KEY = Symbol.for("pi-arnative.accentPill");
 const PILL_MARK = "↓ Jump to latest message";
 const PILL_INK = "toolPendingBg";
@@ -108,9 +108,9 @@ export function accentPill(
 	return `${accentBg}${inkFg}${text.replace(/\x1b\[[0-9;]*m/g, "")}\x1b[39m\x1b[49m`;
 }
 
-// TuiAltScreen membuat pil lewat callback instance `scrollToEndIndicator` (field
-// per-instance, jadi tak bisa ditambal di prototype-nya). Sisipkan callback kita
-// hanya selama composite berlangsung, lalu kembalikan aslinya.
+// TuiAltScreen builds the pill via the per-instance `scrollToEndIndicator` callback
+// (an instance field, so the prototype cannot be patched). Swap in our callback
+// only while the composite runs, then restore the original.
 export function withAccentPill<T>(
 	host: { scrollToEndIndicator?: (() => string) | undefined },
 	fn: () => T,
@@ -158,24 +158,24 @@ if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[PILL_KEY
 }
 
 export default function uiRenderTweaks(pi: ExtensionAPI) {
-	// Tema aktif diambil ulang tiap sesi (ctx.ui.theme); render membacanya lazy.
+	// The active theme is re-read per session (ctx.ui.theme); render reads it lazily.
 	pi.on("session_start", async (_event, ctx) => {
 		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
 	});
 
-	// 4. Pesan kontrak `pi-jev-eye-review`: gunakan kotak border kustom kita.
-	// Default collapsed: [pi-jev-eye] Reviewed turn contract. [click to expand]
-	// Saat di-klik: isi kontrak penuh muncul di dalam kotak.
+	// 4. `pi-jev-eye-review` contract message: use our own border box.
+	// Collapsed by default: [pi-jev-eye] Reviewed turn contract. [click to expand]
+	// On click: the full contract content appears inside the box.
 	pi.registerMessageRenderer("pi-jev-eye-review", (message, { expanded }, th) => {
 		const raw = customMessageText(message.content);
 		return new JevReviewBoxComponent(raw, Boolean(expanded), th);
 	});
 }
 
-// Notifikasi "Package Updates Available": pi membungkus teksnya dengan
-// DynamicBorder (garis penuh, bukan kotak). Diganti jadi kotak arnative
-// (╭─╮ │ ╰─╯) lewat patch prototype InteractiveMode; warna kuning (warning)
-// pada judul & bingkai tetap, isi teks sama seperti bawaan pi.
+// "Package Updates Available" notification: pi wraps the text in a DynamicBorder
+// (full lines, not a box). Replaced with an arnative box (╭─╮ │ ╰─╯) through an
+// InteractiveMode prototype patch; the yellow (warning) title and border stay, the
+// body text is unchanged.
 export class PackageUpdateBoxComponent implements Component {
 	private packages: string[];
 	private th: { fg(c: string, t: string): string };
@@ -216,7 +216,7 @@ if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKA
 	};
 }
 
-// Helper border box ala arnative -> lib/box.ts (satu definisi untuk semua kotak)
+// arnative box border helper -> lib/box.ts (one definition for every box)
 
 export class JevReviewBoxComponent implements Component {
 	private text: string;
@@ -236,7 +236,7 @@ export class JevReviewBoxComponent implements Component {
 			const hint = this.th.fg("dim", "[click to expand]");
 			return renderBoxLines(this.th, width, [`${tag} ${title} ${hint}`]);
 		}
-		// Expanded: tampilkan seluruh baris isi
+		// Expanded: show every content line
 		const lines = this.text.split("\n");
 		const formattedRows = lines.map((line, idx) => {
 			if (idx === 0 && line.startsWith("[pi-jev-eye]")) {
@@ -259,9 +259,9 @@ export class JevReviewBoxComponent implements Component {
 	invalidate(): void {}
 }
 
-// 3. Pesan compaction: satu baris, bukan tiga (label, spacer, teks).
-// Tema aktif dipakai supaya warna identik dengan kotak bawaan pi; sebelum sesi
-// jalan (proxy belum ada) biarkan renderer bawaan yang bekerja.
+// 3. Compaction message: one line instead of three (label, spacer, text).
+// The theme is used so colors match pi's own box; before the session starts (no
+// proxy yet) the built-in renderer keeps working.
 export function compactionLine(th: { fg(c: string, t: string): string }, tokenStr: string): string {
 	const label = th.fg("customMessageLabel", "\x1b[1m[compaction]\x1b[22m");
 	return `${label} ${th.fg("customMessageText", `Compacted from ${tokenStr} tokens (`)}${th.fg("dim", expandKey())}${th.fg(
@@ -270,7 +270,7 @@ export function compactionLine(th: { fg(c: string, t: string): string }, tokenSt
 	)}`;
 }
 
-// Teks tombol ikut keybinding aktif; di luar sesi pi keyText() kosong.
+// Button text follows the active keybinding; outside a pi session keyText() is empty.
 function expandKey(): string {
 	try {
 		return keyText("app.tools.expand") || "ctrl+o";
@@ -279,7 +279,7 @@ function expandKey(): string {
 	}
 }
 
-// Isi pesan custom: string apa adanya, atau gabungan blok teks (blok gambar dibuang).
+// Custom message content: a plain string, or concatenated text blocks (image blocks dropped).
 export function customMessageText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content))
@@ -336,11 +336,11 @@ if (isMain) {
 			process.exit(1);
 		}
 	};
-	// Box reload bawaan pi tersembunyi penuh (bukan baris demi baris)
+	// reload box fully hidden (not line by line)
 	assert(shouldHideReloadBox(["╭──╮", "│ Reloading keybindings, extensions, skills... │"]) === true, "box reload terdeteksi");
 	assert(shouldHideReloadBox(["hello", "world"]) === false, "baris biasa lolos");
 
-	// Seleksi: reverse video diganti warna eksplisit (bg selectedBg + fg text)
+	// selection: reverse video replaced with explicit colors (bg selectedBg + fg text)
 	assert(
 		recolorSelection("\x1b[7mhi\x1b[27m", "<F>", "<B>") === "<F><B>hi\x1b[39m\x1b[49m",
 		"recolorSelection: buka dgn fg+bg, tutup dgn reset fg+bg",
@@ -350,15 +350,16 @@ if (isMain) {
 	assert(ansiFgOpen({ fg: (_c, t) => `\x1b[38;2;1;2;3m${t}\x1b[39m` }) === "\x1b[38;2;1;2;3m", "fgOpen terambil dari probe tema");
 	assert(ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;9;9;9m${t}\x1b[49m` }, "selectedBg") === "\x1b[48;2;9;9;9m", "bgOpen selectedBg terambil");
 
-	// Pil "Jump to latest message": bg aksen + teks kanvas (bukan selectedBg kelabu).
-	// Pakai Theme ASLI: stub permisif dulu meloloskan `bg("accent")` yang di pi melempar.
+	// "Jump to latest message" pill: accent bg + canvas text (not grey selectedBg).
+	// Use the REAL theme: the permissive stub would let `bg("accent")` through,
+	// which pi throws on.
 	const temaJson = JSON.parse(readFileSync(new URL("../themes/arnative.json", import.meta.url), "utf8")) as {
 		vars: Record<string, string>;
 		colors: Record<string, string>;
 	};
 	const hex = (tok: string) => temaJson.vars[temaJson.colors[tok] ?? tok];
-	// Theme bawaan menambal fallback (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
-	// jadi peta fg harus lengkap; ambil seluruh palet seperti loader pi.
+	// The built-in theme adds fallbacks (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
+	// so the fg map must be complete; take the whole palette like pi's loader does.
 	const fgPalet = Object.fromEntries(Object.entries(temaJson.colors).map(([k, v]) => [k, temaJson.vars[v] ?? v]));
 	const thPil = new Theme(fgPalet, { toolPendingBg: hex("toolPendingBg"), selectedBg: hex("selectedBg") }, "truecolor");
 	const pilAsli = thPil.bg("selectedBg", thPil.fg("text", " ↓ Jump to latest message · End "));
@@ -378,20 +379,21 @@ if (isMain) {
 	assert(accentPill("teks lain", thPil) === "teks lain", "pil: teks non-pil tak disentuh");
 	assert(accentPill(pilAsli, null) === pilAsli, "pil: tanpa tema -> apa adanya");
 
-	// Varian tema: semua themes/*.json wajib valid — name = nama berkas, warna wajib lengkap,
-	// hex valid, dan kontras diukur vs kanvas tema itu sendiri (userMessageBg):
-	// konten >= 3.0, teks sekunder >= 2.0, ramp thinking 1.3-4.0, pil aksen >= 4.5 — ambang
-	// yang sudah lolos di base `arnative` (bukan angka karangan).
+	// Theme variants: every themes/*.json must be valid — name = file name, all
+	// required colors present, valid hex, and contrast measured against that theme's
+	// own canvas (userMessageBg): content >= 3.0, secondary text >= 2.0, thinking
+	// ramp 1.3-4.0, accent pill >= 4.5 — the thresholds that already pass in the
+	// base `arnative` (not invented numbers).
 	const dirTema = new URL("../themes/", import.meta.url);
 	const wajib = Object.keys(temaJson.colors);
-	// Kunci yang bukan teks (latar/garis/scrollbar) — tak dinilai kontras teks.
+	// Non-text keys (backgrounds/borders/scrollbar) — contrast is not measured.
 	const bukanTeks = new Set([
 		"selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
 		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder",
 		"scrollbarTrack", "scrollbarThumb",
 	]);
 	const sekunder = new Set(["muted", "dim", "mdQuote", "mdHr", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
-	// Ramp thinking: makin tinggi makin terbaca; thinkingMax = accent (dinilai di jalur pil).
+	// Thinking ramp: the higher the more readable; thinkingMax = accent (measured on the pill path).
 	const ramp: Record<string, number> = {
 		thinkingOff: 1.3, thinkingMinimal: 1.3, thinkingLow: 2.0,
 		thinkingMedium: 2.7, thinkingHigh: 3.6, thinkingXhigh: 4.0,
@@ -415,8 +417,8 @@ if (isMain) {
 		assert(d.name === f.replace(/\.json$/, ""), `tema ${f}: name = nama berkas`);
 		const kurang = wajib.filter((k) => !(k in d.colors));
 		assert(kurang.length === 0, `tema ${f}: warna wajib lengkap (kurang ${kurang.join(",")})`);
-		// Nilai colors hanya boleh: hex, indeks 256, kosong, atau NAMA VAR yang benar-benar
-		// ada — menulis nama warna (mis. "muted") bikin pi menolak tema tanpa jelas sebabnya.
+		// colors values may only be: hex, 256-index, empty, or a REAL variable name —
+		// a bare color name (e.g. "muted") makes pi reject the theme with no clear reason.
 		for (const [tok, nilai] of Object.entries(d.colors)) {
 			if (typeof nilai !== "string") continue;
 			if (nilai === "" || /^#[0-9a-f]{6}$/i.test(nilai) || nilai in d.vars) continue;
@@ -426,7 +428,7 @@ if (isMain) {
 		for (const tok of ["accent", "text", "selectedBg", "toolPendingBg"]) {
 			assert(/^#[0-9a-f]{6}$/i.test(hex(tok)), `tema ${f}: ${tok} hex (${hex(tok)})`);
 		}
-		// Pil aksen: bg aksen + teks berwarna toolPendingBg.
+		// Accent pill: accent bg + toolPendingBg colored text.
 		assert(kontras(hex("accent"), hex("toolPendingBg")) >= 4.5, `tema ${f}: kontras accent vs toolPendingBg >= 4.5`);
 		assert(/^#[0-9a-f]{6}$/i.test(d.vars.softCyan ?? ""), `tema ${f}: vars.softCyan (tint) hex`);
 		const kanvas = hex("userMessageBg");
@@ -438,8 +440,9 @@ if (isMain) {
 			const c = kontras(warna, kanvas);
 			assert(c >= batas, `tema ${f}: kontras ${tok} vs kanvas ${c.toFixed(2)} < ${batas}`);
 		}
-		// Teks isi kotak tool harus terbaca di latar sukses MAUPUN error, dan pesan error
-		// di kotak error — tiga pasangan yang dulu lolos (3.48-4.46) tanpa terdeteksi.
+		// Tool box text must be readable on the success background AND in errors, and
+		// the error text in the error box — three pairs that used to pass (3.48-4.46)
+		// without being caught.
 		for (const [fg, bg] of [
 			["toolOutput", "toolSuccessBg"], ["toolOutput", "toolErrorBg"],
 			["error", "toolErrorBg"], ["toolDiffRemoved", "toolErrorBg"],
@@ -447,10 +450,10 @@ if (isMain) {
 			const c = kontras(hex(fg), hex(bg));
 			assert(c >= 4.5, `tema ${f}: kontras ${fg} di ${bg} ${c.toFixed(2)} < 4.5`);
 		}
-		// Kotak error tidak boleh lebih berat dari kotak sukses (luminansi latar sepadan).
+		// The error box must not be heavier than the success box (matching background luminance).
 		const [lErr, lOk] = [luminansi(hex("toolErrorBg")), luminansi(hex("toolSuccessBg"))];
 		assert(Math.abs(lErr - lOk) / Math.max(lErr, lOk) <= 0.25, `tema ${f}: bobot toolErrorBg vs toolSuccessBg (${lErr.toFixed(3)} vs ${lOk.toFixed(3)})`);
-		// Thumb & highlight cari harus bisa dibedakan dari track/seleksi (dulu nilainya identik).
+		// Scrollbar thumb & highlight must be distinguishable from track/selection (they used to be identical).
 		assert(hex("scrollbarThumb") !== hex("scrollbarTrack"), `tema ${f}: scrollbarThumb masih sama dengan scrollbarTrack`);
 		assert(hex("searchMatchBg") !== hex("selectedBg"), `tema ${f}: searchMatchBg masih sama dengan selectedBg`);
 	}
@@ -465,14 +468,14 @@ if (isMain) {
 	assert(dalamPil.includes("\x1b[48;2;0;215;255m"), "pil: callback instance disisipi bg aksen");
 	assert(hostPil.scrollToEndIndicator?.() === pilAsli, "pil: callback asli dipulihkan setelah render");
 
-	// compaction: tiga baris bawaan pi -> satu baris
+	// compaction: pi's three lines -> one
 	assert(
 		compactionLine({ fg: (_c, t) => t }, "112,247").replace(/\x1b\[[0-9;]*m/g, "") ===
 			"[compaction] Compacted from 112,247 tokens (ctrl+o to expand)",
 		"compaction: label + teks + petunjuk expand dalam satu baris (tanpa baris kosong)",
 	);
 
-	// pesan custom: isi apa adanya, tanpa label/garis tambahan
+	// custom message: content as-is, no extra label/lines
 	assert(
 		customMessageText("[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user") ===
 			"[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user",
@@ -487,7 +490,7 @@ if (isMain) {
 		"blok non-teks dibuang",
 	);
 
-	// Integrasi: jalankan factory seperti pi, lalu panggil updateDisplay/ renderer asli
+	// Integration: run the factory like pi, then call updateDisplay / the original renderer
 	const fakePi = {
 		handlers: [] as any[],
 		renderers: {} as Record<string, any>,
@@ -540,7 +543,7 @@ if (isMain) {
 		"pesan kontrak collapsed: kotak border dengan teks [click to expand]",
 	);
 
-	// Notifikasi pembaruan paket: kotak arnative, isi & warna kuning tetap
+	// Package update notification: arnative box, body and yellow kept
 	const upd = new PackageUpdateBoxComponent(["github.com/bismawy/pi-arnative", "pkg-dua"], {
 		fg: (c: string, t: string) => (c === "warning" ? `\x1b[33m${t}\x1b[39m` : t),
 	}).render(60);
@@ -551,7 +554,7 @@ if (isMain) {
 	assert(upd.some((l: string) => l.includes("- github.com/bismawy/pi-arnative")), "daftar paket di dalam kotak");
 	assert(upd.every((l: string) => visibleWidth(l) === 60), "kotak pembaruan selebar 60");
 
-	// Test invalidate and handleMouse click toggle
+	// Test invalidate and the handleMouse click toggle
 	contractCollapsed.invalidate();
 	const mouseRes = contractCollapsed.handleMouse({ type: "click", button: "left" });
 	assert(mouseRes?.handled === true, "klik kiri handled");
