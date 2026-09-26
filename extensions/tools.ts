@@ -1,28 +1,26 @@
 /**
- * Tool output minimal ala Codex CLI / Claude Code, tiap tool call dalam kotak:
+ * Codex/Claude-Code style tool boxes: every tool call in its own box.
  *   ╭────────────────────────────╮
- *   │ 󰔟 $ cmd smart…             │  running (ikon status, hilang saat selesai)
+ *   │ 󰔟 $ cmd smart…             │  running (spinner, gone once finished)
  *   ╰────────────────────────────╯
  *   ╭────────────────────────────╮
- *   │ ✓ $ cmd smart…      0.1s   │  final, collapsed; durasi rata kanan judul
- *   │ 󱞩 baris-pertama-output     │
+ *   │ ✓ $ cmd smart…      0.1s   │  final, collapsed; duration right-aligned
+ *   │ 󱞩 first output line        │
  *   ╰────────────────────────────╯
- * Klik / ctrl+e = judul penuh + detail (output = dim; edit = diff toolDiff*).
- * Ringkasan collapsed: bash/write `󱞩 baris pertama output`; grep/find/read
- * ringkasan angka (→ N matches / → N files / N lines); edit `󱞩 +N / -M`.
- * Saat expand baris ringkasan kosong untuk tool biasa (output sudah tampil
- * penuh) - anti duplikat baris pertama.
- * Durasi: rata kanan baris judul, space-aware (judul dipotong via visibleWidth
- * bila tak muat); kosong bila tak terukur (restore sesi lama - tanpa jejak).
- * Warna: nama tool aksen, path/folder & link (URL) tint, sisanya default;
- * garis kotak + 󱞩 dim. Eksekusi murni delegasi (spread tool bawaan).
- * Status "sudah ada hasil" di context.state, dibaca saat render() -> aman
- * reload/restore, tanpa kotak 󰔟 tertinggal. Gap antar kotak (Spacer bawaan
- * ToolExecutionComponent) dibuang via patch render (pola sama patch footer).
- * Tool pihak lain yang TIDAK punya renderer sendiri (memory_write, scratchpad,
- * MCP, …) dapat perlakuan sama: pi merendernya polos (nama + 10 baris output),
- * kita alihkan ke shell "self" + kotak dengan satu baris ringkasan ber-
- * `[ctrl+o to expand]`; detail lengkap hanya saat expand.
+ * Click / ctrl+e = full title + detail (output dim; edit = toolDiff*).
+ * Collapsed summary: bash/write `󱞩 first output line`; grep/find/read numeric
+ * (→ N matches / → N files / N lines); edit `󱞩 +N / -M`. Plain tools show no
+ * summary line when expanded (output is already full) — no duplicated first line.
+ * Duration is right-aligned and space-aware (title truncated via visibleWidth when
+ * it doesn't fit); empty when unmeasured (restored sessions).
+ * Colors: tool name accent, paths/links tint, box lines + 󱞩 dim. Execution is a
+ * pure delegate (spread of the built-in tools).
+ * "has a result" lives in context.state, read at render() -> restore/reload safe,
+ * no stale 󰔟 box. The gap between boxes (built-in Spacer) is stripped by a render
+ * patch (same pattern as the footer patch).
+ * Third-party tools with no renderer of their own (memory_write, scratchpad, MCP…)
+ * get the same treatment: shell "self" + box with a one-line summary and
+ * `[ctrl+o to expand]`; full detail only when expanded.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -46,10 +44,10 @@ type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record
 type Res = (r: TResult, th: Theme, tint: (s: string) => string, isErr: boolean, expanded: boolean) => string;
 
 const cwd = process.cwd();
-const TIMINGS = new Map<string, number>(); // durasi ms per tool call (sekali jalan)
+const TIMINGS = new Map<string, number>(); // duration ms per tool call (one run)
 
-// Animasi ikon running 󰔟 󱦠 󱦟: frame berputar per 500ms via ticker yang hidup
-// HANYA selama ada tool berjalan (idle = tanpa render ulang boros).
+// Running icon 󰔟 󱦠 󱦟: 500ms spin frames from a ticker that only runs while
+// a tool is active (idle = no wasteful re-renders).
 const FRAMES = ["󰔟", "󱦠", "󱦟"];
 let ACTIVE = 0;
 let TICK: ReturnType<typeof setInterval> | null = null;
@@ -90,8 +88,8 @@ const textOf = (r: TResult): string =>
 
 const firstLine = (s: string): string => s.split("\n").find((l) => l.trim()) ?? "";
 
-// Ringkasan = baris pertama yang BERISI. Baris hanya-tanda-baca (mis. `{` tunggal
-// dari JSON pretty-print MCP) tidak menjelaskan apa-apa -> ambil baris berikutnya.
+// Summary = first line with content. Punctuation-only lines (e.g. a lone `{` from
+// pretty-printed MCP JSON) explain nothing -> take the next one.
 const firstMeaningful = (s: string): string => {
 	const lines = s.split("\n").filter((l) => l.trim());
 	return lines.find((l) => !/^[\s{}\[\],;:]+$/.test(l)) ?? lines[0] ?? "";
@@ -99,13 +97,13 @@ const firstMeaningful = (s: string): string => {
 
 const countLines = (s: string): number => (s ? s.split("\n").filter(Boolean).length : 0);
 
-// Filter path folder / link URL -> tint; sisanya default.
+// Tint folder paths / URLs; everything else default.
 export const LINK_RE = /(?:https?:\/\/[^\s"'`)}\]]+|(?:~|\.{1,2})?\/[\w.+@~%/-]+|[\w.+@~-]+(?:\/[\w.+@~%/-]+)+)/g;
 export function paintLinks(text: string, tint: (s: string) => string): string {
 	return text.replace(LINK_RE, (m) => tint(m));
 }
 
-// slot "tint" hanya di tema arnative; tema lain jatuh ke aksen (probe per render)
+// "tint" only exists in arnative themes; other themes fall back to accent (probed per render)
 const tintOf = (theme: Theme): ((s: string) => string) => {
 	try {
 		theme.fg("tint", "");
@@ -115,20 +113,20 @@ const tintOf = (theme: Theme): ((s: string) => string) => {
 	}
 };
 
-// Judul smart berbatas kata: maksimal `maxWords` kata + elipsis; penuh saat expand.
+// Word-limited smart title: `maxWords` words + ellipsis; full text when expanded.
 export function smartTitle(cmd: string, maxWords = 6): string {
 	const words = cmd.replace(/\r?\n/g, " ").trim().split(/\s+/).filter(Boolean);
 	if (words.length <= maxWords) return words.join(" ");
 	return `${words.slice(0, maxWords).join(" ")}…`;
 }
 
-// Prefix baris hasil: 󱞩 dim (tanpa durasi - durasi di ujung kanan judul).
+// Result line prefix: 󱞩 dim (duration lives at the right end of the title).
 export function resHead(theme: Theme): string {
 	return theme.fg("dim", "󱞩");
 }
 
-// Baris judul: durasi rata kanan (space-aware, judul dipotong bila tak muat);
-// expanded = judul penuh di-wrap. Semua baris <= inner (regresi bug overflow).
+// Title line: duration right-aligned and space-aware (title truncated when it
+// doesn't fit); expanded = full title wrapped. All lines stay <= inner (overflow bug).
 export function titleRow(
 	theme: Theme,
 	icon: string,
@@ -152,15 +150,15 @@ export function titleRow(
 	return lines;
 }
 
-// Ringkasan default: collapsed `󱞩 baris-pertama-output`, expand kosong (output
-// sudah tampil penuh di bawah - anti duplikat).
+// Default summary: collapsed `󱞩 first output line`, empty when expanded (the
+// full output is right below — no duplicate first line).
 export const resText: Res = (r, th, tint, isErr, expanded) => {
 	if (expanded && !isErr) return "";
 	const f = firstLine(textOf(r));
 	return f ? `${resHead(th)} ${paintLinks(f, tint)}` : resHead(th);
 };
 
-// Ringkasan angka: `󱞩 → N matches`; error jatuh ke baris pertama (info penting).
+// Numeric summary `󱞩 → N matches`; errors fall back to the first line (most important).
 export const numRes =
 	(fmt: (n: number) => string): Res =>
 	(r, th, tint, isErr, expanded) => {
@@ -169,32 +167,32 @@ export const numRes =
 		return `${resHead(th)} ${fmt(countLines(textOf(r)))}`;
 	};
 
-// Heading pertama pada isi tulisan (mis. `## omaga-sync workflow (2026-08-23)`).
+// First markdown heading in the text (e.g. `## omaga-sync workflow (2026-08-23)`).
 const firstHeading = (s: unknown): string =>
 	typeof s === "string" ? (s.split("\n").find((l) => /^#{1,6}\s/.test(l.trim()))?.trim() ?? "") : "";
 
-// Ringkasan satu baris untuk tool tanpa renderer sendiri. memory_write dapat
-// judul seksi yang baru ditulis (dari args.content) supaya baris hasil menyebut
-// APA yang tertulis, bukan cuma "Appended to MEMORY.md".
+// One-line summary for tools without their own renderer. memory_write appends the
+// heading it just wrote (from args.content) so the line names WHAT was written
+// instead of just "Appended to MEMORY.md".
 export function toolSummary(name: string, text: string, args?: any): string {
 	const head = firstMeaningful(text).trim();
 	const title = name === "memory_write" ? firstHeading(args?.content) : "";
 	return title ? `${head}. ${title}` : head;
 }
 
-// Petunjuk expand `[ctrl+o to expand]` (teks tombol ikut keybinding aktif).
+// Expand hint `[ctrl+o to expand]` (key text follows the active keybinding).
 export function expandHint(th: Theme): string {
 	let key = "ctrl+o";
 	try {
 		key = keyText("app.tools.expand") || key;
 	} catch {
-		// di luar sesi pi: pakai literal
+		// outside a pi session: keep the literal
 	}
 	return th.fg("dim", `[${key} to expand]`);
 }
 
-// Detail saat expand: markdown ber-tema (layout sama dengan pesan biasa pi:
-// blok kode, daftar, warna), bukan dump polos dim.
+// Expanded detail: themed markdown (same layout as a normal pi message — code
+// blocks, lists, colors) instead of a plain dim dump.
 export const fullText = (r: TResult, _th: Theme, width = 0): string[] => {
 	const text = textOf(r);
 	if (!text) return [];
@@ -209,7 +207,7 @@ export const fullText = (r: TResult, _th: Theme, width = 0): string[] => {
 const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
 const isBlankLine = (l: string): boolean => l.replace(ANSI_RE, "").trim() === "";
 
-// Buang baris kosong di awal/akhir (Spacer bawaan) - gap antar kotak tool.
+// Drop blank lines at both edges (the built-in Spacer) — that's the gap between boxes.
 export function stripBlankEdges(lines: string[]): string[] {
 	let s = 0;
 	let e = lines.length;
@@ -218,12 +216,12 @@ export function stripBlankEdges(lines: string[]): string[] {
 	return lines.slice(s, e);
 }
 
-// Gap antar kotak = Spacer(1) bawaan ToolExecutionComponent (di luar ekstensi).
-// Patch render prototype + guard global (pola sama patch FooterComponent).
-// HANYA baris yang kita gambar sendiri (kotak kita) yang dirapatkan: tool dengan
-// renderer pihak ketiga memakai shell "self" bawaan mereka juga, jadi patokannya
-// daftar nama (diisi minimal() + BOXED_TOOLS), bukan shell. Tanpa batas ini baris
-// mereka kehilangan Spacer + padding Box-nya dan menempel ke baris tetangga.
+// The inter-box gap is the built-in Spacer(1) of ToolExecutionComponent, stripped
+// with a prototype render patch + global guard (same pattern as the footer patch).
+// ONLY lines we draw ourselves (our boxes) get stripped: third-party tools use
+// their own "self" shell too, so the marker is a name list (filled by minimal() +
+// BOXED_TOOLS) rather than the shell. Without that bound their lines would lose
+// the Spacer + Box padding and stick to the neighbour.
 const OWN_BOX = new Set<string>();
 const hasOwnRendererDef = (self: { toolDefinition?: { renderCall?: unknown; renderResult?: unknown } }): boolean =>
 	Boolean(self?.toolDefinition?.renderCall || self?.toolDefinition?.renderResult);
@@ -239,20 +237,20 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	};
 }
 
-// --- Tool tanpa renderer sendiri: kotak yang sama, ringkasan satu baris ---
-// Tanpa patch ini pi merender mereka sebagai blok bg polos (nama + potongan
-// 10 baris output). Renderer kita dipasang lewat prototype (pola sama gap patch),
-// hanya bila tool tidak punya renderCall/renderResult sendiri (tool bawaan kita
-// dan pi-web-access dll. tak tersentuh).
+// --- Tools without their own renderer: same box, one-line summary ---
+// Without this pi renders them as a plain bg block (name + 10 output lines).
+// Our renderer is installed through the prototype (same pattern as the gap patch)
+// only for tools that define no renderCall/renderResult of their own (our own
+// tools and pi-web-access etc. are untouched).
 //
-// Pengecualian: tool pi-web-access yang tampil beda dari kotak kita
-// (`web_search`, `fetch_content`, `get_search_content`; nama tampilannya di-hardcode oleh paket
-// itu sebagai "search "/"fetch "/"get_content "). Isi renderer mereka dipakai apa adanya dan
-// hanya dibungkus kotak kita. `source_check` sengaja TIDAK dipaksa:
-// fase partial-nya (kurator: URL + status persetujuan) akan hilang karena jalur
-// partial kita mengembalikan kosong.
-// Tool `todo` (@juicesharp/rpiv-todo) dibungkus kotak dengan ikon check-square (\uf14a)
-// dan background tema toolPendingBg/toolSuccessBg.
+// Exceptions: the pi-web-access tools that look different from our box
+// (`web_search`, `fetch_content`, `get_search_content`; that package hardcodes
+// their display names as "search "/"fetch "/"get_content "). Their renderer
+// content is used as-is and only wrapped in our box. `source_check` is
+// deliberately NOT boxed: its partial phase (curator: URLs + approval state)
+// would disappear because our partial path returns nothing.
+// The `todo` tool (@juicesharp/rpiv-todo) is boxed with a check-square icon
+// (\uf14a) and the toolPendingBg/toolSuccessBg theme backgrounds.
 const BOXED_TOOLS = new Map([
 	["web_search", "search"],
 	["fetch_content", "fetch"],
@@ -262,15 +260,15 @@ const BOXED_TOOLS = new Map([
 const displayName = (name: string): string => BOXED_TOOLS.get(name) ?? name;
 for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
 
-// Tool MCP (pi-mcp-adapter) memakai shell "self" bawaan paket itu, tapi hasilnya
-// kita render sendiri: renderer hasil mereka mencetak SELURUH output saat error
-// (tanpa batas, di luar kotak) dan judul+args JSON di call bisa puluhan baris.
-// Ringkasan 1 baris + [ctrl+o to expand] (jalur tool polos) lebih rapat; baris
-// args mereka tetap dipakai di kotak call supaya tool MCP yang dipanggil terlihat.
+// MCP tools (pi-mcp-adapter) already use the "self" shell, but we render their
+// result ourselves: their result renderer prints the WHOLE output on error
+// (unbounded, outside the box) and the JSON title+args in the call can be dozens
+// of lines. A 1-line summary + [ctrl+o to expand] is tighter; their args lines
+// still feed the call box so the invoked MCP tool stays visible.
 const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
 const pakaiCallMereka = (name: string): boolean => BOXED_TOOLS.has(name) || MCP_TOOL(name);
 
-// Judul kotak MCP menyebut tool yang dipanggil (args lengkap saat expand).
+// The MCP box title names the invoked tool (full args when expanded).
 const mcpInfo = (name: string, args: any, th: Theme): string => {
 	if (!MCP_TOOL(name)) return "";
 	const tool = String(args?.tool ?? "");
@@ -278,12 +276,12 @@ const mcpInfo = (name: string, args: any, th: Theme): string => {
 	return tool ? th.fg("dim", `${tool}${server ? ` @ ${server}` : ""}`) : "";
 };
 
-// Baris pihak ketiga di kotak call dibatasi: sisanya lewat [ctrl+o to expand].
+// Cap third-party lines in the call box; the rest goes behind [ctrl+o to expand].
 const CALL_ROWS = 2;
 const capped = (th: Theme, rows: string[], expanded: boolean): string[] =>
 	expanded || rows.length <= CALL_ROWS ? rows : [...rows.slice(0, CALL_ROWS), th.fg("dim", expandHint(th))];
 
-// Baris dari komponen renderer pihak ketiga (spasi kanan dipangkas, ANSI utuh).
+// Lines from a third-party renderer component (right padding trimmed, ANSI kept).
 const componentLines = (component: any, width: number): string[] => {
 	try {
 		const lines = component?.render(Math.max(8, width));
@@ -293,17 +291,17 @@ const componentLines = (component: any, width: number): string[] => {
 	}
 };
 
-// Ikon status + baris renderer pihak ketiga -> baris isi kotak kita.
+// Status icon + third-party lines -> our box content lines.
 const boxedRows = (icon: string, lines: string[]): string[] => {
 	const body = lines.filter((l) => !isBlankLine(l));
 	return body.length ? [`${icon} ${body[0]}`, ...body.slice(1)] : [icon];
 };
 
 /**
- * Bg tipis per tool (lihat juga toolPendingBg/toolSuccessBg untuk `todo`).
- * `memory_write` pakai customMessageBg: tipis, nuansa violet = "catatan", cukup
- * beda dari kotak progres lain yang polos. Ganti jadi `name.startsWith("memory_")`
- * kalau semua tool memori mau ikut.
+ * Subtle per-tool bg (see also toolPendingBg/toolSuccessBg for `todo`).
+ * `memory_write` uses customMessageBg: thin, violet-ish = "note", just distinct
+ * from the plain progress boxes. Use `name.startsWith("memory_")` to cover all
+ * memory tools.
  */
 export const boxBgOf = (name: string): string | undefined => (name === "memory_write" ? "customMessageBg" : undefined);
 
@@ -315,6 +313,17 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	const origResult = proto.getResultRenderer;
 	const origShell = proto.getRenderShell;
 	const hasOwnRenderer = (self: any): boolean => Boolean(origCall.call(self) || origResult.call(self));
+
+	// A tool call with no registered definition (e.g. an unknown tool name that
+	// errored with "Tool X not found") makes hasRendererDefinition() false, so the
+	// constructor adds the plain contentText fallback and updateDisplay() never calls
+	// getCallRenderer/getResultRenderer — our patch is bypassed and the call renders
+	// as bare name + pretty-printed args. Claim those calls as defined so they take
+	// the same box path as any other renderer-less tool.
+	const origHasRendererDefinition = proto.hasRendererDefinition;
+	proto.hasRendererDefinition = function (): boolean {
+		return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
+	};
 
 	proto.getRenderShell = function (): string {
 		if (pakaiCallMereka(this.toolName)) return "self";
@@ -342,18 +351,18 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	proto.getResultRenderer = function () {
 		const name: string = this.toolName;
 		const own = origResult.call(this);
-		// MCP: renderer hasil mereka sengaja dilewati (dump tak terbatas saat error).
+		// MCP: their result renderer is deliberately skipped (unbounded error dump).
 		if (own && !pakaiCallMereka(name)) return own;
 		const boxed = BOXED_TOOLS.has(name);
 		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
 			if (opts.isPartial) return EMPTY;
 			((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
 			const text = textOf(result);
-			// pi-web-access melaporkan kegagalan lewat `details.error` tanpa melempar,
-			// jadi ctx.isError saja tidak cukup: tanpa ini kotak error tampil dengan ✓.
+			// pi-web-access reports failure via `details.error` without throwing, so
+			// ctx.isError alone is not enough: without this the error box shows ✓.
 			const isErr = Boolean(ctx.isError || result.isError || (result.details as { error?: unknown } | undefined)?.error);
-			// Error pakai jalur kita sendiri: kotak error bawaan pi-web-access = kotak
-			// di dalam kotak. Isi renderer mereka hanya dipakai saat sukses.
+			// Errors use our own path: pi-web-access' own error box is a box inside a
+			// box. Their renderer content is only used on success.
 			const theirs =
 				boxed && !isErr
 					? own.call(this, { content: result.content, details: result.details }, opts, th, ctx)
@@ -364,7 +373,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
 				if (name === "todo" && boxed2.length) {
-					// Hasil call todo (status completed / in_progress)
+					// todo call result (status completed / in_progress)
 					const callComp = origCall.call(this)?.call(this, ctx.args, th, ctx);
 					const callLines = componentLines(callComp, width - 6);
 					const combined = [...callLines, ...boxed2];
@@ -386,7 +395,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
 				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, tint)}` : ""}${hint}`);
 				if (opts.expanded && more) {
-					// Args MCP tidak terlihat lagi setelah kotak call tergantikan hasil.
+					// MCP args are gone once the call box is replaced by the result.
 					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
 					rows.push(...fullText(result, th, inner));
 				}
@@ -396,7 +405,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	};
 }
 
-// Format khusus baris todo: ikon \uf14a (warna sukses) di judul, prefix resHead di baris status.
+// todo line format: \uf14a icon (success color) in the title, resHead prefix on the status line.
 const formatTodoRows = (lines: string[], th: Theme): string[] => {
 	const icon = th.fg("success", "\uf14a");
 	const head = resHead(th);
@@ -414,11 +423,11 @@ const formatTodoRows = (lines: string[], th: Theme): string[] => {
 };
 
 
-// Satu jalur render untuk semua tool (tanpa duplikasi per tool).
-// renderCall = kotak running (󰔟); renderResult = kotak final (✓/x + durasi kanan
-// judul + 󱞩 ringkasan); state.hasResult ditulis renderResult dan dibaca saat
-// render() -> tepat satu kotak, juga setelah reload/restore. res & full
-// opsional (default: baris pertama output / detail dim).
+// One render path for all tools (no per-tool duplication).
+// renderCall = running box (󰔟); renderResult = final box (✓/x + right-aligned
+// duration + 󱞩 summary); state.hasResult is written by renderResult and read at
+// render() -> exactly one box, also after reload/restore. res & full are optional
+// (default: first output line / dim detail).
 function minimal(
 	pi: ExtensionAPI,
 	tool: { execute: (...a: any[]) => Promise<any> } & Record<string, unknown>,
@@ -496,7 +505,7 @@ function minimal(
 }
 
 function arnativeTools(pi: ExtensionAPI) {
-	// Sumber render ulang untuk animasi ikon + bersih-bungkus ticker saat sesi tutup
+	// Re-render source for the spinner + ticker cleanup when the session closes
 	pi.on("session_start", async (_event, ctx) => {
 		requestRenderFn = () => {
 			try {
@@ -514,9 +523,9 @@ function arnativeTools(pi: ExtensionAPI) {
 		requestRenderFn = null;
 	});
 
-	// Gap antar kotak dirapatkan hanya untuk kotak kita (lihat OWN_BOX di atas).
+	// Gap is only stripped for our own boxes (see OWN_BOX above).
 
-	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>  0.1s`
+	// bash: `󰔟 $ <6 words>…` / `✓ $ <full title when expanded>  0.1s`
 	minimal(
 		pi,
 		createBashTool(cwd),
@@ -559,7 +568,7 @@ function arnativeTools(pi: ExtensionAPI) {
 		numRes((n) => `→ ${n} files`),
 	);
 
-	// write: `write path`, res default (baris pertama output)
+	// write: `write path`, default res (first output line)
 	minimal(
 		pi,
 		createWriteTool(cwd),
@@ -623,7 +632,7 @@ if (isMain) {
 	assert(paintLinks("ls extensions/tools.ts", mark) === "ls <extensions/tools.ts>", "filter path relatif");
 	assert(paintLinks("echo plain 2>&1", mark) === "echo plain 2>&1", "teks polos tak tersentuh");
 
-	// durasi rata kanan judul, space-aware (regresi bug overflow)
+	// right-aligned duration, space-aware (overflow bug regression)
 	const t1 = titleRow(th, "✓", "$", "echo hi", 30, "0.1s", false);
 	assert(t1.length === 1 && visibleWidth(t1[0]) === 30, "durasi rata kanan pas selebar inner");
 	assert(t1[0].endsWith("0.1s"), "durasi di ujung kanan judul");
@@ -634,7 +643,7 @@ if (isMain) {
 	const t4 = titleRow(th, "✓", "$", "echo hi", 30, "", false);
 	assert(!t4[0].includes("0.1s"), "tanpa durasi: kosong (restore sesi lama)");
 
-	// anti duplikat ringkasan
+	// no duplicate summary
 	assert(resText(R, th, (s) => s, false, true) === "", "expand: ringkasan kosong");
 	assert(resText(R, th, (s) => s, false, false) === "󱞩 path:1:match a", "collapsed: baris pertama tampil");
 	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, false, false) === "󱞩 → 3 matches", "grep: N matches");
@@ -644,13 +653,36 @@ if (isMain) {
 		"error: jatuh ke baris pertama",
 	);
 
-	// gap antar kotak dibuang
+	// inter-box gap stripped
 	assert(stripBlankEdges(["", "a", "", "b", "  ", ""]).join() === "a,,b", "baris kosong tepi dibuang");
 	assert(stripBlankEdges(["", "\x1b[2m\x1b[22m", "x"]).join() === "x", "baris ANSI kosong = blank");
 	assert(stripBlankEdges(["a"]).join() === "a", "tanpa blank tetap utuh");
 
-	// tool tanpa renderer sendiri -> kotak yang sama (memory_write dll.)
+	// tools without their own renderer -> same box (memory_write etc.)
 	const noRenderer = { toolName: "memory_write", toolDefinition: {} };
+	// tool with no definition (e.g. "Tool glob not found") -> still a box, not plain text
+	const noDefinition = { toolName: "glob", toolDefinition: undefined, expanded: false };
+	assert(
+		ToolExecutionComponent.prototype.hasRendererDefinition.call(noDefinition) === true &&
+			ToolExecutionComponent.prototype.getRenderShell.call(noDefinition) === "self",
+		"tool tanpa definisi: shell self (kotak kita, bukan fallback polos)",
+	);
+	assert(
+		ToolExecutionComponent.prototype.hasRendererDefinition.call({ toolName: "x", toolDefinition: {} }) === true,
+		"tool dengan definisi tetap punya renderer",
+	);
+	const noDefOut = (ToolExecutionComponent.prototype.getResultRenderer.call(noDefinition) as any)(
+		{ content: [{ type: "text", text: '{\n  "pattern": "**/*.ts"\n}\nTool glob not found' }] },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { pattern: "**/*.ts" }, state: {} },
+	).render(60);
+	assert(noDefOut[0].startsWith("\u256d") && noDefOut[noDefOut.length - 1].startsWith("\u2570"), "tool tanpa definisi: hasil dibungkus kotak");
+	assert(
+		noDefOut.some((l: string) => l.includes("\u2713 glob")) &&
+			noDefOut.some((l: string) => l.includes('[ctrl+o to expand]')),
+		"tool tanpa definisi: judul + ringkasan + expand hint",
+	);
 	const withRenderer = { toolName: "bash", toolDefinition: { renderResult: () => undefined } };
 	assert(ToolExecutionComponent.prototype.getRenderShell.call(noRenderer) === "self", "tool polos -> shell self");
 	assert(
@@ -680,7 +712,7 @@ if (isMain) {
 	);
 	assert(toolSummary("memory_write", "Appended to MEMORY.md") === "Appended to MEMORY.md", "ballast: ringkasan biasa utuh");
 
-	// bg tipis pembeda: hanya memory_write
+	// distinct subtle bg: memory_write only
 	assert(boxBgOf("memory_write") === "customMessageBg", "memory_write -> bg customMessageBg");
 	assert(boxBgOf("bash") === undefined && boxBgOf("todo") === undefined, "tool lain tanpa bg tambahan");
 	const bgSeen: string[] = [];
@@ -756,9 +788,9 @@ if (isMain) {
 		"pi-web-access: baris args renderer mereka masuk kotak",
 	);
 
-	// Guard: source_check SENGAJA tidak dipaksa — fase partial kurator
-	// memuat URL + status persetujuan, sedangkan jalur partial kita mengosongkan.
-	// Tanpa assert ini, penyuntingan BOXED_TOOLS di kemudian hari bisa menelannya diam-diam.
+	// Guard: source_check is deliberately NOT boxed — its curator partial carries
+	// URLs + approval state, while our partial path returns nothing. Without this
+	// assert a later edit of BOXED_TOOLS would swallow it silently.
 	for (const n of ["source_check"]) {
 		const theirs = () => "renderer-mereka";
 		assert(
@@ -768,8 +800,8 @@ if (isMain) {
 		);
 	}
 
-	// pi-mcp-adapter: hasilnya TIDAK pakai renderer mereka (dump error tak terbatas)
-	// -> ringkasan 1 baris + [ctrl+o to expand], tool yang dipanggil tetap terlihat.
+	// pi-mcp-adapter: result does NOT use their renderer (unbounded error dump)
+	// -> 1-line summary + [ctrl+o to expand]; the invoked tool stays visible.
 	const mcpTheirs = () => "renderer-mcp";
 	const mcpTool = { toolName: "mcp", toolDefinition: { renderCall: mcpTheirs, renderResult: mcpTheirs } };
 	assert(
@@ -805,8 +837,8 @@ if (isMain) {
 	).render(96);
 	assert(mcpFull.length > mcpOut.length, "mcp: expand menampilkan dump + args lengkap");
 
-	// Gap antar kotak: dirapatkan HANYA untuk baris kotak kita sendiri.
-	// Registrasi tool (default export) yang mengisi OWN_BOX; stub pi cukup.
+	// Gap is only stripped for our own box lines.
+	// The default export registers the tools (filling OWN_BOX); a pi stub suffices.
 	arnativeTools({
 		registerTool: () => {},
 		on: () => {},
@@ -854,7 +886,7 @@ if (isMain) {
 		"expand: detail lengkap ikut tampil",
 	);
 
-	// bug 󰔟 tertinggal (restore-safe)
+	// stale 󰔟 box regression (restore-safe)
 	const st: Record<string, unknown> = {};
 	const comp = new Lines(() => (st.hasResult ? [] : ["row"]));
 	assert(comp.render(10).length === 1, "running: kotak 󰔟 tampil");
@@ -868,7 +900,7 @@ if (isMain) {
 	syncTicker();
 	assert(TICK === null, "ticker mati saat idle (tanpa leak timer)");
 
-	// Test render tool todo: \uf14a + 2 baris (judul & status) + kotak background
+	// todo render: \uf14a + 2 lines (title & status) + background box
 	const todoCall = () => ({ render: () => ["todo → Test subject"] });
 	const todoResult = () => ({ render: () => ["● completed"] });
 	const todoTool = { toolName: "todo", toolDefinition: { renderCall: todoCall, renderResult: todoResult } };
@@ -890,7 +922,7 @@ if (isMain) {
 	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: ikon \uf14a di baris 1");
 	assert(todoResultOut.some((l: string) => l.includes("● completed")), "todo result: status dengan prefix resHead di baris 2");
 
-	// Detail expand: markdown ber-tema, teks error utuh & tidak lagi polos dim.
+	// Expanded detail: themed markdown, error text intact and no longer plain dim.
 	const errDetail = fullText(
 		{ content: [{ type: "text", text: '{\n  "pattern": "**/*.ts"\n}\nTool glob not found' }], isError: true },
 		th,
