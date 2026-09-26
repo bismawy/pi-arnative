@@ -1,12 +1,12 @@
 /**
  * Tool output minimal ala Codex CLI / Claude Code, tiap tool call dalam kotak:
- *   ┌────────────────────────────┐
+ *   ╭────────────────────────────╮
  *   │ 󰔟 $ cmd smart…             │  running (ikon status, hilang saat selesai)
- *   └────────────────────────────┘
- *   ┌────────────────────────────┐
+ *   ╰────────────────────────────╯
+ *   ╭────────────────────────────╮
  *   │ ✓ $ cmd smart…      0.1s   │  final, collapsed; durasi rata kanan judul
  *   │ 󱞩 baris-pertama-output     │
- *   └────────────────────────────┘
+ *   ╰────────────────────────────╯
  * Klik / ctrl+e = judul penuh + detail (output = dim; edit = diff toolDiff*).
  * Ringkasan collapsed: bash/write `󱞩 baris pertama output`; grep/find/read
  * ringkasan angka (→ N matches / → N files / N lines); edit `󱞩 +N / -M`.
@@ -48,7 +48,7 @@ type Res = (r: TResult, th: Theme, tint: (s: string) => string, isErr: boolean, 
 const cwd = process.cwd();
 const TIMINGS = new Map<string, number>(); // durasi ms per tool call (sekali jalan)
 
-// Animasi ikon running 󰔟 󱦠 󱦟: frame berputar per 150ms via ticker yang hidup
+// Animasi ikon running 󰔟 󱦠 󱦟: frame berputar per 500ms via ticker yang hidup
 // HANYA selama ada tool berjalan (idle = tanpa render ulang boros).
 const FRAMES = ["󰔟", "󱦠", "󱦟"];
 let ACTIVE = 0;
@@ -57,7 +57,7 @@ let requestRenderFn: (() => void) | null = null;
 
 function syncTicker(): void {
 	if (ACTIVE > 0 && !TICK) {
-		TICK = setInterval(() => requestRenderFn?.(), 150);
+		TICK = setInterval(() => requestRenderFn?.(), 500);
 	} else if (ACTIVE <= 0 && TICK) {
 		clearInterval(TICK);
 		TICK = null;
@@ -688,7 +688,7 @@ if (isMain) {
 	const bgLines = box(thBgMem, 20, ["memory_write  0.1s", "󱞩 Appended to MEMORY.md"], boxBgOf("memory_write"));
 	assert(bgSeen.length === bgLines.length && bgSeen.every((c) => c === "customMessageBg"), "bg dipakai di semua baris kotak");
 	assert(bgLines.every((l) => visibleWidth(l.replace(/[<>]/g, "")) === 20), "bg tidak merusak lebar baris kotak");
-	assert(bgLines[0]!.replace(/[<>]/g, "").startsWith("┌"), "garis atas tetap utuh");
+	assert(bgLines[0]!.replace(/[<>]/g, "").startsWith("╭"), "garis atas tetap utuh");
 
 	// pi-web-access web_search/fetch_content/get_search_content: isi renderer mereka, kotak kita
 	const paResult: any = { render: () => ["\x1b[32mPi Coding Agent\x1b[39m (77 matches, 77 shown)"] };
@@ -716,7 +716,7 @@ if (isMain) {
 		th,
 		{ args: {} },
 	).render(60);
-	assert(bOut[0].startsWith("┌") && bOut[bOut.length - 1].startsWith("└"), "pi-web-access: hasil dibungkus kotak kita");
+	assert(bOut[0].startsWith("╭") && bOut[bOut.length - 1].startsWith("╰"), "pi-web-access: hasil dibungkus kotak kita");
 	assert(bOut.some((l: string) => l.includes("(77 matches, 77 shown)")), "pi-web-access: info renderer mereka dipertahankan");
 	assert(!bOut.some((l: string) => l.includes("raw panjang")), "pi-web-access: teks mentah tidak dipakai saat renderer ada");
 	assert(
@@ -741,7 +741,7 @@ if (isMain) {
 	).render(60);
 	assert(
 		bErr.some((l: string) => l.includes("No URL specified")) &&
-			bErr.filter((l: string) => l.includes("┌")).length === 1,
+			bErr.filter((l: string) => l.includes("╭")).length === 1,
 		"error: satu kotak saja (tanpa kotak bersarang)",
 	);
 	assert(
@@ -752,7 +752,7 @@ if (isMain) {
 	const bCall = ToolExecutionComponent.prototype.getCallRenderer.call(boxedRes) as any;
 	const bCallOut = bCall({}, th, { args: {}, state: {} }).render(60);
 	assert(
-		bCallOut[0].startsWith("┌") && bCallOut.some((l: string) => l.includes("find 4")),
+		bCallOut[0].startsWith("╭") && bCallOut.some((l: string) => l.includes("find 4")),
 		"pi-web-access: baris args renderer mereka masuk kotak",
 	);
 
@@ -838,7 +838,7 @@ if (isMain) {
 		th,
 		ctxState,
 	).render(60);
-	assert(out[0].startsWith("┌") && out[out.length - 1].startsWith("└"), "hasil tool polos dibungkus kotak");
+	assert(out[0].startsWith("╭") && out[out.length - 1].startsWith("╰"), "hasil tool polos dibungkus kotak");
 	assert(
 		out.some((l: string) => l.includes("Appended to MEMORY.md. ## Judul")),
 		"kotak memuat ringkasan + judul",
