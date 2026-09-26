@@ -2,6 +2,17 @@
 
 Paket Pi: tema aksen cyan plus footer jam dan model yang dipakai.
 
+## Prasyarat
+
+**Install [JetBrains Mono Nerd Font](https://www.nerdfonts.com/font-downloads) dulu sebelum memakai paket ini.**
+
+Seluruh ikon di paket ini (ikon tab header `󰋖 󰺨 󰰡 󰹲`, ikon tool `󰔟 󱞩 ✓`, ikon footer `󰃭 󰍛 󰣇`, logo kotak, sudut kotak bulat `╭─╮`) adalah glyph Nerd Font — tanpa font ini ikon tampil sebagai kotak kosong (□) atau karakter acak.
+
+Pasang:
+1. Unduh **JetBrainsMono Nerd Font** dari [nerdfonts.com/font-downloads](https://www.nerdfonts.com/font-downloads).
+2. Ekstrak lalu install font-nya (Linux: salin ke `~/.local/share/fonts/` lalu `fc-cache -f`; Windows: klik kanan → Install).
+3. Set terminal Anda memakai **JetBrainsMono NF** (atau varian Nerd Font lain) sebagai font utama.
+
 ## Isi
 
 - `themes/arnative.json` — salinan tema dark; ubahan: `vars.accent` jadi `#00d7ff` plus slot `tint` (`vars.softCyan` `#7db9cd`) untuk teks nilai yang lembut.
