@@ -75,32 +75,55 @@ export function getModelAllTimeUsage(
 	let out = 0;
 	let read = 0;
 
-	// 1. Baca cache all-time dari usage-extension-cache.json (dibuat oleh /usage)
+	// 1. Baca cache all-time dari arnative-usage-cache.json atau usage-extension-cache.json
 	try {
-		const cachePath = join(getAgentDir(), "usage-extension-cache.json");
-		if (existsSync(cachePath)) {
-			const cache = JSON.parse(readFileSync(cachePath, "utf8")) as {
-				names?: string[];
-				files?: Record<string, { messages?: unknown[][] }>;
-			};
-			if (cache && Array.isArray(cache.names) && cache.files) {
-				const names = cache.names;
-				const target = (modelId || "").toLowerCase();
-				for (const file of Object.values(cache.files)) {
-					if (!file?.messages || !Array.isArray(file.messages)) continue;
-					for (const m of file.messages) {
-						if (!Array.isArray(m) || m.length < 6) continue;
-						const mName = String(names[m[1] as number] || "").toLowerCase();
-						const matches =
-							!target ||
-							mName === target ||
-							mName.endsWith("/" + target) ||
-							mName.split(":")[0] === target ||
-							target.endsWith("/" + mName);
-						if (matches) {
-							inp += Number(m[3]) || 0;
-							out += Number(m[4]) || 0;
-							read += Number(m[5]) || 0;
+		const arnativeCache = join(getAgentDir(), "arnative-usage-cache.json");
+		if (existsSync(arnativeCache)) {
+			const cache = JSON.parse(readFileSync(arnativeCache, "utf8")) as Record<string, { entries?: Array<{ model: string; input: number; output: number; cacheRead: number }> }>;
+			const target = (modelId || "").toLowerCase();
+			for (const file of Object.values(cache)) {
+				if (!file?.entries) continue;
+				for (const ent of file.entries) {
+					const mName = (ent.model || "").toLowerCase();
+					const matches =
+						!target ||
+						mName === target ||
+						mName.endsWith("/" + target) ||
+						mName.split(":")[0] === target ||
+						target.endsWith("/" + mName);
+					if (matches) {
+						inp += ent.input || 0;
+						out += ent.output || 0;
+						read += ent.cacheRead || 0;
+					}
+				}
+			}
+		} else {
+			const cachePath = join(getAgentDir(), "usage-extension-cache.json");
+			if (existsSync(cachePath)) {
+				const cache = JSON.parse(readFileSync(cachePath, "utf8")) as {
+					names?: string[];
+					files?: Record<string, { messages?: unknown[][] }>;
+				};
+				if (cache && Array.isArray(cache.names) && cache.files) {
+					const names = cache.names;
+					const target = (modelId || "").toLowerCase();
+					for (const file of Object.values(cache.files)) {
+						if (!file?.messages || !Array.isArray(file.messages)) continue;
+						for (const m of file.messages) {
+							if (!Array.isArray(m) || m.length < 6) continue;
+							const mName = String(names[m[1] as number] || "").toLowerCase();
+							const matches =
+								!target ||
+								mName === target ||
+								mName.endsWith("/" + target) ||
+								mName.split(":")[0] === target ||
+								target.endsWith("/" + mName);
+							if (matches) {
+								inp += Number(m[3]) || 0;
+								out += Number(m[4]) || 0;
+								read += Number(m[5]) || 0;
+							}
 						}
 					}
 				}
