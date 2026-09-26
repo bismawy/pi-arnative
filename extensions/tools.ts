@@ -37,6 +37,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
+import { renderBoxLines as box } from "../lib/box.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
@@ -406,36 +407,6 @@ const formatTodoRows = (lines: string[], th: Theme): string[] => {
 	return out;
 };
 
-const boxEdge = (l: string, r: string, width: number, dim: (s: string) => string): string =>
-	dim(`${l}${"─".repeat(Math.max(0, width - 2))}${r}`);
-
-const boxRow = (content: string, width: number, dim: (s: string) => string): string => {
-	const pad = Math.max(0, width - visibleWidth(content) - 4);
-	return `${dim("│")} ${content}${" ".repeat(pad)} ${dim("│")}`;
-};
-
-const applyBg = (line: string, width: number, bgFn: (text: string) => string): string => {
-	const pad = Math.max(0, width - visibleWidth(line));
-	return bgFn(line + " ".repeat(pad));
-};
-
-function box(theme: Theme, width: number, rows: string[], bgType?: string): string[] {
-	const dim = (s: string) => theme.fg("dim", s);
-	const inner = Math.max(8, width - 4);
-	const lines = [boxEdge("┌", "┐", width, dim)];
-	for (const row of rows) {
-		for (const line of wrapTextWithAnsi(row, inner)) lines.push(boxRow(line, width, dim));
-	}
-	lines.push(boxEdge("└", "┘", width, dim));
-	if (bgType && theme.bg) {
-		try {
-			return lines.map((l) => applyBg(l, width, (s) => theme.bg!(bgType, s)));
-		} catch {
-			return lines;
-		}
-	}
-	return lines;
-}
 
 // Satu jalur render untuk semua tool (tanpa duplikasi per tool).
 // renderCall = kotak running (󰔟); renderResult = kotak final (✓/x + durasi kanan

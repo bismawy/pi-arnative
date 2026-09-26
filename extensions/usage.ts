@@ -8,8 +8,9 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { DynamicBorder, getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { boxDim, boxEdge, boxRow } from "../lib/box.ts";
 
 export interface UsageEntry {
 	provider: string;
@@ -509,14 +510,13 @@ export class UsageModalComponent implements Component {
 	render(width: number): string[] {
 		const th = this.theme;
 		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		const boxW = Math.min(width, 91);
-		const innerW = boxW - 2;
-
-		const dash = "─".repeat(innerW);
-		const topBorder = th.fg("dim", `╭${dash}╮`);
-		const divBorder = th.fg("dim", `├${dash}┤`);
-		const botBorder = th.fg("dim", `╰${dash}╯`);
-		const side = th.fg("dim", "│");
+		// Kotak ala kolom chat arnative (┌─┐ │ │ └─┘) membungkus judul + tabel + hint
+		// Border dari lib/box.ts (satu definisi, sama dengan kotak tool call).
+		const boxW = Math.min(width, 93);
+		const dim = boxDim(th);
+		const hline = (l: string, r: string) => boxEdge(l, r, boxW, dim);
+		const row = (text: string) => boxRow(text, boxW, dim);
+		const rule = () => row(dim("─".repeat(Math.max(0, boxW - 4))));
 
 		const rows = this.buildFlatRows();
 		if (this.selectedIndex >= rows.length) {
@@ -541,14 +541,6 @@ export class UsageModalComponent implements Component {
 			return alignRight ? " ".repeat(diff) + str : str + " ".repeat(diff);
 		};
 
-		const out: string[] = [];
-		const accentBorder = new DynamicBorder((s) => th.fg("accent", s));
-		out.push(...accentBorder.render(width));
-		out.push(th.fg("accent", bold("LLM Usage")));
-		out.push(th.fg("muted", "Token, message & cache usage across all local Pi sessions."));
-		out.push("");
-		out.push(topBorder);
-
 		// Header Table
 		const headerText =
 			"  " +
@@ -561,9 +553,13 @@ export class UsageModalComponent implements Component {
 			formatCol(th.fg("dim", "Cache"), colW.cache) +
 			formatCol(th.fg("dim", "Cost"), colW.cost);
 
-		const padHdr = Math.max(0, innerW - visibleWidth(headerText));
-		out.push(side + headerText + " ".repeat(padHdr) + side);
-		out.push(divBorder);
+		const out: string[] = [];
+		out.push(hline("┌", "┐"));
+		out.push(row("  " + th.fg("accent", bold("LLM Usage"))));
+		out.push(row("  " + th.fg("muted", "Token, message & cache usage across all local Pi sessions.")));
+		out.push(row(""));
+		out.push(row(headerText));
+		out.push(rule());
 
 		// Baris data (dengan batas tinggi tampilan agar tidak overflow)
 		const maxVisibleRows = 16;
@@ -574,29 +570,27 @@ export class UsageModalComponent implements Component {
 		const visibleRows = rows.slice(startIdx, startIdx + maxVisibleRows);
 
 		for (let i = 0; i < visibleRows.length; i++) {
-			const row = visibleRows[i]!;
+			const item = visibleRows[i]!;
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			const nameColor = isSelected ? "accent" : row.type === "provider" ? "tint" : "text";
+			const nameColor = isSelected ? "accent" : item.type === "provider" ? "tint" : "text";
 			const valColor = isSelected ? "accent" : "dim";
 
-			const cName = formatCol(th.fg(nameColor, isSelected ? bold(row.label) : row.label), colW.name, false);
-			const cSess = formatCol(th.fg(valColor, formatCount(row.sessions)), colW.sessions);
-			const cMsgs = formatCol(th.fg(valColor, formatCount(row.msgs)), colW.msgs);
-			const cToks = formatCol(th.fg(valColor, formatTokens(row.tokens)), colW.tokens);
-			const cInp = formatCol(th.fg(valColor, formatTokens(row.input)), colW.inp);
-			const cOut = formatCol(th.fg(valColor, formatTokens(row.output)), colW.out);
-			const cCache = formatCol(th.fg(valColor, formatTokens(row.cacheRead)), colW.cache);
-			const cCost = formatCol(th.fg(valColor, formatCost(row.cost)), colW.cost);
+			const cName = formatCol(th.fg(nameColor, isSelected ? bold(item.label) : item.label), colW.name, false);
+			const cSess = formatCol(th.fg(valColor, formatCount(item.sessions)), colW.sessions);
+			const cMsgs = formatCol(th.fg(valColor, formatCount(item.msgs)), colW.msgs);
+			const cToks = formatCol(th.fg(valColor, formatTokens(item.tokens)), colW.tokens);
+			const cInp = formatCol(th.fg(valColor, formatTokens(item.input)), colW.inp);
+			const cOut = formatCol(th.fg(valColor, formatTokens(item.output)), colW.out);
+			const cCache = formatCol(th.fg(valColor, formatTokens(item.cacheRead)), colW.cache);
+			const cCost = formatCol(th.fg(valColor, formatCost(item.cost)), colW.cost);
 
 			const prefix = isSelected ? th.fg("accent", "▸ ") : "  ";
-			const rowLine = prefix + cName + cSess + cMsgs + cToks + cInp + cOut + cCache + cCost;
-			const padRow = Math.max(0, innerW - visibleWidth(rowLine));
-			out.push(side + rowLine + " ".repeat(padRow) + side);
+			out.push(row(prefix + cName + cSess + cMsgs + cToks + cInp + cOut + cCache + cCost));
 		}
 
-		out.push(divBorder);
+		out.push(rule());
 
 		// Total Row
 		const t = this.summary.totals;
@@ -609,16 +603,11 @@ export class UsageModalComponent implements Component {
 		const totalCache = formatCol(th.fg("tint", bold(formatTokens(t.cacheRead))), colW.cache);
 		const totalCost = formatCol(th.fg("tint", bold(formatCost(t.cost))), colW.cost);
 
-		const totalLine = "  " + totalName + totalSess + totalMsgs + totalToks + totalInp + totalOut + totalCache + totalCost;
-		const padTotal = Math.max(0, innerW - visibleWidth(totalLine));
-		out.push(side + totalLine + " ".repeat(padTotal) + side);
+		out.push(row("  " + totalName + totalSess + totalMsgs + totalToks + totalInp + totalOut + totalCache + totalCost));
 
-		out.push(botBorder);
-
-		// Footer Petunjuk Navigasi
-		const hint = th.fg("dim", "[↑↓] Navigation  [Enter] Open/close  [q/Esc] Exit");
-		out.push("  " + hint);
-		out.push(...accentBorder.render(width));
+		out.push(row(""));
+		out.push(row("  " + th.fg("dim", "[↑↓] Navigation  [Enter] Open/close  [q/Esc] Exit")));
+		out.push(hline("└", "┘"));
 
 		return out.map((line) => truncateToWidth(line, width, ""));
 	}
@@ -672,11 +661,18 @@ if (isMain) {
 	const modal = new UsageModalComponent(fakeTheme, () => {}, () => {});
 	const lines = modal.render(100);
 	assert(lines.length >= 10, "render modal menghasilkan baris-baris tabel");
-	assert(lines[0]!.includes("─") && !lines[0]!.includes("╭"), "garis aksen atas full-width");
-	assert(lines[lines.length - 1]!.includes("─"), "garis aksen bawah full-width");
-	assert(lines[1]!.includes("LLM Usage"), "judul LLM Usage tepat di bawah garis aksen atas");
+	assert(lines[0]!.includes("┌") && lines[0]!.includes("┐"), "kotak chat: border atas");
+	assert(lines[1]!.includes("LLM Usage"), "judul LLM Usage di dalam kotak");
 	assert(lines[2]!.includes("sessions"), "deskripsi di bawah judul");
-	assert(lines[4]!.includes("╭") && lines[4]!.includes("╮"), "top border rounded");
+	assert(lines[lines.length - 1]!.includes("└") && lines[lines.length - 1]!.includes("┘"), "kotak chat: border bawah");
+	assert(
+		lines.every((l) => visibleWidth(l) <= 100),
+		"semua baris muat dalam lebar 100",
+	);
+	assert(
+		lines.every((l) => l.includes("┌") || l.includes("│") || l.includes("└")),
+		"tidak ada baris tanpa sisi kotak (garis aksen hilang)",
+	);
 
 	console.log("usage.ts self-check OK");
 }

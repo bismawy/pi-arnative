@@ -30,13 +30,12 @@ import {
 	Spacer,
 	Text,
 	TuiAltScreen,
-	visibleWidth,
-	wrapTextWithAnsi,
 	type Component,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
+import { renderBoxLines } from "../lib/box.ts";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
@@ -181,20 +180,7 @@ export default function uiRenderTweaks(pi: ExtensionAPI) {
 	});
 }
 
-// Helper border box ala arnative
-export function renderBoxLines(theme: { fg(c: string, t: string): string; bg?(c: string, t: string): string }, width: number, rows: string[]): string[] {
-	const dim = (s: string) => theme.fg("dim", s);
-	const inner = Math.max(8, width - 4);
-	const lines = [`${dim("┌")}${dim("─".repeat(Math.max(0, width - 2)))}${dim("┐")}`];
-	for (const row of rows) {
-		for (const line of wrapTextWithAnsi(row, inner)) {
-			const pad = Math.max(0, width - visibleWidth(line) - 4);
-			lines.push(`${dim("│")} ${line}${" ".repeat(pad)} ${dim("│")}`);
-		}
-	}
-	lines.push(`${dim("└")}${dim("─".repeat(Math.max(0, width - 2)))}${dim("┘")}`);
-	return lines;
-}
+// Helper border box ala arnative -> lib/box.ts (satu definisi untuk semua kotak)
 
 export class JevReviewBoxComponent implements Component {
 	private text: string;
