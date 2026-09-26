@@ -38,7 +38,7 @@ import {
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
-type Theme = { fg(color: string, text: string): string };
+type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
 type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown> };
 type Res = (r: TResult, th: Theme, tint: (s: string) => string, isErr: boolean, expanded: boolean) => string;
@@ -244,9 +244,12 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 // hanya dibungkus kotak kita. `web_search`/`source_check` sengaja TIDAK dipaksa:
 // fase partial-nya (kurator: URL + status persetujuan) akan hilang karena jalur
 // partial kita mengembalikan kosong.
+// Tool `todo` (@juicesharp/rpiv-todo) dibungkus kotak dengan ikon check-square (\uf14a)
+// dan background tema toolPendingBg/toolSuccessBg.
 const BOXED_TOOLS = new Map([
 	["fetch_content", "fetch"],
 	["get_search_content", "get_content"],
+	["todo", "todo"],
 ]);
 const displayName = (name: string): string => BOXED_TOOLS.get(name) ?? name;
 for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
@@ -288,6 +291,14 @@ const boxedRows = (icon: string, lines: string[]): string[] => {
 	return body.length ? [`${icon} ${body[0]}`, ...body.slice(1)] : [icon];
 };
 
+/**
+ * Bg tipis per tool (lihat juga toolPendingBg/toolSuccessBg untuk `todo`).
+ * `memory_write` pakai customMessageBg: tipis, nuansa violet = "catatan", cukup
+ * beda dari kotak progres lain yang polos. Ganti jadi `name.startsWith("memory_")`
+ * kalau semua tool memori mau ikut.
+ */
+export const boxBgOf = (name: string): string | undefined => (name === "memory_write" ? "customMessageBg" : undefined);
+
 const DEFAULT_TOOL_KEY = Symbol.for("pi-arnative.defaultToolBox");
 if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY]) {
 	(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY] = true;
@@ -311,10 +322,12 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
 				const icon = th.fg("warning", spinIcon());
 				const theirs = own ? componentLines(own.call(this, args, th, ctx), width - 6) : [];
+				if (name === "todo" && theirs.length)
+					return box(th, width, formatTodoRows(theirs), "toolPendingBg");
 				if (pakaiCallMereka(name) && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
-				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false));
+				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false), boxBgOf(name));
 			});
 	};
 
@@ -342,6 +355,14 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const inner = Math.max(8, width - 4);
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
+				if (name === "todo" && boxed2.length) {
+					// Hasil call todo (status completed / in_progress)
+					const callComp = origCall.call(this)?.call(this, ctx.args, th, ctx);
+					const callLines = componentLines(callComp, width - 6);
+					const combined = [...callLines, ...boxed2];
+					const bgType = isErr ? "toolErrorBg" : "toolSuccessBg";
+					return box(th, width, formatTodoRows(combined), bgType);
+				}
 				if (boxed2.length) return box(th, width, boxedRows(icon, boxed2));
 				const rows = titleRow(
 					th,
@@ -361,11 +382,27 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
 					rows.push(...fullText(result, th));
 				}
-				return box(th, width, rows);
+				return box(th, width, rows, boxBgOf(name));
 			});
 		};
 	};
 }
+
+// Format khusus baris todo: ikon \uf14a di judul, indent status baris kedua.
+const formatTodoRows = (lines: string[]): string[] => {
+	const icon = "\uf14a";
+	const out: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		let l = lines[i];
+		if (i === 0) {
+			l = l.replace(/^(\x1b\[[0-9;]*m)*todo\b/, `${icon} todo`);
+		} else {
+			l = `  ${l}`;
+		}
+		out.push(l);
+	}
+	return out;
+};
 
 const boxEdge = (l: string, r: string, width: number, dim: (s: string) => string): string =>
 	dim(`${l}${"─".repeat(Math.max(0, width - 2))}${r}`);
@@ -375,7 +412,12 @@ const boxRow = (content: string, width: number, dim: (s: string) => string): str
 	return `${dim("│")} ${content}${" ".repeat(pad)} ${dim("│")}`;
 };
 
-function box(theme: Theme, width: number, rows: string[]): string[] {
+const applyBg = (line: string, width: number, bgFn: (text: string) => string): string => {
+	const pad = Math.max(0, width - visibleWidth(line));
+	return bgFn(line + " ".repeat(pad));
+};
+
+function box(theme: Theme, width: number, rows: string[], bgType?: string): string[] {
 	const dim = (s: string) => theme.fg("dim", s);
 	const inner = Math.max(8, width - 4);
 	const lines = [boxEdge("┌", "┐", width, dim)];
@@ -383,6 +425,13 @@ function box(theme: Theme, width: number, rows: string[]): string[] {
 		for (const line of wrapTextWithAnsi(row, inner)) lines.push(boxRow(line, width, dim));
 	}
 	lines.push(boxEdge("└", "┘", width, dim));
+	if (bgType && theme.bg) {
+		try {
+			return lines.map((l) => applyBg(l, width, (s) => theme.bg!(bgType, s)));
+		} catch {
+			return lines;
+		}
+	}
 	return lines;
 }
 
@@ -652,6 +701,16 @@ if (isMain) {
 	);
 	assert(toolSummary("memory_write", "Appended to MEMORY.md") === "Appended to MEMORY.md", "ballast: ringkasan biasa utuh");
 
+	// bg tipis pembeda: hanya memory_write
+	assert(boxBgOf("memory_write") === "customMessageBg", "memory_write -> bg customMessageBg");
+	assert(boxBgOf("bash") === undefined && boxBgOf("todo") === undefined, "tool lain tanpa bg tambahan");
+	const bgSeen: string[] = [];
+	const thBgMem: Theme = { fg: (_c, s) => s, bg: (c, s) => (bgSeen.push(c), `<${s}>`) };
+	const bgLines = box(thBgMem, 20, ["memory_write  0.1s", "󱞩 Appended to MEMORY.md"], boxBgOf("memory_write"));
+	assert(bgSeen.length === bgLines.length && bgSeen.every((c) => c === "customMessageBg"), "bg dipakai di semua baris kotak");
+	assert(bgLines.every((l) => visibleWidth(l.replace(/[<>]/g, "")) === 20), "bg tidak merusak lebar baris kotak");
+	assert(bgLines[0]!.replace(/[<>]/g, "").startsWith("┌"), "garis atas tetap utuh");
+
 	// pi-web-access fetch_content/get_search_content: isi renderer mereka, kotak kita
 	const paResult: any = { render: () => ["\x1b[32mPi Coding Agent\x1b[39m (77 matches, 77 shown)"] };
 	const paCall: any = { render: () => ["\x1b[1mget_content \x1b[22m\x1b[36mfind 4\x1b[39m"] };
@@ -821,5 +880,27 @@ if (isMain) {
 	ACTIVE = 0;
 	syncTicker();
 	assert(TICK === null, "ticker mati saat idle (tanpa leak timer)");
+
+	// Test render tool todo: \uf14a + 2 baris (judul & status) + kotak background
+	const todoCall = () => ({ render: () => ["todo → Test subject"] });
+	const todoResult = () => ({ render: () => ["● completed"] });
+	const todoTool = { toolName: "todo", toolDefinition: { renderCall: todoCall, renderResult: todoResult } };
+	const thBg: Theme = {
+		fg: (_c, s) => s,
+		bg: (c, s) => `[bg:${c}]${s}[/bg]`,
+	};
+	const todoCallOut = (ToolExecutionComponent.prototype.getCallRenderer.call(todoTool) as any)({}, thBg, { state: {} }).render(60);
+	assert(todoCallOut[0].includes("[bg:toolPendingBg]"), "todo call: background pending");
+	assert(todoCallOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo call: ikon \uf14a di judul");
+
+	const todoResultOut = (ToolExecutionComponent.prototype.getResultRenderer.call(todoTool) as any)(
+		{ content: [] },
+		{ expanded: false, isPartial: false },
+		thBg,
+		{ state: {}, args: {} },
+	).render(60);
+	assert(todoResultOut[0].includes("[bg:toolSuccessBg]"), "todo result: background success");
+	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: ikon \uf14a di baris 1");
+	assert(todoResultOut.some((l: string) => l.includes("  ● completed")), "todo result: status indent di baris 2");
 	console.log("OK");
 }
