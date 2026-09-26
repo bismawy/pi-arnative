@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 export interface UsageEntry {
 	provider: string;
@@ -444,11 +444,11 @@ export class UsageModalComponent implements Component {
 
 	handleInput(keyData: string): void {
 		const rows = this.buildFlatRows();
-		if (keyData === "q" || keyData === "Q" || keyData === "\x1b") {
+		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q") || matchesKey(keyData, "escape")) {
 			this.onDone();
 			return;
 		}
-		if (keyData === "\x1b[A" || keyData === "k") {
+		if (matchesKey(keyData, "up") || matchesKey(keyData, "k")) {
 			// Up
 			if (this.selectedIndex > 0) {
 				this.selectedIndex--;
@@ -456,7 +456,7 @@ export class UsageModalComponent implements Component {
 			}
 			return;
 		}
-		if (keyData === "\x1b[B" || keyData === "j") {
+		if (matchesKey(keyData, "down") || matchesKey(keyData, "j")) {
 			// Down
 			if (this.selectedIndex < rows.length - 1) {
 				this.selectedIndex++;
@@ -464,7 +464,7 @@ export class UsageModalComponent implements Component {
 			}
 			return;
 		}
-		if (keyData === "\r" || keyData === " ") {
+		if (matchesKey(keyData, "enter") || matchesKey(keyData, "space")) {
 			// Toggle expand provider
 			const row = rows[this.selectedIndex];
 			if (row && row.type === "provider") {
