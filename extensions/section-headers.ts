@@ -49,7 +49,6 @@ let activeThemeProxy: Themeish = null;
 
 const MODEL_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentModel");
 const THINKING_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentThinking");
-const USAGE_SNAPSHOT_KEY = Symbol.for("pi-arnative.usageSnapshot");
 
 export function formatTokens(n: number): string {
 	if (!n || n <= 0) return "0";
@@ -690,8 +689,8 @@ export default function (pi: ExtensionAPI) {
 		(globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY] = ctx.thinkingLevel;
 	});
 
-	pi.on("turn_end", async (_event, ctx) => {
-		(globalThis as Record<symbol, any>)[USAGE_SNAPSHOT_KEY] = getSessionTokenUsage(ctx);
+	pi.on("turn_end", async () => {
+		// Usage dibaca ulang saat render (collectUsageSummary cache 5 dtk), cukup poke render.
 		if (activeHeaderInstance?.tui) {
 			activeHeaderInstance.tui.requestRender();
 		}
