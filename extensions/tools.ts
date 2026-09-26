@@ -323,7 +323,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const icon = th.fg("warning", spinIcon());
 				const theirs = own ? componentLines(own.call(this, args, th, ctx), width - 6) : [];
 				if (name === "todo" && theirs.length)
-					return box(th, width, formatTodoRows(theirs), "toolPendingBg");
+					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
 				if (pakaiCallMereka(name) && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
@@ -361,7 +361,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 					const callLines = componentLines(callComp, width - 6);
 					const combined = [...callLines, ...boxed2];
 					const bgType = isErr ? "toolErrorBg" : "toolSuccessBg";
-					return box(th, width, formatTodoRows(combined), bgType);
+					return box(th, width, formatTodoRows(combined, th), bgType);
 				}
 				if (boxed2.length) return box(th, width, boxedRows(icon, boxed2));
 				const rows = titleRow(
@@ -388,16 +388,17 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	};
 }
 
-// Format khusus baris todo: ikon \uf14a di judul, indent status baris kedua.
-const formatTodoRows = (lines: string[]): string[] => {
-	const icon = "\uf14a";
+// Format khusus baris todo: ikon \uf14a (warna sukses) di judul, prefix resHead di baris status.
+const formatTodoRows = (lines: string[], th: Theme): string[] => {
+	const icon = th.fg("success", "\uf14a");
+	const head = resHead(th);
 	const out: string[] = [];
 	for (let i = 0; i < lines.length; i++) {
 		let l = lines[i];
 		if (i === 0) {
 			l = l.replace(/^(\x1b\[[0-9;]*m)*todo\b/, `${icon} todo`);
 		} else {
-			l = `  ${l}`;
+			l = `${head} ${l}`;
 		}
 		out.push(l);
 	}
@@ -901,6 +902,6 @@ if (isMain) {
 	).render(60);
 	assert(todoResultOut[0].includes("[bg:toolSuccessBg]"), "todo result: background success");
 	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: ikon \uf14a di baris 1");
-	assert(todoResultOut.some((l: string) => l.includes("  ● completed")), "todo result: status indent di baris 2");
+	assert(todoResultOut.some((l: string) => l.includes("● completed")), "todo result: status dengan prefix resHead di baris 2");
 	console.log("OK");
 }
