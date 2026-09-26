@@ -36,7 +36,7 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
@@ -355,6 +355,37 @@ if (isMain) {
 	assert(ditolak, "pi memang menolak bg('accent') -> arah SGR harus ditukar");
 	assert(accentPill("teks lain", thPil) === "teks lain", "pil: teks non-pil tak disentuh");
 	assert(accentPill(pilAsli, null) === pilAsli, "pil: tanpa tema -> apa adanya");
+
+	// Varian tema: semua themes/*.json wajib valid (name, warna wajib, kontras pil/tint).
+	const dirTema = new URL("../themes/", import.meta.url);
+	const wajib = Object.keys(temaJson.colors);
+	const luminansi = (h: string) => {
+		const ch = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) =>
+			c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
+		);
+		return 0.2126 * ch[0]! + 0.7152 * ch[1]! + 0.0722 * ch[2]!;
+	};
+	const kontras = (a: string, b: string) => {
+		const [x, y] = [luminansi(a), luminansi(b)].sort((m, n) => n - m);
+		return (x! + 0.05) / (y! + 0.05);
+	};
+	for (const f of readdirSync(dirTema).filter((n) => n.endsWith(".json")).sort()) {
+		const d = JSON.parse(readFileSync(new URL(f, dirTema), "utf8")) as {
+			name: string;
+			vars: Record<string, string>;
+			colors: Record<string, string>;
+		};
+		assert(d.name === f.replace(/\.json$/, ""), `tema ${f}: name = nama berkas`);
+		const kurang = wajib.filter((k) => !(k in d.colors));
+		assert(kurang.length === 0, `tema ${f}: warna wajib lengkap (kurang ${kurang.join(",")})`);
+		const hex = (tok: string) => d.vars[d.colors[tok] ?? tok] ?? d.colors[tok];
+		for (const tok of ["accent", "text", "selectedBg", "toolPendingBg"]) {
+			assert(/^#[0-9a-f]{6}$/i.test(hex(tok)), `tema ${f}: ${tok} hex (${hex(tok)})`);
+		}
+		// Pil aksen & tint harus terbaca di kanvas gelap yang dipakai semua varian.
+		assert(kontras(hex("accent"), hex("toolPendingBg")) >= 4.5, `tema ${f}: kontras accent vs toolPendingBg >= 4.5`);
+		assert(kontras(d.vars.softCyan ?? "#7db9cd", "#18181e") >= 4.5, `tema ${f}: kontras tint vs kanvas >= 4.5`);
+	}
 	const thKosong = new Theme(
 		{ muted: "#808080", text: "#d4d4d4", thinkingXhigh: "#20caee" },
 		{ selectedBg: "#3a3a4a" },
