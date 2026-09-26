@@ -580,7 +580,7 @@ export class UsageModalComponent implements Component {
 		out.push(botBorder);
 
 		// Footer Petunjuk Navigasi
-		const hint = th.fg("dim", "[↑↓] navigasi  │  [Enter] buka/tutup  │  [q/Esc] tutup");
+		const hint = th.fg("dim", "[↑↓] Navigation  [Enter] Open/close  [q/Esc] Exit");
 		out.push("  " + hint);
 
 		return out;
