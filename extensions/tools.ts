@@ -206,12 +206,22 @@ export function stripBlankEdges(lines: string[]): string[] {
 
 // Gap antar kotak = Spacer(1) bawaan ToolExecutionComponent (di luar ekstensi).
 // Patch render prototype + guard global (pola sama patch FooterComponent).
+// HANYA baris yang kita gambar sendiri (kotak kita) yang dirapatkan: tool dengan
+// renderer pihak ketiga memakai shell "self" bawaan mereka juga, jadi patokannya
+// daftar nama (diisi minimal() + BOXED_TOOLS), bukan shell. Tanpa batas ini baris
+// mereka kehilangan Spacer + padding Box-nya dan menempel ke baris tetangga.
+const OWN_BOX = new Set<string>();
+const hasOwnRendererDef = (self: { toolDefinition?: { renderCall?: unknown; renderResult?: unknown } }): boolean =>
+	Boolean(self?.toolDefinition?.renderCall || self?.toolDefinition?.renderResult);
+
 const GAP_KEY = Symbol.for("pi-arnative.toolGapStripped");
 if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[GAP_KEY]) {
 	(globalThis as Record<symbol, boolean>)[GAP_KEY] = true;
 	const origRender = ToolExecutionComponent.prototype.render;
 	ToolExecutionComponent.prototype.render = function (width: number): string[] {
-		return stripBlankEdges(origRender.call(this, width));
+		const lines = origRender.call(this, width);
+		const name = (this as { toolName?: string }).toolName ?? "";
+		return OWN_BOX.has(name) || !hasOwnRendererDef(this) ? stripBlankEdges(lines) : lines;
 	};
 }
 
@@ -232,6 +242,28 @@ const BOXED_TOOLS = new Map([
 	["get_search_content", "get_content"],
 ]);
 const displayName = (name: string): string => BOXED_TOOLS.get(name) ?? name;
+for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
+
+// Tool MCP (pi-mcp-adapter) memakai shell "self" bawaan paket itu, tapi hasilnya
+// kita render sendiri: renderer hasil mereka mencetak SELURUH output saat error
+// (tanpa batas, di luar kotak) dan judul+args JSON di call bisa puluhan baris.
+// Ringkasan 1 baris + [ctrl+o to expand] (jalur tool polos) lebih rapat; baris
+// args mereka tetap dipakai di kotak call supaya tool MCP yang dipanggil terlihat.
+const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
+const pakaiCallMereka = (name: string): boolean => BOXED_TOOLS.has(name) || MCP_TOOL(name);
+
+// Judul kotak MCP menyebut tool yang dipanggil (args lengkap saat expand).
+const mcpInfo = (name: string, args: any, th: Theme): string => {
+	if (!MCP_TOOL(name)) return "";
+	const tool = String(args?.tool ?? "");
+	const server = String(args?.server ?? "");
+	return tool ? th.fg("dim", `${tool}${server ? ` @ ${server}` : ""}`) : "";
+};
+
+// Baris pihak ketiga di kotak call dibatasi: sisanya lewat [ctrl+o to expand].
+const CALL_ROWS = 2;
+const capped = (th: Theme, rows: string[], expanded: boolean): string[] =>
+	expanded || rows.length <= CALL_ROWS ? rows : [...rows.slice(0, CALL_ROWS), th.fg("dim", expandHint(th))];
 
 // Baris dari komponen renderer pihak ketiga (spasi kanan dipangkas, ANSI utuh).
 const componentLines = (component: any, width: number): string[] => {
@@ -259,20 +291,21 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	const hasOwnRenderer = (self: any): boolean => Boolean(origCall.call(self) || origResult.call(self));
 
 	proto.getRenderShell = function (): string {
-		if (BOXED_TOOLS.has(this.toolName)) return "self";
+		if (pakaiCallMereka(this.toolName)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
 	};
 
 	proto.getCallRenderer = function () {
 		const name: string = this.toolName;
 		const own = origCall.call(this);
-		if (own && !BOXED_TOOLS.has(name)) return own;
+		if (own && !pakaiCallMereka(name)) return own;
 		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
 				const icon = th.fg("warning", spinIcon());
 				const theirs = own ? componentLines(own.call(this, args, th, ctx), width - 6) : [];
-				if (BOXED_TOOLS.has(name) && theirs.length) return box(th, width, boxedRows(icon, theirs));
+				if (pakaiCallMereka(name) && theirs.length)
+					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
 				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false));
 			});
@@ -281,7 +314,8 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	proto.getResultRenderer = function () {
 		const name: string = this.toolName;
 		const own = origResult.call(this);
-		if (own && !BOXED_TOOLS.has(name)) return own;
+		// MCP: renderer hasil mereka sengaja dilewati (dump tak terbatas saat error).
+		if (own && !pakaiCallMereka(name)) return own;
 		const boxed = BOXED_TOOLS.has(name);
 		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
 			if (opts.isPartial) return EMPTY;
@@ -302,12 +336,24 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
 				if (boxed2.length) return box(th, width, boxedRows(icon, boxed2));
-				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", opts.expanded);
+				const rows = titleRow(
+					th,
+					icon,
+					th.fg("accent", displayName(name)),
+					mcpInfo(name, ctx.args, th),
+					inner,
+					"",
+					opts.expanded,
+				);
 				const summary = toolSummary(name, text, ctx.args);
 				const more = countLines(text) > 1;
 				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
 				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, tint)}` : ""}${hint}`);
-				if (opts.expanded && more) rows.push(...fullText(result, th));
+				if (opts.expanded && more) {
+					// Args MCP tidak terlihat lagi setelah kotak call tergantikan hasil.
+					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
+					rows.push(...fullText(result, th));
+				}
 				return box(th, width, rows);
 			});
 		};
@@ -346,6 +392,7 @@ function minimal(
 	res: Res = resText,
 	full: (r: TResult, th: Theme) => string[] = fullText,
 ): void {
+	OWN_BOX.add(String(tool.name ?? ""));
 	pi.registerTool({
 		...tool,
 		renderShell: "self",
@@ -413,7 +460,7 @@ function minimal(
 	} as any);
 }
 
-export default function (pi: ExtensionAPI) {
+function arnativeTools(pi: ExtensionAPI) {
 	// Sumber render ulang untuk animasi ikon + bersih-bungkus ticker saat sesi tutup
 	pi.on("session_start", async (_event, ctx) => {
 		requestRenderFn = () => {
@@ -431,6 +478,8 @@ export default function (pi: ExtensionAPI) {
 		}
 		requestRenderFn = null;
 	});
+
+	// Gap antar kotak dirapatkan hanya untuk kotak kita (lihat OWN_BOX di atas).
 
 	// bash: `󰔟 $ <6 kata>…` / `✓ $ <judul penuh saat expand>  0.1s`
 	minimal(
@@ -513,6 +562,8 @@ export default function (pi: ExtensionAPI) {
 		},
 	);
 }
+
+export default arnativeTools;
 
 // Self-check: `node extensions/tools.ts`.
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"));
@@ -653,6 +704,68 @@ if (isMain) {
 			`${n}: sengaja tidak dipaksa kotak (partial kurator butuh URL)`,
 		);
 	}
+
+	// pi-mcp-adapter: hasilnya TIDAK pakai renderer mereka (dump error tak terbatas)
+	// -> ringkasan 1 baris + [ctrl+o to expand], tool yang dipanggil tetap terlihat.
+	const mcpTheirs = () => "renderer-mcp";
+	const mcpTool = { toolName: "mcp", toolDefinition: { renderCall: mcpTheirs, renderResult: mcpTheirs } };
+	assert(
+		(ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any) !== mcpTheirs,
+		"mcp: renderer hasil pihak ketiga dilewati (dump error dibatasi)",
+	);
+	assert(
+		(ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: "mcp__tinyfish", toolDefinition: { renderResult: mcpTheirs } }) as any) !==
+			mcpTheirs,
+		"mcp__<server>: renderer mereka dilewati (jalur kotak kita)",
+	);
+	const mcpPayload = {
+		content: [{ type: "text", text: "x Failed to call tool\nu Expected parameters:\n{\n  \"required\": []\n}" }],
+		details: { error: "failed" },
+	};
+	const mcpOut = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any)(
+		mcpPayload,
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { tool: "fetch_content", server: "tinyfish" }, state: {} },
+	).render(96);
+	assert(mcpOut.length <= 6, `mcp error collapsed tetap pendek (${mcpOut.length} baris)`);
+	assert(
+		mcpOut.some((l: string) => l.includes("fetch_content @ tinyfish")),
+		"mcp: judul menyebut tool MCP yang dipanggil",
+	);
+	assert(mcpOut.some((l: string) => l.includes("[ctrl+o to expand]")), "mcp: ada petunjuk expand");
+	const mcpFull = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any)(
+		mcpPayload,
+		{ expanded: true, isPartial: false },
+		th,
+		{ args: { tool: "fetch_content", server: "tinyfish" }, state: {} },
+	).render(96);
+	assert(mcpFull.length > mcpOut.length, "mcp: expand menampilkan dump + args lengkap");
+
+	// Gap antar kotak: dirapatkan HANYA untuk baris kotak kita sendiri.
+	// Registrasi tool (default export) yang mengisi OWN_BOX; stub pi cukup.
+	arnativeTools({
+		registerTool: () => {},
+		on: () => {},
+		registerShortcut: () => {},
+		registerMessageRenderer: () => {},
+	} as never);
+	assert(
+		OWN_BOX.has("bash") && OWN_BOX.has("read") && OWN_BOX.has("edit") && OWN_BOX.has("fetch_content"),
+		"OWN_BOX: tool kotak kita + tool boxed terdaftar",
+	);
+	assert(!OWN_BOX.has("mcp") && !OWN_BOX.has("web_search"), "OWN_BOX: renderer pihak lain tidak dirapatkan");
+	assert(hasOwnRendererDef(mcpTool) && !hasOwnRendererDef(noRenderer), "patokan rapat: definisi renderer tool");
+	assert(
+		capped(th, ["a", "b", "c"], false).length === CALL_ROWS + 1 &&
+			capped(th, ["a", "b", "c"], true).length === 3 &&
+			capped(th, ["a"], false).length === 1,
+		"baris call pihak ketiga dibatasi hanya saat collapsed",
+	);
+	assert(
+		mcpInfo("bash", { tool: "x" }, th) === "" && mcpInfo("mcp", { tool: "x", server: "s" }, th).includes("x @ s"),
+		"mcpInfo hanya untuk tool MCP",
+	);
 
 	const ctxState: TCtx = { args: { content: "## Judul\n- x" }, state: {} };
 	const resRenderer = ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any;
