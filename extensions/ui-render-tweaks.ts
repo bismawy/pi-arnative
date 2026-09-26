@@ -15,6 +15,7 @@
  */
 import {
 	CompactionSummaryMessageComponent,
+	CustomMessageComponent,
 	getMarkdownTheme,
 	initTheme,
 	keyText,
@@ -22,7 +23,7 @@ import {
 	UserMessageComponent,
 	type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, MouseRegion, Spacer, Text, TuiAltScreen } from "@earendil-works/pi-tui";
+import { Container, Markdown, MouseRegion, Spacer, Text, TuiAltScreen, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { readFileSync } from "node:fs";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
@@ -159,12 +160,79 @@ export default function uiRenderTweaks(pi: ExtensionAPI) {
 		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
 	});
 
-	// 4. Pesan kontrak `pi-jev-eye-review`: label ganda + baris kosong + kotak ungu
-	// dihapus, isi pesan tampil apa adanya (baris `[pi-jev-eye] ...` sudah ada di
-	// dalam isinya sendiri).
-	pi.registerMessageRenderer("pi-jev-eye-review", (message, _opts, th) =>
-		new Text(customMessageText(message.content), 0, 0, (t) => th.fg("customMessageText", t)),
-	);
+	// 4. Pesan kontrak `pi-jev-eye-review`: gunakan kotak border kustom kita.
+	// Default collapsed: [pi-jev-eye] Reviewed turn contract. [click to expand]
+	// Saat di-klik: isi kontrak penuh muncul di dalam kotak.
+	pi.registerMessageRenderer("pi-jev-eye-review", (message, { expanded }, th) => {
+		const raw = customMessageText(message.content);
+		return new JevReviewBoxComponent(raw, Boolean(expanded), th);
+	});
+}
+
+// Helper border box ala arnative
+export function renderBoxLines(theme: { fg(c: string, t: string): string; bg?(c: string, t: string): string }, width: number, rows: string[]): string[] {
+	const dim = (s: string) => theme.fg("dim", s);
+	const inner = Math.max(8, width - 4);
+	const lines = [`${dim("┌")}${dim("─".repeat(Math.max(0, width - 2)))}${dim("┐")}`];
+	for (const row of rows) {
+		for (const line of wrapTextWithAnsi(row, inner)) {
+			const pad = Math.max(0, width - visibleWidth(line) - 4);
+			lines.push(`${dim("│")} ${line}${" ".repeat(pad)} ${dim("│")}`);
+		}
+	}
+	lines.push(`${dim("└")}${dim("─".repeat(Math.max(0, width - 2)))}${dim("┘")}`);
+	return lines;
+}
+
+export class JevReviewBoxComponent extends Container {
+	private text: string;
+	private th: { fg(c: string, t: string): string; bg?(c: string, t: string): string };
+	public isExpanded: boolean;
+
+	constructor(text: string, isExpanded: boolean, th: { fg(c: string, t: string): string; bg?(c: string, t: string): string }) {
+		super();
+		this.text = text;
+		this.isExpanded = isExpanded;
+		this.th = th;
+		this.rebuild();
+	}
+
+	private rebuild(): void {
+		this.clear();
+		const th = this.th;
+		const self = this;
+		const view = new (class {
+			render(width: number): string[] {
+				const tag = th.fg("customMessageLabel", "\x1b[1m[pi-jev-eye]\x1b[22m");
+				if (!self.isExpanded) {
+					const title = th.fg("customMessageText", "Reviewed turn contract.");
+					const hint = th.fg("dim", "[click to expand]");
+					return renderBoxLines(th, width, [`${tag} ${title} ${hint}`]);
+				}
+				// Expanded: tampilkan seluruh baris isi
+				const raw = self.text;
+				// Jika baris pertama dimulai dengan `[pi-jev-eye]`, sesuaikan styling-nya
+				const lines = raw.split("\n");
+				const formattedRows = lines.map((line, idx) => {
+					if (idx === 0 && line.startsWith("[pi-jev-eye]")) {
+						const rest = line.slice("[pi-jev-eye]".length).trim();
+						return `${tag} ${th.fg("customMessageText", rest)}`;
+					}
+					return th.fg("customMessageText", line);
+				});
+				return renderBoxLines(th, width, formattedRows);
+			}
+		})();
+
+		this.addChild(
+			new MouseRegion(view as any, (event: any) => {
+				if (event.type !== "click" || event.button !== "left") return undefined;
+				this.isExpanded = !this.isExpanded;
+				this.rebuild();
+				return { handled: true };
+			}),
+		);
+	}
 }
 
 // 3. Pesan compaction: satu baris, bukan tiga (label, spacer, teks).
@@ -360,15 +428,26 @@ if (isMain) {
 		"compaction expanded: label + ringkasan markdown tetap ada",
 	);
 
-	const contract = fakePi.renderers["pi-jev-eye-review"](
+	const contractCollapsed = fakePi.renderers["pi-jev-eye-review"](
 		{ customType: "pi-jev-eye-review", content: "[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user" },
 		{ expanded: false, outputPad: 1 },
 		{ fg: (_c: string, t: string) => t },
 	);
-	const contractLines = contract.render(120).map((l: string) => l.trimEnd());
+	const cLines = contractCollapsed.render(120).map((l: string) => l.trimEnd());
 	assert(
-		contractLines[0] === "[pi-jev-eye] Reviewed turn contract:" && contractLines.length === 2,
-		"pesan kontrak: isi apa adanya, tanpa label/baris kosong tambahan",
+		cLines[0].startsWith("┌") && cLines[cLines.length - 1].startsWith("└") && cLines[1].includes("[click to expand]"),
+		"pesan kontrak collapsed: kotak border dengan teks [click to expand]",
+	);
+
+	const contractExpanded = fakePi.renderers["pi-jev-eye-review"](
+		{ customType: "pi-jev-eye-review", content: "[pi-jev-eye] Reviewed turn contract:\n- Bahasa ikut user" },
+		{ expanded: true, outputPad: 1 },
+		{ fg: (_c: string, t: string) => t },
+	);
+	const expLines = contractExpanded.render(120).map((l: string) => l.trimEnd());
+	assert(
+		expLines[0].startsWith("┌") && expLines[expLines.length - 1].startsWith("└") && expLines.some((l: string) => l.includes("Bahasa ikut user")),
+		"pesan kontrak expanded: kotak border dengan isi lengkap",
 	);
 	console.log("ui-render-tweaks.ts self-check OK");
 }
