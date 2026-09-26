@@ -362,10 +362,11 @@ if (isMain) {
 	// yang sudah lolos di base `arnative` (bukan angka karangan).
 	const dirTema = new URL("../themes/", import.meta.url);
 	const wajib = Object.keys(temaJson.colors);
-	// Kunci yang bukan teks (latar/garis) — tak dinilai kontras teks.
+	// Kunci yang bukan teks (latar/garis/scrollbar) — tak dinilai kontras teks.
 	const bukanTeks = new Set([
 		"selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
 		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder",
+		"scrollbarTrack", "scrollbarThumb",
 	]);
 	const sekunder = new Set(["muted", "dim", "mdQuote", "mdHr", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
 	// Ramp thinking: makin tinggi makin terbaca; thinkingMax = accent (dinilai di jalur pil).
@@ -392,6 +393,13 @@ if (isMain) {
 		assert(d.name === f.replace(/\.json$/, ""), `tema ${f}: name = nama berkas`);
 		const kurang = wajib.filter((k) => !(k in d.colors));
 		assert(kurang.length === 0, `tema ${f}: warna wajib lengkap (kurang ${kurang.join(",")})`);
+		// Nilai colors hanya boleh: hex, indeks 256, kosong, atau NAMA VAR yang benar-benar
+		// ada — menulis nama warna (mis. "muted") bikin pi menolak tema tanpa jelas sebabnya.
+		for (const [tok, nilai] of Object.entries(d.colors)) {
+			if (typeof nilai !== "string") continue;
+			if (nilai === "" || /^#[0-9a-f]{6}$/i.test(nilai) || nilai in d.vars) continue;
+			assert(false, `tema ${f}: colors.${tok} = "${nilai}" bukan hex/var`);
+		}
 		const hex = (tok: string) => d.vars[d.colors[tok] ?? tok] ?? d.colors[tok];
 		for (const tok of ["accent", "text", "selectedBg", "toolPendingBg"]) {
 			assert(/^#[0-9a-f]{6}$/i.test(hex(tok)), `tema ${f}: ${tok} hex (${hex(tok)})`);
@@ -408,6 +416,21 @@ if (isMain) {
 			const c = kontras(warna, kanvas);
 			assert(c >= batas, `tema ${f}: kontras ${tok} vs kanvas ${c.toFixed(2)} < ${batas}`);
 		}
+		// Teks isi kotak tool harus terbaca di latar sukses MAUPUN error, dan pesan error
+		// di kotak error — tiga pasangan yang dulu lolos (3.48-4.46) tanpa terdeteksi.
+		for (const [fg, bg] of [
+			["toolOutput", "toolSuccessBg"], ["toolOutput", "toolErrorBg"],
+			["error", "toolErrorBg"], ["toolDiffRemoved", "toolErrorBg"],
+		] as const) {
+			const c = kontras(hex(fg), hex(bg));
+			assert(c >= 4.5, `tema ${f}: kontras ${fg} di ${bg} ${c.toFixed(2)} < 4.5`);
+		}
+		// Kotak error tidak boleh lebih berat dari kotak sukses (luminansi latar sepadan).
+		const [lErr, lOk] = [luminansi(hex("toolErrorBg")), luminansi(hex("toolSuccessBg"))];
+		assert(Math.abs(lErr - lOk) / Math.max(lErr, lOk) <= 0.25, `tema ${f}: bobot toolErrorBg vs toolSuccessBg (${lErr.toFixed(3)} vs ${lOk.toFixed(3)})`);
+		// Thumb & highlight cari harus bisa dibedakan dari track/seleksi (dulu nilainya identik).
+		assert(hex("scrollbarThumb") !== hex("scrollbarTrack"), `tema ${f}: scrollbarThumb masih sama dengan scrollbarTrack`);
+		assert(hex("searchMatchBg") !== hex("selectedBg"), `tema ${f}: searchMatchBg masih sama dengan selectedBg`);
 	}
 	const thKosong = new Theme(
 		{ muted: "#808080", text: "#d4d4d4", thinkingXhigh: "#20caee" },

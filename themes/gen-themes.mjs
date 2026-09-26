@@ -23,7 +23,7 @@ const base = JSON.parse(baseText);
 // mewarisi base dan lolos dari pemeriksaan visual).
 const KUNCI_VARS = [
 	"accent", "cyan", "blue", "green", "red", "yellow", "text", "gray", "dimGray", "darkGray",
-	"softCyan", "selectedBg", "userMsgBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "customMsgBg",
+	"softCyan", "searchBg", "selectedBg", "userMsgBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "customMsgBg",
 ];
 const KUNCI_COLORS = [
 	"customMessageLabel", "mdHeading", "mdLink",
@@ -41,10 +41,10 @@ const PALET = {
 	// --- varian hue dasar (sejak awal) -------------------------------------
 	"arnative-sun": {
 		vars: {
-			accent: "#ffb454", cyan: "#ffd166", blue: "#da9b2f", green: "#b5bd68", red: "#cc6666",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#808080", dimGray: "#666666", darkGray: "#505050",
-			softCyan: "#ceb07e", selectedBg: "#484032", userMsgBg: "#312d25", toolPendingBg: "#29251f",
-			toolSuccessBg: "#202828", toolErrorBg: "#3c2828", customMsgBg: "#2e281f",
+			accent: "#ffb454", cyan: "#ffd166", blue: "#da9b2f", green: "#b5bd68", red: "#d07272",
+			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
+			searchBg: "#634f35", softCyan: "#ceb07e", selectedBg: "#484032", userMsgBg: "#312d25", toolPendingBg: "#29251f",
+			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#2e281f",
 		},
 		colors: {
 			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
@@ -58,10 +58,10 @@ const PALET = {
 	},
 	"arnative-zinc": {
 		vars: {
-			accent: "#a1a1aa", cyan: "#c4c4cc", blue: "#6b6b75", green: "#b5bd68", red: "#cc6666",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#808080", dimGray: "#666666", darkGray: "#505050",
-			softCyan: "#a2a0ab", selectedBg: "#3b3a40", userMsgBg: "#2a292e", toolPendingBg: "#232225",
-			toolSuccessBg: "#202828", toolErrorBg: "#3c2828", customMsgBg: "#23222a",
+			accent: "#a1a1aa", cyan: "#c4c4cc", blue: "#6b6b75", green: "#b5bd68", red: "#d07272",
+			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
+			searchBg: "#4a4a4f", softCyan: "#a2a0ab", selectedBg: "#3b3a40", userMsgBg: "#2a292e", toolPendingBg: "#232225",
+			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#23222a",
 		},
 		colors: {
 			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
@@ -75,10 +75,10 @@ const PALET = {
 	},
 	"arnative-violet": {
 		vars: {
-			accent: "#a78bfa", cyan: "#c4b5fd", blue: "#8b6ef5", green: "#b5bd68", red: "#cc6666",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#808080", dimGray: "#666666", darkGray: "#505050",
-			softCyan: "#a99ad6", selectedBg: "#393248", userMsgBg: "#292531", toolPendingBg: "#221f29",
-			toolSuccessBg: "#202828", toolErrorBg: "#3c2828", customMsgBg: "#292240",
+			accent: "#a78bfa", cyan: "#c4b5fd", blue: "#8b6ef5", green: "#b5bd68", red: "#d07272",
+			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
+			searchBg: "#413563", softCyan: "#a99ad6", selectedBg: "#393248", userMsgBg: "#292531", toolPendingBg: "#221f29",
+			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#292240",
 		},
 		colors: {
 			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
@@ -92,10 +92,10 @@ const PALET = {
 	},
 	"arnative-emerald": {
 		vars: {
-			accent: "#6ee7b7", cyan: "#a7f3d0", blue: "#34b98a", green: "#b5bd68", red: "#cc6666",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#808080", dimGray: "#666666", darkGray: "#505050",
-			softCyan: "#7eceaf", selectedBg: "#324840", userMsgBg: "#25312d", toolPendingBg: "#1f2925",
-			toolSuccessBg: "#202828", toolErrorBg: "#3c2828", customMsgBg: "#1f3028",
+			accent: "#6ee7b7", cyan: "#a7f3d0", blue: "#34b98a", green: "#b5bd68", red: "#d07272",
+			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
+			searchBg: "#356351", softCyan: "#7eceaf", selectedBg: "#324840", userMsgBg: "#25312d", toolPendingBg: "#1f2925",
+			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#1f3028",
 		},
 		colors: {
 			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
@@ -114,8 +114,8 @@ const PALET = {
 		vars: {
 			accent: "#00ff41", cyan: "#8dffab", blue: "#1f8f4f", green: "#47ff7a", red: "#ff5555",
 			yellow: "#ffe066", text: "#ccffd8", gray: "#6f9f7f", dimGray: "#4f7f5f", darkGray: "#2f4f3a",
-			softCyan: "#58e07a", selectedBg: "#10452a", userMsgBg: "#0a1410", toolPendingBg: "#060f0b",
-			toolSuccessBg: "#0b2413", toolErrorBg: "#2a0d0d", customMsgBg: "#08160f",
+			searchBg: "#284b31", softCyan: "#58e07a", selectedBg: "#10452a", userMsgBg: "#0a1410", toolPendingBg: "#060f0b",
+			toolSuccessBg: "#0b2413", toolErrorBg: "#3b1212", customMsgBg: "#08160f",
 		},
 		colors: {
 			customMessageLabel: "#8dffab", mdHeading: "#00ff41", mdLink: "#8dffab",
@@ -132,8 +132,8 @@ const PALET = {
 		vars: {
 			accent: "#ff2e97", cyan: "#00f0ff", blue: "#2a7fd4", green: "#00ff9f", red: "#ff4d6d",
 			yellow: "#ffe600", text: "#eaeaf5", gray: "#8b88a8", dimGray: "#6f6a9a", darkGray: "#4a4763",
-			softCyan: "#7fd8f0", selectedBg: "#2b2350", userMsgBg: "#16131f", toolPendingBg: "#0d0b16",
-			toolSuccessBg: "#0d2430", toolErrorBg: "#33121f", customMsgBg: "#1a1329",
+			searchBg: "#5f3349", softCyan: "#7fd8f0", selectedBg: "#2b2350", userMsgBg: "#16131f", toolPendingBg: "#0d0b16",
+			toolSuccessBg: "#0d2430", toolErrorBg: "#3a1524", customMsgBg: "#1a1329",
 		},
 		colors: {
 			customMessageLabel: "#00f0ff", mdHeading: "#ffe600", mdLink: "#00f0ff",
@@ -150,8 +150,8 @@ const PALET = {
 		vars: {
 			accent: "#ff7edb", cyan: "#36f9f6", blue: "#7a5fd6", green: "#72f1b8", red: "#ff5f7e",
 			yellow: "#fede5d", text: "#f2eafb", gray: "#9b8fb8", dimGray: "#848bbd", darkGray: "#55496e",
-			softCyan: "#c3b1f0", selectedBg: "#443a63", userMsgBg: "#2a2138", toolPendingBg: "#1f1830",
-			toolSuccessBg: "#1f2e29", toolErrorBg: "#331a2a", customMsgBg: "#2e1f3d",
+			searchBg: "#7a426a", softCyan: "#c3b1f0", selectedBg: "#443a63", userMsgBg: "#2a2138", toolPendingBg: "#1f1830",
+			toolSuccessBg: "#1f2e29", toolErrorBg: "#402134", customMsgBg: "#2e1f3d",
 		},
 		colors: {
 			customMessageLabel: "#36f9f6", mdHeading: "#fede5d", mdLink: "#36f9f6",
@@ -166,10 +166,10 @@ const PALET = {
 	// Retro hangat: kanvas abu kecoklatan, emas + aqua + merah bata.
 	"arnative-gruvbox": {
 		vars: {
-			accent: "#fabd2f", cyan: "#8ec07c", blue: "#83a598", green: "#b8bb26", red: "#fb4934",
+			accent: "#fabd2f", cyan: "#8ec07c", blue: "#83a598", green: "#b8bb26", red: "#fc6654",
 			yellow: "#fabd2f", text: "#ebdbb2", gray: "#a89984", dimGray: "#928374", darkGray: "#665c54",
-			softCyan: "#d5c4a1", selectedBg: "#504945", userMsgBg: "#32302f", toolPendingBg: "#1d2021",
-			toolSuccessBg: "#2a3225", toolErrorBg: "#3a2a26", customMsgBg: "#3c3836",
+			searchBg: "#6c5d3a", softCyan: "#d5c4a1", selectedBg: "#504945", userMsgBg: "#32302f", toolPendingBg: "#1d2021",
+			toolSuccessBg: "#2a3225", toolErrorBg: "#3c2c27", customMsgBg: "#3c3836",
 		},
 		colors: {
 			customMessageLabel: "#d3869b", mdHeading: "#fabd2f", mdLink: "#83a598",
@@ -184,10 +184,10 @@ const PALET = {
 	// Dingin & tenang ala Nord: frost blue + aurora.
 	"arnative-nord": {
 		vars: {
-			accent: "#88c0d0", cyan: "#8fbcbb", blue: "#5e81ac", green: "#a3be8c", red: "#c87880",
-			yellow: "#ebcb8b", text: "#eceff4", gray: "#9aa5b5", dimGray: "#7b869b", darkGray: "#4c566a",
-			softCyan: "#bcd3e0", selectedBg: "#434c5e", userMsgBg: "#3b4252", toolPendingBg: "#2e3440",
-			toolSuccessBg: "#333f38", toolErrorBg: "#3f2f33", customMsgBg: "#38404f",
+			accent: "#88c0d0", cyan: "#8fbcbb", blue: "#5e81ac", green: "#a3be8c", red: "#d4979d",
+			yellow: "#ebcb8b", text: "#eceff4", gray: "#9da8b7", dimGray: "#7b869b", darkGray: "#4c566a",
+			searchBg: "#476e79", softCyan: "#bcd3e0", selectedBg: "#434c5e", userMsgBg: "#3b4252", toolPendingBg: "#2e3440",
+			toolSuccessBg: "#333f38", toolErrorBg: "#4a383c", customMsgBg: "#38404f",
 		},
 		colors: {
 			customMessageLabel: "#b48ead", mdHeading: "#ebcb8b", mdLink: "#88c0d0",
@@ -202,10 +202,10 @@ const PALET = {
 	// Ungu gelap klasik: pink + cyan + hijau mint.
 	"arnative-dracula": {
 		vars: {
-			accent: "#bd93f9", cyan: "#8be9fd", blue: "#6272a4", green: "#50fa7b", red: "#ff5555",
-			yellow: "#f1fa8c", text: "#f8f8f2", gray: "#8b93b8", dimGray: "#6272a4", darkGray: "#4a4e63",
-			softCyan: "#c9b8f2", selectedBg: "#44475a", userMsgBg: "#343746", toolPendingBg: "#21222c",
-			toolSuccessBg: "#26332e", toolErrorBg: "#3a2430", customMsgBg: "#383a52",
+			accent: "#bd93f9", cyan: "#8be9fd", blue: "#6272a4", green: "#50fa7b", red: "#ff6363",
+			yellow: "#f1fa8c", text: "#f8f8f2", gray: "#8e96ba", dimGray: "#6272a4", darkGray: "#4a4e63",
+			searchBg: "#59427b", softCyan: "#c9b8f2", selectedBg: "#44475a", userMsgBg: "#343746", toolPendingBg: "#21222c",
+			toolSuccessBg: "#26332e", toolErrorBg: "#412936", customMsgBg: "#383a52",
 		},
 		colors: {
 			customMessageLabel: "#ff79c6", mdHeading: "#f1fa8c", mdLink: "#8be9fd",

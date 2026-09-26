@@ -13,11 +13,12 @@
 		"darkGray": "#55496e",
 		"accent": "#ff7edb",
 		"softCyan": "#c3b1f0",
+		"searchBg": "#7a426a",
 		"selectedBg": "#443a63",
 		"userMsgBg": "#2a2138",
 		"toolPendingBg": "#1f1830",
 		"toolSuccessBg": "#1f2e29",
-		"toolErrorBg": "#331a2a",
+		"toolErrorBg": "#402134",
 		"customMsgBg": "#2e1f3d"
 	},
 	"colors": {
@@ -35,9 +36,9 @@
 		"thinkingText": "gray",
 
 		"selectedBg": "selectedBg",
-		"scrollbarTrack": "softCyan",
-		"scrollbarThumb": "softCyan",
-		"searchMatchBg": "selectedBg",
+		"scrollbarTrack": "darkGray",
+		"scrollbarThumb": "gray",
+		"searchMatchBg": "searchBg",
 		"searchMatchText": "text",
 		"userMessageBg": "userMsgBg",
 		"userMessageText": "text",

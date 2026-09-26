@@ -14,7 +14,19 @@ Paket Pi: tema aksen cyan plus footer jam dan model yang dipakai.
   - `gruvbox` retro hangat (emas + aqua + merah bata)
   - `nord` dingin (frost blue + aurora)
   - `dracula` ungu gelap (pink + mint)
-- Self-check `extensions/ui-render-tweaks.ts` memvalidasi **semua** `themes/*.json`: `name` = nama berkas, warna wajib lengkap, hex valid, dan kontras vs kanvas tema itu sendiri (konten ≥ 3.0, teks sekunder ≥ 2.0, ramp `thinking*` 1.3–4.0, pil aksen ≥ 4.5).
+- Self-check `extensions/ui-render-tweaks.ts` memvalidasi **semua** `themes/*.json`: `name` = nama berkas, warna wajib lengkap, tiap nilai `colors` wajib hex/var yang benar-benar ada, dan kontras vs kanvas tema itu sendiri (konten ≥ 3.0, teks sekunder ≥ 2.0, ramp `thinking*` 1.3–4.0, pil aksen ≥ 4.5). Khusus: teks isi kotak tool ≥ 4.5 di latar sukses **dan** error, pesan error ≥ 4.5 di kotak error, latar kotak error sepadan bobotnya dengan kotak sukses, `scrollbarThumb` ≠ `scrollbarTrack`, dan `searchMatchBg` ≠ `selectedBg`.
+
+## Perbaikan kontras base (2026-09-26)
+
+Base `arnative` (dan ikut ke semua varian) diperbaiki berdasarkan pengukuran, bukan selera:
+
+| Sebelum | Sesudah | Efek |
+| :--- | :--- | :--- |
+| `gray` `#808080` | `#8d8d8d` | teks isi kotak tool 3.48–3.81 → **4.53** (AA); ikut memperbaiki `muted`, `mdQuote`, `mdHr`, `thinkingText`, `toolDiffContext` |
+| `red` `#cc6666` | `#d07272` | pesan error di kotak error 3.71 → **4.53**; di kanvas 4.05 → 4.53 |
+| `toolErrorBg` `#3c2828` | `#342222` | bobot kotak error sepadan kotak sukses (L .026 → .020 vs .020) |
+| `scrollbarTrack`/`Thumb` = `#7db9cd` | `#505050` / `#8d8d8d` | thumb terlihat di atas track (sebelumnya identik) |
+| `searchMatchBg` = `selectedBg` | `#386168` (var `searchBg`) | highlight pencarian beda dari seleksi; teks 4.60 |
 - `extensions/footer.ts` — footer `jam | model-id`, tanpa timer. Jam dibaca saat render dan disegarkan tiap perubahan branch.
 
 ## Coba langsung
