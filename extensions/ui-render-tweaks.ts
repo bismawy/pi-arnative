@@ -10,6 +10,8 @@
  *    rapatkan jadi satu baris `[compaction] Compacted from N tokens (ctrl+o to expand)`.
  * 4. Pesan custom `pi-jev-eye-review`: bawaan pi menambah label `[pi-jev-eye-review]` +
  *    baris kosong di dalam kotak ungu; renderer kita tampilkan isi apa adanya.
+ * 5. Pil `↓ Jump to latest message` (fullscreen): bg `selectedBg` (kelabu) -> aksen,
+ *    teks dibuat gelap (kanvas tema) supaya kontras tetap tinggi (9.6:1).
  */
 import {
 	CompactionSummaryMessageComponent,
@@ -76,6 +78,43 @@ export function ansiFgOpen(th: { fg?(c: string, t: string): string } | null, col
 	}
 }
 
+// Pil `↓ Jump to latest message` (fullscreen): pi mewarnainya bg `selectedBg`
+// (kelabu). Diganti bg aksen; teks memakai kanvas tergelap tema supaya kontras
+// 9.6:1 (WCAG AA). Bukan token semantik — pi tak punya token "teks di atas aksen".
+const PILL_KEY = Symbol.for("pi-arnative.accentPill");
+const PILL_MARK = "↓ Jump to latest message";
+const PILL_INK = "toolPendingBg";
+
+export function accentPill(
+	text: string,
+	th: { fg?(c: string, t: string): string; bg?(c: string, t: string): string } | null,
+): string {
+	if (!text.includes(PILL_MARK) || !th?.fg || !th?.bg) return text;
+	try {
+		return th.bg("accent", th.fg(PILL_INK, text.replace(/\x1b\[[0-9;]*m/g, "")));
+	} catch {
+		return text;
+	}
+}
+
+// TuiAltScreen membuat pil lewat callback instance `scrollToEndIndicator` (field
+// per-instance, jadi tak bisa ditambal di prototype-nya). Sisipkan callback kita
+// hanya selama composite berlangsung, lalu kembalikan aslinya.
+export function withAccentPill<T>(
+	host: { scrollToEndIndicator?: (() => string) | undefined },
+	fn: () => T,
+	th: { fg?(c: string, t: string): string; bg?(c: string, t: string): string } | null,
+): T {
+	const orig = host.scrollToEndIndicator;
+	if (typeof orig !== "function") return fn();
+	host.scrollToEndIndicator = () => accentPill(orig(), th);
+	try {
+		return fn();
+	} finally {
+		host.scrollToEndIndicator = orig;
+	}
+}
+
 if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[SELECTION_COLOR_KEY]) {
 	(globalThis as Record<symbol, boolean>)[SELECTION_COLOR_KEY] = true;
 	const origHighlight = TuiAltScreen.prototype.applySelectionHighlight;
@@ -85,6 +124,24 @@ if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[SELECTIO
 			const fgOpen = ansiFgOpen(activeThemeProxy);
 			const bgOpen = ansiBgOpen(activeThemeProxy, "selectedBg");
 			return fgOpen && bgOpen ? recolorSelection(highlighted, fgOpen, bgOpen) : highlighted;
+		};
+	}
+}
+
+if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[PILL_KEY]) {
+	(globalThis as Record<symbol, boolean>)[PILL_KEY] = true;
+	const proto = TuiAltScreen.prototype as unknown as {
+		compositeScrollToEndIndicator?: (screen: string[], layout: unknown, width: number) => string[];
+	};
+	const origComposite = proto.compositeScrollToEndIndicator;
+	if (typeof origComposite === "function") {
+		proto.compositeScrollToEndIndicator = function (
+			this: { scrollToEndIndicator?: (() => string) | undefined },
+			screen: string[],
+			layout: unknown,
+			width: number,
+		) {
+			return withAccentPill(this, () => origComposite.call(this, screen, layout, width), activeThemeProxy);
 		};
 	}
 }
@@ -193,6 +250,20 @@ if (isMain) {
 	assert(ansiFgOpen(null) === "", "tanpa tema: fgOpen kosong");
 	assert(ansiFgOpen({ fg: (_c, t) => `\x1b[38;2;1;2;3m${t}\x1b[39m` }) === "\x1b[38;2;1;2;3m", "fgOpen terambil dari probe tema");
 	assert(ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;9;9;9m${t}\x1b[49m` }, "selectedBg") === "\x1b[48;2;9;9;9m", "bgOpen selectedBg terambil");
+
+	// Pil "Jump to latest message": bg aksen + teks kanvas (bukan selectedBg kelabu)
+	const thPil = { fg: (c: string, t: string) => `<F:${c}>${t}`, bg: (c: string, t: string) => `<B:${c}>${t}` };
+	const pilAsli = "\x1b[48;5;236m ↓ Jump to latest message · End \x1b[49m";
+	assert(
+		accentPill(pilAsli, thPil) === `<B:accent><F:${PILL_INK}> ↓ Jump to latest message · End `,
+		"pil: bg aksen + teks kanvas, ANSI lama dibuang",
+	);
+	assert(accentPill("teks lain", thPil) === "teks lain", "pil: teks non-pil tak disentuh");
+	assert(accentPill(pilAsli, null) === pilAsli, "pil: tanpa tema -> apa adanya");
+	const hostPil: { scrollToEndIndicator?: () => string } = { scrollToEndIndicator: () => pilAsli };
+	const dalamPil = withAccentPill(hostPil, () => hostPil.scrollToEndIndicator?.(), thPil);
+	assert(dalamPil === `<B:accent><F:${PILL_INK}> ↓ Jump to latest message · End `, "pil: callback instance disisipi");
+	assert(hostPil.scrollToEndIndicator?.() === pilAsli, "pil: callback asli dipulihkan setelah render");
 
 	// compaction: tiga baris bawaan pi -> satu baris
 	assert(
