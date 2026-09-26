@@ -49,6 +49,47 @@ let activeThemeProxy: Themeish = null;
 
 const MODEL_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentModel");
 const THINKING_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentThinking");
+const USAGE_SNAPSHOT_KEY = Symbol.for("pi-arnative.usageSnapshot");
+
+export function formatTokens(n: number): string {
+	if (!n || n <= 0) return "0";
+	if (n < 1000) return String(n);
+	if (n < 1_000_000) {
+		const k = n / 1000;
+		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
+	}
+	const m = n / 1_000_000;
+	return `${m.toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+export function getSessionTokenUsage(ctx?: ExtensionContext): { input: number; output: number; cacheRead: number } {
+	let inp = 0;
+	let out = 0;
+	let read = 0;
+	try {
+		const entries = (ctx?.sessionManager as any)?.getBranch?.() ?? (ctx?.sessionManager as any)?.getEntries?.() ?? [];
+		for (const e of entries) {
+			if (e && typeof e === "object" && "type" in e && e.type === "message") {
+				const m = (e as { message?: unknown }).message;
+				if (m && typeof m === "object" && "role" in m && (m as any).role === "assistant" && "usage" in m) {
+					const u = (m as any).usage;
+					if (u) {
+						inp += u.input || 0;
+						out += u.output || 0;
+						read += u.cacheRead || 0;
+					}
+				}
+			}
+		}
+	} catch {
+		// ignore
+	}
+	if (inp === 0 && out === 0 && read === 0) {
+		const snap = (globalThis as Record<symbol, any>)[USAGE_SNAPSHOT_KEY];
+		if (snap) return snap;
+	}
+	return { input: inp, output: out, cacheRead: read };
+}
 
 // Ambil warna pertama yang benar-benar dipakai tema
 export function fgFirst(th: Themeish, names: string[], text: string): string {
@@ -474,7 +515,24 @@ export class ArnativeHeader implements Component {
 			const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
 			const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
 			const sep = fgFirst(th, ["dim"], " · ");
-			const line = `${fgFirst(th, ["tint", "text"], fullName)}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
+			let line = `${fgFirst(th, ["tint", "text"], fullName)}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
+
+			// Total token penggunaan jika ada: ↑2.9M ↓94k  26.3M
+			const usage = getSessionTokenUsage(this.ctx);
+			const tokenParts: string[] = [];
+			if (usage.input > 0) {
+				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["tint", "text"], formatTokens(usage.input))}`);
+			}
+			if (usage.output > 0) {
+				tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${fgFirst(th, ["tint", "text"], formatTokens(usage.output))}`);
+			}
+			if (usage.cacheRead > 0) {
+				tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${fgFirst(th, ["tint", "text"], formatTokens(usage.cacheRead))}`);
+			}
+			if (tokenParts.length > 0) {
+				line += `${sep}${tokenParts.join(" ")}`;
+			}
+
 			activeItems = [line];
 		} else {
 			activeItems = tabStore.get(this.activeTab) ?? [];
@@ -565,6 +623,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", async (_event, ctx) => {
 		(globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY] = ctx.model;
 		(globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY] = ctx.thinkingLevel;
+	});
+
+	pi.on("turn_end", async (_event, ctx) => {
+		(globalThis as Record<symbol, any>)[USAGE_SNAPSHOT_KEY] = getSessionTokenUsage(ctx);
+		if (activeHeaderInstance?.tui) {
+			activeHeaderInstance.tui.requestRender();
+		}
 	});
 }
 
