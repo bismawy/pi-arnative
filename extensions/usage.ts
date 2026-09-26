@@ -8,7 +8,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 export interface UsageEntry {
@@ -514,6 +514,8 @@ export class UsageModalComponent implements Component {
 		};
 
 		const out: string[] = [];
+		const accentBorder = new DynamicBorder((s) => th.fg("accent", s));
+		out.push(...accentBorder.render(width));
 		out.push(topBorder);
 
 		// Header Table
@@ -582,6 +584,7 @@ export class UsageModalComponent implements Component {
 		// Footer Petunjuk Navigasi
 		const hint = th.fg("dim", "[↑↓] Navigation  [Enter] Open/close  [q/Esc] Exit");
 		out.push("  " + hint);
+		out.push(...accentBorder.render(width));
 
 		return out;
 	}
@@ -630,7 +633,9 @@ if (isMain) {
 	const modal = new UsageModalComponent(fakeTheme, () => {}, () => {});
 	const lines = modal.render(100);
 	assert(lines.length >= 10, "render modal menghasilkan baris-baris tabel");
-	assert(lines[0]!.includes("╭") && lines[0]!.includes("╮"), "top border rounded");
+	assert(lines[0]!.includes("─") && !lines[0]!.includes("╭"), "garis aksen atas full-width");
+	assert(lines[lines.length - 1]!.includes("─"), "garis aksen bawah full-width");
+	assert(lines[1]!.includes("╭") && lines[1]!.includes("╮"), "top border rounded");
 
 	console.log("usage.ts self-check OK");
 }
