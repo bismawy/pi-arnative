@@ -4,8 +4,9 @@
 
 An arnative look for [pi](https://github.com/earendil-works/pi-coding-agent) — 11 warm-neutral themes, rounded tool boxes, a branded header with clickable tabs, a 2-line footer, a transcript clock, and a `/usage` dashboard.
 
-[pi package](https://github.com/bismawy/pi-arnative) · [Issues](https://github.com/bismawy/pi-arnative/issues)
+[pi package](https://pi.dev/packages/@bismawy/pi-arnative) · [npm](https://www.npmjs.com/package/@bismawy/pi-arnative) · [Issues](https://github.com/bismawy/pi-arnative/issues)
 
+![npm](https://img.shields.io/npm/v/@bismawy/pi-arnative)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
 </div>
@@ -31,7 +32,7 @@ pi-arnative replaces pi's chrome with one visual language — box drawing, dim b
 3. Set your terminal to **JetBrainsMono NF** (or another Nerd Font) as the primary font.
 
 ```bash
-pi install github:bismawy/pi-arnative
+pi install npm:@bismawy/pi-arnative
 ```
 
 Pick a theme in `/settings` > Theme > `arnative` (or any `arnative-*` variant). Everything else — header, footer, tool boxes, clock — turns itself on at session start.

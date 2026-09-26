@@ -1,5 +1,5 @@
 {
-  "name": "pi-arnative",
+  "name": "@bismawy/pi-arnative",
   "version": "0.1.0",
   "description": "Arnative look for Pi: 11 warm-neutral themes, rounded tool boxes, branded header with tabs, 2-line footer with git/model/status, transcript clock, and a /usage dashboard.",
   "keywords": [
@@ -9,6 +9,9 @@
   ],
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bismawy/pi-arnative.git"
