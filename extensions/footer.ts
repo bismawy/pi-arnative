@@ -200,6 +200,53 @@ function poke(): void {
 	}
 }
 
+/**
+ * Pemetaan nama tool ke teks progres aktif (gerund).
+ * Fallback jika tidak terdaftar: "Working".
+ */
+export function getToolWorkingMessage(toolName: string, args?: any): string {
+	const n = (toolName ?? "").trim();
+	if (!n) return "Working";
+
+	// Tool standar / file ops
+	if (n === "edit") return "Editing";
+	if (n === "write") return "Writing";
+	if (n === "read") return "Reading";
+	if (n === "grep" || n === "find" || n === "web_search" || n === "source_check") return "Searching";
+	if (n === "bash") return "Executing";
+	if (n === "fetch_content") return "Fetching";
+	if (n === "get_search_content") return "Reading";
+	if (n === "generate_image") return "Generating image";
+	if (n === "todo" || n === "scratchpad") return "Updating tasks";
+	if (n.startsWith("memory_")) return "Accessing memory";
+	if (n.startsWith("lsp_")) return "Checking code";
+	if (n.startsWith("chrome_devtools_")) return "Browsing";
+	if (n === "ask_user_question" || n === "plan_mode_question") return "Waiting for input";
+
+	// Tool MCP (mcp / mcpScript / mcp__*)
+	if (n === "mcpScript") return "Running script";
+	if (n === "mcp") {
+		const sub = typeof args === "object" && args ? (args.tool || args.search || args.describe || args.action) : "";
+		if (sub) {
+			const s = String(sub).toLowerCase();
+			if (s.includes("search") || s.includes("find")) return "Searching";
+			if (s.includes("fetch") || s.includes("get") || s.includes("read")) return "Fetching";
+			if (s.includes("edit") || s.includes("write") || s.includes("patch")) return "Editing";
+			return "Executing";
+		}
+		return "Executing";
+	}
+	if (n.startsWith("mcp__")) {
+		const sub = typeof args === "object" && args?.tool ? String(args.tool).toLowerCase() : "";
+		if (sub.includes("search") || sub.includes("find")) return "Searching";
+		if (sub.includes("fetch") || sub.includes("get") || sub.includes("read")) return "Fetching";
+		if (sub.includes("edit") || sub.includes("write") || sub.includes("patch")) return "Editing";
+		return "Executing";
+	}
+
+	return "Working";
+}
+
 export default function (pi: ExtensionAPI) {
 	let runtimeGen = 0;
 
@@ -417,7 +464,29 @@ export default function (pi: ExtensionAPI) {
 		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
 		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
 		(globalThis as Record<symbol, any>)[CWD_KEY] = ctx.cwd;
+		try {
+			ctx.ui?.setWorkingMessage?.();
+		} catch {
+			// ignore
+		}
 		void refreshGit(ctx.cwd).then(() => poke());
+	});
+
+	pi.on("tool_execution_start", async (event, ctx) => {
+		try {
+			const msg = getToolWorkingMessage(event.toolName, event.args);
+			ctx.ui?.setWorkingMessage?.(msg);
+		} catch {
+			// ignore
+		}
+	});
+
+	pi.on("tool_execution_end", async (_event, ctx) => {
+		try {
+			ctx.ui?.setWorkingMessage?.();
+		} catch {
+			// ignore
+		}
 	});
 
 	pi.on("message_update", async (event) => {
@@ -458,7 +527,12 @@ export default function (pi: ExtensionAPI) {
 		poke();
 	});
 
-	pi.on("turn_end", async () => {
+	pi.on("turn_end", async (_event, ctx) => {
+		try {
+			ctx.ui?.setWorkingMessage?.();
+		} catch {
+			// ignore
+		}
 		poke();
 	});
 
@@ -508,6 +582,19 @@ if (isMain) {
 	assert(boxed[1] === "\u2502  hi  \u2502", "kotak editor: sisi kiri+kanan");
 	assert(boxed[2] === "\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u256f", "kotak editor: korner bawah");
 	assert(boxed[3] === "  /mo ", "baris autocomplete tetap di luar kotak");
+
+	// Self-check: getToolWorkingMessage
+	assert(getToolWorkingMessage("edit") === "Editing", "edit -> Editing");
+	assert(getToolWorkingMessage("write") === "Writing", "write -> Writing");
+	assert(getToolWorkingMessage("read") === "Reading", "read -> Reading");
+	assert(getToolWorkingMessage("grep") === "Searching", "grep -> Searching");
+	assert(getToolWorkingMessage("find") === "Searching", "find -> Searching");
+	assert(getToolWorkingMessage("web_search") === "Searching", "web_search -> Searching");
+	assert(getToolWorkingMessage("bash") === "Executing", "bash -> Executing");
+	assert(getToolWorkingMessage("fetch_content") === "Fetching", "fetch_content -> Fetching");
+	assert(getToolWorkingMessage("todo") === "Updating tasks", "todo -> Updating tasks");
+	assert(getToolWorkingMessage("unknown_tool") === "Working", "unknown -> Working");
+	assert(getToolWorkingMessage("mcp", { tool: "fetch_repo" }) === "Fetching", "mcp fetch -> Fetching");
 	assert(boxed.every((l, i) => visibleWidth(l) === visibleWidth(["\u2500\u2500\u2500\u2500\u2500\u2500"][0]!) + 2 || i === 3), "lebar kotak seragam");
 	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "baris kurang dari kotak: tak diubah");
 	console.log("footer.ts self-check OK");
