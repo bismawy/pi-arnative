@@ -9,7 +9,7 @@
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { formatTokens } from "../lib/usage-store.ts";
 
@@ -469,6 +469,17 @@ export default function (pi: ExtensionAPI) {
 				renderTopBorder(width: number, hiddenLineCount: number): string {
 					this.applyFixedIndicatorColors((this as any).workingStatusIndicator);
 					return super.renderTopBorder(width, hiddenLineCount);
+				}
+
+				handleInput(data: string) {
+					if (matchesKey(data, "ctrl+alt+r")) {
+						this.setText("");
+						if (this.onSubmit) {
+							this.onSubmit("/reload");
+						}
+						return;
+					}
+					super.handleInput(data);
 				}
 
 				render(width: number): string[] {
