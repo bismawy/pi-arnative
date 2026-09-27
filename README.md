@@ -16,7 +16,7 @@ An arnative look for [pi](https://github.com/earendil-works/pi-coding-agent) —
 pi-arnative replaces pi's chrome with one visual language — box drawing, dim borders, cyan accent, tint for values — without touching session data.
 
 - **11 themes, one generator:** `arnative` plus 10 variants (`sun`, `zinc`, `violet`, `emerald`, `matrix`, `cyberpunk`, `synthwave`, `gruvbox`, `nord`, `dracula`), all generated from a single base file so their structure can never drift.
-- **Header box with tabs:** replaces pi's stacked resource list with a 5-line box — logo, version + shortcuts, and a clickable `Model / Context / Skills / Extensions / Themes` tab menu.
+- **Header box with tabs:** replaces pi's stacked resource list with a 5-line box — logo, version + shortcuts, and a clickable `Model / Directory / Context / Skills / Extensions / Themes` tab menu. The `Directory` tab shows the full working directory (wrapped at `/`, never truncated).
 - **Tool boxes:** every tool call renders in its own rounded box — spinner while running, then `✓`/`x`, right-aligned duration, and a one-line summary. Click or `ctrl+e` for the full output.
 - **2-line footer:** `cwd | duration | branch/tag/status` on the first line, extension status + tok/s + cache + tokens on the second, plus a full-box editor with a `> ` prompt.
 - **Transcript clock:** user and assistant messages get a right-aligned time, and the user bubble background is repaired where Markdown resets would otherwise leave black blocks.
@@ -51,7 +51,7 @@ pi --extension ./extensions/footer.ts
 
 | Shortcut | Action |
 | :--- | :--- |
-| `ctrl+alt+t` | Cycle the header tab (Model → Context → Skills → Extensions → Themes) |
+| `ctrl+alt+t` | Cycle the header tab (Model → Directory → Context → Skills → Extensions → Themes) |
 | click a header tab | Open that tab |
 | click a tool box / `ctrl+e` | Toggle full title and output |
 

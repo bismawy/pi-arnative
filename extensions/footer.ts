@@ -112,6 +112,19 @@ function formatModelName(
 	return `${thinkStr}${acc(name)}${provStr}`;
 }
 
+// Footer is a single line: a deep cwd (`/Users/x/Workspace/personal/proj`)
+// pushes git state and the model off screen. Keep the last 2 segments.
+export function shortenCwd(raw: string): string {
+	const p = (raw || "").trim();
+	if (!p) return p;
+	const drive = p.match(/^[A-Za-z]:/);
+	const body = drive ? p.slice(2) : p;
+	const parts = body.replace(/\\/g, "/").replace(/\/+$/, "").split("/").filter(Boolean);
+	if (parts.length <= 2) return p;
+	const head = drive ? `${drive[0]}/\u2026/` : p.startsWith("/") ? "\u2026/" : "\u2026";
+	return head + parts.slice(-2).join("/");
+}
+
 export function formatDuration(ms: number): string {
 	if (!ms || ms <= 0) return "-";
 	const totalSec = Math.floor(ms / 1000);
@@ -325,14 +338,15 @@ export default function (pi: ExtensionAPI) {
 
 						const durationStr = formatDuration(Date.now() - sessionStartMs);
 						const pDuration = `${acc("\uf017")} ${tint(durationStr)}`;
-						let left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}`;
+						const cwdShort = shortenCwd(cwd);
+						let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
 						if (git) {
 							const gitIcon = acc("\uf172");
 							const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
 							const pBranch = `${acc("\uf126")} ${tint(git.branch)}${git.ahead > 0 ? ` ${tint(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${tint(`↓${git.behind}`)}` : ""}`;
 							const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
 							const pState = `${gitIcon}  ${gitText}`;
-							left1 = `${acc("\uf07b")} ${dim(cwd)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
+							left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 						}
 						const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
 						const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
@@ -591,6 +605,12 @@ if (isMain) {
 			process.exit(1);
 		}
 	};
+	assert(shortenCwd("/run/media/bisma/DATA/Pi/pi-arnative") === "\u2026/Pi/pi-arnative", "cwd dalam -> 2 segmen terakhir");
+	assert(shortenCwd("/home/bisma") === "/home/bisma", "cwd dangkal tak diubah");
+	assert(shortenCwd("D:\\Pi\\a\\pi-arnative") === "D:/\u2026/a/pi-arnative", "path Windows jauh: drive dipertahankan");
+	assert(shortenCwd("D:\\Pi\\pi-arnative") === "D:\\Pi\\pi-arnative", "path Windows dangkal tak diubah");
+	assert(shortenCwd("/a/x/y/z") === "\u2026/y/z", "path jauh -> tail");
+	assert(shortenCwd("") === "", "cwd kosong");
 	assert(formatDuration(0) === "-", "durasi kosong = -");
 	assert(formatDuration(5_000) === "5s", "detik saja");
 	assert(formatDuration(65_000) === "1m 5s", "menit + detik");

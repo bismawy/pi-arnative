@@ -1,6 +1,6 @@
 {
   "name": "@bismawy/pi-arnative",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Arnative look for Pi: 11 warm-neutral themes, rounded tool boxes, branded header with tabs, 2-line footer with git/model/status, transcript clock, and a /usage dashboard.",
   "keywords": [
     "pi-package",

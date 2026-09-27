@@ -31,10 +31,14 @@ import {
 import { renderBoxLines } from "../lib/box.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
-export type TabKey = "Model" | "Context" | "Skills" | "Extensions" | "Themes";
+export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes";
+
+// Tab order for Ctrl+Alt+T and for the menu line.
+export const TAB_ORDER: TabKey[] = ["Model", "Directory", "Context", "Skills", "Extensions", "Themes"];
 
 export const SECTION_ICONS: Record<TabKey, string> = {
 	Model: "\uf1b2",
+	Directory: "\uf07b",
 	Context: "\udb84\uddd7",
 	Skills: "\uec21",
 	Extensions: "\ueea8",
@@ -158,6 +162,38 @@ export function wrapCommaItems(items: string[], maxWidth: number): string[] {
 	return lines;
 }
 
+// Full path, hard-wrapped at "/" so the Directory tab never truncates it
+// (a single long segment is sliced as a last resort).
+export function wrapPath(path: string, maxWidth: number): string[] {
+	const p = (path || "").replace(/\\/g, "/");
+	if (!p) return [p];
+	if (maxWidth < 1) return [p];
+	const abs = p.startsWith("/");
+	const segs = p.replace(/^\/+/, "").split("/").filter(Boolean);
+	const lines: string[] = [];
+	let cur = abs ? "/" : "";
+	for (const seg of segs) {
+		const tok = cur === "/" ? seg : abs || cur ? `/${seg}` : seg;
+		if (visibleWidth(cur) + visibleWidth(tok) <= maxWidth) {
+			cur += tok;
+			continue;
+		}
+		if (cur) lines.push(cur);
+		if (visibleWidth(tok) <= maxWidth) {
+			cur = abs ? `/${seg}` : tok;
+			continue;
+		}
+		let rest = seg;
+		while (visibleWidth(rest) > maxWidth) {
+			lines.push(rest.slice(0, maxWidth));
+			rest = rest.slice(maxWidth);
+		}
+		cur = rest;
+	}
+	if (cur) lines.push(cur);
+	return lines.length > 0 ? lines : [p];
+}
+
 export function centerLine(text: string, width: number, side = "│"): string {
 	const sideW = visibleWidth(side);
 	const innerW = Math.max(0, width - sideW * 2);
@@ -200,6 +236,7 @@ export const tabStore: Map<TabKey, string[]> =
 	(globalThis as Record<symbol, Map<TabKey, string[]>>)[STORE_KEY] ??
 	new Map<TabKey, string[]>([
 		["Model", []],
+		["Directory", []],
 		["Context", []],
 		["Skills", []],
 		["Extensions", []],
@@ -231,6 +268,13 @@ export function formatModelDisplayName(model?: { id?: string; name?: string; pro
 	return `${name}${provStr}`;
 }
 
+// Full working directory for the Directory tab. ctx.cwd is authoritative; the
+// snapshot survives header re-creation when ctx is missing.
+const CWD_SNAPSHOT_KEY = Symbol.for("pi-arnative.lastCwd");
+export function getCwd(ctx?: { cwd?: string }): string {
+	return ctx?.cwd || (globalThis as Record<symbol, any>)[CWD_SNAPSHOT_KEY] || "";
+}
+
 export class ArnativeHeader implements Component {
 	public activeTab: TabKey = "Model";
 	private renderedTabLineY = -1;
@@ -259,6 +303,11 @@ export class ArnativeHeader implements Component {
 
 	getTabsData(width: number): Array<{ key: TabKey; name: string; icon: string; count: number; label: string }> {
 		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
+		const cwd = getCwd(this.ctx);
+		// Tab row stays compact (basename only): the full path is in the content
+		// line below, and render() expands this label when every tab still fits.
+		const dirBase = cwd.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop() || cwd;
+		const dirLabel = dirBase ? `Directory: ${dirBase}` : "Directory";
 		const fullModelName = formatModelDisplayName(modelObj);
 		// Drop bracketed details from the tail of the name ("... Free (1M) [OpenCode] (Freeflow)"
 		// -> "Space Bunny Free"); the details still show in the Model tab data line.
@@ -274,6 +323,7 @@ export class ArnativeHeader implements Component {
 
 		return [
 			{ key: "Model", name: "Model", icon: SECTION_ICONS.Model, count: 0, label: modelLabel },
+			{ key: "Directory", name: "Directory", icon: SECTION_ICONS.Directory, count: 0, label: dirLabel },
 			{
 				key: "Context",
 				name: "Context",
@@ -384,18 +434,16 @@ export class ArnativeHeader implements Component {
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
 
 		const tabParts: Array<{ key: TabKey; plain: string; formatted: string }> = [];
-		for (const t of tabs) {
-			const plain = `${t.icon} ${t.label}`;
+		const makeTabPart = (t: { key: TabKey; icon: string; label: string }, label = t.label) => {
+			const plain = `${t.icon} ${label}`;
 			const isActive = t.key === this.activeTab;
-			const iconStyled = isActive
-				? fgFirst(th, ["accent"], t.icon)
-				: fgFirst(th, ["dim"], t.icon);
+			const iconStyled = isActive ? fgFirst(th, ["accent"], t.icon) : fgFirst(th, ["dim"], t.icon);
 			const labelStyled = isActive
-				? fgFirst(th, ["tint", "text"], `\x1b[1m${t.label}\x1b[22m`)
-				: fgFirst(th, ["dim"], t.label);
-			const formatted = `${iconStyled} ${labelStyled}`;
-			tabParts.push({ key: t.key, plain, formatted });
-		}
+				? fgFirst(th, ["tint", "text"], `\x1b[1m${label}\x1b[22m`)
+				: fgFirst(th, ["dim"], label);
+			return { key: t.key, plain, formatted: `${iconStyled} ${labelStyled}` };
+		};
+		for (const t of tabs) tabParts.push(makeTabPart(t));
 
 		// Tabs that don't fit on narrow screens are dropped from the right (the active tab always stays).
 		const kept: typeof tabParts = [];
@@ -405,6 +453,20 @@ export class ArnativeHeader implements Component {
 			if (kept.length === 0 || usedWidth + w <= innerW) {
 				kept.push(t);
 				usedWidth += w;
+			}
+		}
+		// All tabs fit? Then the Directory tab may show the whole path instead of the
+		// basename. Skipped when it would push another tab off the menu.
+		if (kept.length === tabParts.length) {
+			const i = kept.findIndex((t) => t.key === "Directory");
+			const cwdFull = getCwd(this.ctx);
+			const dirTab = tabs[i];
+			if (i >= 0 && dirTab && cwdFull) {
+				const full = makeTabPart(dirTab, `Directory: ${cwdFull}`);
+				if (usedWidth - visibleWidth(kept[i]!.plain) + visibleWidth(full.plain) <= innerW) {
+					kept[i] = full;
+					usedWidth += visibleWidth(full.plain) - visibleWidth(tabParts[i]!.plain);
+				}
 			}
 		}
 		this.renderedTabRegions = [];
@@ -463,7 +525,11 @@ export class ArnativeHeader implements Component {
 			activeItems = tabStore.get(this.activeTab) ?? [];
 		}
 
-		if (activeItems.length === 0) {
+		if (this.activeTab === "Directory") {
+			for (const line of wrapPath(getCwd(this.ctx), infoW)) {
+				infoLines.push(fgFirst(th, ["tint", "text"], line));
+			}
+		} else if (activeItems.length === 0) {
 			infoLines.push(fgFirst(th, ["tint"], "(kosong)"));
 		} else if (this.activeTab === "Model") {
 			// The Model tab already carries tint styling + a dim separator
@@ -554,8 +620,8 @@ export default function (pi: ExtensionAPI) {
 		handler: async () => {
 			const hdr = activeHeaderInstance;
 			if (!hdr) return;
-			const order: TabKey[] = ["Model", "Context", "Skills", "Extensions", "Themes"];
-			hdr.activeTab = order[(order.indexOf(hdr.activeTab) + 1) % order.length];
+			const order = TAB_ORDER;
+			hdr.activeTab = order[(order.indexOf(hdr.activeTab) + 1) % order.length]!;
 			hdr.tui?.requestRender?.();
 		},
 	});
@@ -571,6 +637,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", async (_event, ctx) => {
 		(globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY] = ctx.model;
 		(globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY] = ctx.thinkingLevel;
+		if (ctx.cwd) (globalThis as Record<symbol, any>)[CWD_SNAPSHOT_KEY] = ctx.cwd;
 	});
 
 	pi.on("turn_end", async () => {
@@ -597,6 +664,13 @@ if (isMain) {
 	// Parsing & wrapping
 	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody koma = 3");
 	assert(extractItemsFromBody("  x\n  y\n  z").length === 3, "extractItemsFromBody baris = 3");
+
+	// Directory path wrapping: never truncated, always the full path
+	const wp = wrapPath("/run/media/bisma/DATA/Pi/pi-arnative", 20);
+	assert(wp.join("") === "/run/media/bisma/DATA/Pi/pi-arnative", "wrapPath tak menghilangkan segmen");
+	assert(wp.every((l) => visibleWidth(l) <= 20), "wrapPath hormati lebar");
+	assert(wrapPath("D:\\Pi\\pi-arnative", 80).join("") === "D:/Pi/pi-arnative", "wrapPath normalisasi backslash");
+	assert(wrapPath("/a/very-long-segment-name", 6).every((l) => visibleWidth(l) <= 6), "segmen panjang diiris");
 
 	const wrapTest = wrapCommaItems(["item1", "item2", "item3", "item4"], 15);
 	assert(wrapTest.length >= 2, "wrapCommaItems membungkus baris");
@@ -643,6 +717,7 @@ if (isMain) {
 	const fakeCtx: any = {
 		model: { name: "Gemini 3.8 Flash", provider: "antigravity" },
 		thinkingLevel: "low",
+		cwd: "/run/media/bisma/DATA/Pi/pi-arnative",
 	};
 
 	// Only "dim" is colored, so the box line colors can be asserted.
@@ -663,7 +738,21 @@ if (isMain) {
 	);
 	assert(stripAnsi(lines100[1]!).includes("pi v") && stripAnsi(lines100[1]!).includes("Arnative"), "baris versi + merek");
 	assert(stripAnsi(lines100[4]!).includes("Model: Gemini 3.8 Flash"), "menu tab Model tampil");
+	// Directory tab: whole path in the content line, no truncation
+	hdr.activeTab = "Directory";
+	hdr.render(100);
+	assert(stripAnsi(lines100[4]!).includes("Directory:"), "tab Directory tampil di menu");
+	hdr.activeTab = "Model";
+	hdr.render(100);
 	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "data tab aktif Model tampil di baris info terakhir");
+	// Directory tab content: full path, wrapped, nothing lost
+	hdr.activeTab = "Directory";
+	const linesDir = hdr.render(100);
+	const dirContent = stripAnsi(linesDir[6]!);
+	assert(dirContent.includes("/run/media/bisma"), "path lengkap tab Directory (awal) tampil");
+	assert(dirContent.includes("pi-arnative"), "path lengkap tab Directory (akhir) tampil — tanpa truncate");
+	hdr.activeTab = "Model";
+	hdr.render(100);
 	// The inner box lines are one fully dimmed block (the "─" runs are colored too, not just the corners).
 	for (const i of [3, 5]) {
 		assert((lines100[i]!.match(/\x1b\[/g) ?? []).length === 8, `garis kotak dalam baris ${i} = satu blok dim penuh (garis "─" ikut ter-warnai, bukan hanya sudut)`);
@@ -673,7 +762,8 @@ if (isMain) {
 	const tabY = (hdr as any).renderedTabLineY;
 	assert(tabY > 0, "posisi Y baris tab tercatat");
 	const tabRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
-	assert(tabRegions.length >= 4, "region tab terisi (tab paling kanan bisa terpotong di 100 kolom)");
+	assert(tabRegions.length >= 3, "region tab terisi (tab kanan bisa terpotong di 100 kolom)");
+	assert(tabRegions.some((r) => r.key === "Directory"), "tab Directory ada di menu (lebar 100)");
 
 	// Click the Extensions tab (when truncated at 100 columns, use the rightmost tab)
 	const extRegion = tabRegions.find((r) => r.key === "Extensions") ?? tabRegions[tabRegions.length - 1]!;
@@ -690,20 +780,29 @@ if (isMain) {
 	const linesExt = hdr.render(100);
 	assert(stripAnsi(linesExt[6]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "data tab aktif tampil di baris info terakhir");
 
-	// Click the Skills tab
-	const skillsRegion = tabRegions.find((r) => r.key === "Skills") ?? tabRegions[0]!;
+	// Click the Skills tab (measured at a width where every tab fits)
+	const wide = hdr.render(140);
+	const wideRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
+	const skillsRegion = wideRegions.find((r) => r.key === "Skills") ?? wideRegions[wideRegions.length - 1]!;
+	hdr.activeTab = "Model";
+	hdr.render(140);
+	const skillsY = (hdr as any).renderedTabLineY;
 	hdr.handleMouse({
 		type: "click",
 		button: "left",
 		x: Math.floor((skillsRegion.startX + skillsRegion.endX) / 2),
-		y: tabY,
+		y: skillsY,
 	} as any);
-	assert(hdr.activeTab === "Skills", "activeTab berubah ke Skills setelah klik");
+	assert(hdr.activeTab === skillsRegion.key, `activeTab berubah ke ${skillsRegion.key} setelah klik`);
 
-	const linesSkills = hdr.render(100);
-	assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "data tab Skills tampil di baris info terakhir");
-	assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
-	assert(linesSkills[4]!.includes("Model: Gemini 3.8 Flash"), "menu tab tetap tampil saat tab lain aktif");
+	const linesSkills = hdr.render(140);
+	assert(wide.every((l) => visibleWidth(l) === 140), "baris 140 kolom tetap 140");
+	assert(wideRegions.length === 6, "lebar 140: semua 6 tab tampil");
+	if (skillsRegion.key === "Skills") {
+		assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "data tab Skills tampil di baris info terakhir");
+		assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
+		assert(linesSkills[4]!.includes("Model: Gemini 3.8 Flash"), "menu tab tetap tampil saat tab lain aktif");
+	}
 
 	// The Y of a tab must point at the tab menu line, not the shortcut line above
 	const rowsPlain = lines100.map((l) => stripAnsi(l));
