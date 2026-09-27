@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.3] - 2026-09-27
+
+### Added
+- `Shortcut` header tab (rightmost, after `Themes`) holding the key cheatsheet: `Esc`, `Ctrl+c/d`, `/`, `!`, `Ctrl+o`, `Ctrl+alt+t`, `Ctrl+alt+n`, `Ctrl+alt+r`. Tab order is now `Directory → Model → Context → Skills → Extensions → Themes → Shortcut`.
+
+### Changed
+- The header no longer spends a line on the shortcut legend. Line 1 greets the device username (`Welcome back, <user>`), line 2 shows `pi vX.Y.Z · Arnative vX.Y.Z` (names in the theme accent, versions dim). The tab box labels itself on its top border (`╭─ Menu ───╮`) instead of spending a text line. The Arnative version is read from the package.json of the running build, so an outdated npm install can no longer claim to be the executing code.
+- The `Shortcut` tab is dropped first on narrow terminals (~<146 columns), like every rightmost tab.
+
+---
+
 ## [0.2.2] - 2026-09-27
 
 ### Added

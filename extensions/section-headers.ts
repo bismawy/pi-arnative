@@ -2,15 +2,19 @@
  * Arnative header box & horizontal tab system:
  * - Round-corner box, fixed height 5 lines: "pi" 3x6 logo on the left, a vertical
  *   divider, then 3 left-aligned info lines (version/shortcuts, tabs, data).
- * - Info line 1: pi version & shortcuts [Esc], [Ctrl+c/d], [/], [!], [Ctrl+o].
- * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Themes
- *   with item counts. Tab icon = accent, tab text = tint.
+ * - Info line 1: "Welcome back, <device username>" (os.userInfo, env fallback). Line 2:
+ *   pi + Arnative brand with versions. The tab box labels itself on its top border
+ *   ("╭─ Menu ───╮").
+ * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Themes/Shortcut
+ *   with item counts. Tab icon = accent, tab text = tint. The key cheatsheet lives in
+ *   the Shortcut tab, not in a header line.
  * - Box divider '├────┤'.
  * - Active tab content (left-aligned, neatly wrapped, tint, never stacked).
  * - Hides pi's built-in stacked list in loadedResourcesContainer.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import {
 	UserMessageComponent,
@@ -31,10 +35,10 @@ import {
 import { renderBoxLines } from "../lib/box.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
-export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes";
+export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes" | "Shortcut";
 
 // Tab order for Ctrl+Alt+T and for the menu line.
-export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Themes"];
+export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Themes", "Shortcut"];
 
 export const SECTION_ICONS: Record<TabKey, string> = {
 	Model: "\uf1b2",
@@ -43,6 +47,7 @@ export const SECTION_ICONS: Record<TabKey, string> = {
 	Skills: "\uec21",
 	Extensions: "\ueea8",
 	Themes: "\uee72",
+	Shortcut: "\uf11c", // nf-fa-keyboard_o
 };
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -88,6 +93,21 @@ export function packageNameOf(label: string): string | null {
 	return /^[\w.@/-]+$/.test(base) ? base : null;
 }
 
+/**
+ * OS account name of whoever is running pi, for the header greeting. Falls back to the
+ * usual env vars, then to a neutral word so the line is never empty.
+ */
+export function deviceUser(): string {
+	try {
+		const u = userInfo().username;
+		if (u) return u;
+	} catch {
+		/* no passwd entry (some containers) — fall through to env */
+	}
+	const u = process.env.USER ?? process.env.USERNAME ?? "";
+	return u || "there";
+}
+
 const versionCache = new Map<string, string | null>();
 
 export function readVersion(dir: string): string | null {
@@ -122,6 +142,11 @@ export function installedVersion(
 	return version;
 }
 
+// Arnative build actually running: package.json one level above this extension file.
+// Reading the module's own package beats reading the npm-installed copy, which lags
+// behind whenever the local clone (or a hand-copied extensions/) is what pi loaded.
+const ARNATIVE_VERSION = readVersion(fileURLToPath(new URL("..", import.meta.url)));
+
 export function extractItemsFromBody(body: string, isExtensions = false): string[] {
 	const plain = stripAnsi(body).trim();
 	if (!plain) return [];
@@ -145,16 +170,33 @@ export function extractItemsFromBody(body: string, isExtensions = false): string
 	});
 }
 
+// Cheatsheet for the Shortcut tab. Mirrors README "Shortcuts" plus the bindings the
+// extensions themselves own (footer.ts). Kept as plain text so the data line can wrap it.
+export const SHORTCUTS: string[] = [
+	"[Esc] Interrupt",
+	"[Ctrl+c/d] Exit",
+	"[/] Commands",
+	"[!] Bash",
+	"[Ctrl+o] More/expand",
+	"[Ctrl+alt+t] Next tab",
+	"[Ctrl+alt+n] New",
+	"[Ctrl+alt+r] Reload",
+];
+
 export function wrapCommaItems(items: string[], maxWidth: number): string[] {
+	return wrapTokens(items, maxWidth, ", ", ",");
+}
+
+export function wrapTokens(items: string[], maxWidth: number, sep = "  ", trailing = ""): string[] {
 	const lines: string[] = [];
 	let cur = "";
 	for (const item of items) {
 		if (!cur) {
 			cur = item;
-		} else if (visibleWidth(cur) + 2 + visibleWidth(item) <= maxWidth) {
-			cur += ", " + item;
+		} else if (visibleWidth(cur) + visibleWidth(sep) + visibleWidth(item) <= maxWidth) {
+			cur += sep + item;
 		} else {
-			lines.push(cur + ",");
+			lines.push(cur + trailing);
 			cur = item;
 		}
 	}
@@ -350,6 +392,13 @@ export class ArnativeHeader implements Component {
 				count: tabStore.get("Themes")?.length ?? 0,
 				label: `Themes [${tabStore.get("Themes")?.length ?? 0}]`,
 			},
+			{
+				key: "Shortcut",
+				name: "Shortcut",
+				icon: SECTION_ICONS.Shortcut,
+				count: SHORTCUTS.length,
+				label: `Shortcut [${SHORTCUTS.length}]`,
+			},
 		];
 	}
 
@@ -404,28 +453,17 @@ export class ArnativeHeader implements Component {
 		const infoLines: string[] = [];
 		// Inner box: the tab menu line is framed, content is (infoW - 2) columns.
 		const innerW = Math.max(1, infoW - 2);
+		const brand = (name: string) => fgFirst(th, ["accent", "tint"], `\x1b[1m${name}\x1b[22m`);
+		const dim = (text: string) => fgFirst(th, ["dim"], text);
 
-		// 1. pi version + brand line. Always intact.
+		// 1. Greeting: device username, accent like the brand names below it.
+		infoLines.push(`${dim("Welcome back,")} ${brand(deviceUser())}`);
+
+		// 2. Brand line: pi · Arnative, both in the theme accent, versions dim.
 		const versionStr = VERSION || "0.87.1";
-		const piPart = `${fgFirst(th, ["accent", "tint"], "\x1b[1mpi\x1b[22m")} ${fgFirst(th, ["dim"], `v${versionStr}`)}`;
-		infoLines.push(`${piPart}${fgFirst(th, ["dim"], " · ")}${fgFirst(th, ["dim"], "Arnative")}`);
-		const shortcutItems = [
-			`${fgFirst(th, ["tint"], "[Esc]")} ${fgFirst(th, ["dim"], "Interrupt")}`,
-			`${fgFirst(th, ["tint"], "[Ctrl+c/d]")} ${fgFirst(th, ["dim"], "Exit")}`,
-			`${fgFirst(th, ["tint"], "[/]")} ${fgFirst(th, ["dim"], "Commands")}`,
-			`${fgFirst(th, ["tint"], "[!]")} ${fgFirst(th, ["dim"], "Bash")}`,
-			`${fgFirst(th, ["tint"], "[Ctrl+o]")} ${fgFirst(th, ["dim"], "More/expand")}`,
-			`${fgFirst(th, ["tint"], "[Ctrl+alt+t]")} ${fgFirst(th, ["dim"], "Next tab")}`,
-			`${fgFirst(th, ["tint"], "[Ctrl+alt+r]")} ${fgFirst(th, ["dim"], "Reload")}`,
-		];
-		// Shortcut list is trimmed from the right (longest prefix that still fits) so
-		// narrow screens never clip the tabs or the data.
-		let scText = "";
-		for (let i = 1; i <= shortcutItems.length; i++) {
-			const cand = shortcutItems.slice(0, i).join("  ");
-			if (visibleWidth(cand) <= infoW) scText = cand;
-		}
-		infoLines.push(scText);
+		infoLines.push(
+			`${brand("pi")} ${dim(`v${versionStr}`)}${dim(" · ")}${brand("Arnative")}${ARNATIVE_VERSION ? ` ${dim(`v${ARNATIVE_VERSION}`)}` : ""}`,
+		);
 
 		// 2. Tab menu: icon = accent, text = tint (bold when active)
 		const tabs = this.getTabsData(width);
@@ -470,8 +508,16 @@ export class ArnativeHeader implements Component {
 			const t = truncateToWidth(text, tabInnerW);
 			return `${side}${t}${" ".repeat(tabInnerW - visibleWidth(t))}${side}`;
 		};
-		const tabRule = (l: string, r: string): string => fgFirst(th, ["dim"], `${l}${"─".repeat(tabInnerW)}${r}`);
-		infoLines.push(tabRule("╭", "╮"));
+		const tabRule = (l: string, r: string, label = ""): string => {
+			// Label rides on the top border ("╭─ Menu ───╮") so no extra text line is spent; the
+			// word is tint so it reads as a label instead of a dimmer stretch of border.
+			const lead = label.length + 1;
+			if (label && tabInnerW - lead > 1) {
+				return `${fgFirst(th, ["dim"], `${l}─`)}${fgFirst(th, ["tint", "text"], label)}${fgFirst(th, ["dim"], `${"─".repeat(tabInnerW - lead)}${r}`)}`;
+			}
+			return fgFirst(th, ["dim"], `${l}${"─".repeat(tabInnerW)}${r}`);
+		};
+		infoLines.push(tabRule("╭", "╮", " Menu "));
 		// One space from the left border, then " │ " between tabs.
 		infoLines.push(tabRow(tabText));
 		// Tab line = top border (index 0) + the infoLines above + this line.
@@ -514,6 +560,10 @@ export class ArnativeHeader implements Component {
 
 		if (this.activeTab === "Directory") {
 			for (const line of wrapPath(getCwd(this.ctx), infoW)) {
+				infoLines.push(fgFirst(th, ["tint", "text"], line));
+			}
+		} else if (this.activeTab === "Shortcut") {
+			for (const line of wrapTokens(SHORTCUTS, infoW)) {
 				infoLines.push(fgFirst(th, ["tint", "text"], line));
 			}
 		} else if (activeItems.length === 0) {
@@ -728,7 +778,27 @@ if (isMain) {
 		lines100.slice(1, 7).every((l, i) => stripAnsi(l).slice(2, 15) === logoPlain[i]),
 		"ascii Pi asli di kolom kiri, 6 baris",
 	);
-	assert(stripAnsi(lines100[1]!).includes("pi v") && stripAnsi(lines100[1]!).includes("Arnative"), "baris versi + merek");
+	assert(
+		/Welcome back, \S/.test(stripAnsi(lines100[1]!)) && !stripAnsi(lines100[1]!).includes("pi v"),
+		"baris 1: sapaan pakai username device",
+	);
+	assert(
+		stripAnsi(lines100[2]!).includes("pi v") && /Arnative v\d+\.\d+\.\d+/.test(stripAnsi(lines100[2]!)),
+		"baris 2: pi + Arnative + versi build Arnative",
+	);
+	assert(/╭─ Menu ─+╮/.test(stripAnsi(lines100[3]!)), "border atas kotak tab memuat label Menu");
+	assert(!stripAnsi(lines100[1]!).includes("Interrupt"), "legend pintasan tidak lagi di baris atas");
+	// Both brand names use the theme accent, not only "pi".
+	const accentTheme = {
+		fg: (c: string, t: string) => (c === "accent" ? `<A>${t}</A>` : c === "dim" ? `<D>${t}</D>` : t),
+	};
+	const accentHeader = new ArnativeHeader(fakeTui, accentTheme as any, fakeCtx);
+	const accentLine = accentHeader.render(100)[2]!;
+	assert(accentLine.includes("<A>\x1b[1mpi"), "nama pi pakai aksen tema");
+	assert(accentLine.includes("<A>\x1b[1mArnative"), "nama Arnative pakai aksen tema yang sama");
+	const greetLine = accentHeader.render(100)[1]!;
+	assert(greetLine.includes("<D>Welcome back,"), "kata sapaan pakai warna dim");
+	assert(greetLine.includes(`<A>\x1b[1m${deviceUser()}`), "username device pakai aksen tema");
 	assert(stripAnsi(lines100[4]!).includes("Model [Gemini 3.8 Flash]"), "menu tab Model tampil (Model [nama])");
 	// Directory tab: name only in the menu, whole path in the content line below
 	hdr.activeTab = "Directory";
@@ -747,10 +817,13 @@ if (isMain) {
 	assert(dirContent.includes("pi-arnative"), "path lengkap tab Directory (akhir) tampil — tanpa truncate");
 	hdr.activeTab = "Model";
 	hdr.render(100);
-	// The inner box lines are one fully dimmed block (the "─" runs are colored too, not just the corners).
-	for (const i of [3, 5]) {
-		assert((lines100[i]!.match(/\x1b\[/g) ?? []).length === 8, `garis kotak dalam baris ${i} = satu blok dim penuh (garis "─" ikut ter-warnai, bukan hanya sudut)`);
-	}
+	// Inner box rules: bottom line is one fully dimmed block (the "─" runs are colored too, not
+	// just the corners); the top one is the same except it carries the tinted " Menu " label.
+	assert((lines100[5]!.match(/\x1b\[/g) ?? []).length === 8, 'garis kotak bawah (baris 5) = satu blok dim penuh');
+	assert(
+		lines100[3]!.includes("\x1b[2m╭─\x1b[22m Menu \x1b[2m─") && lines100[3]!.includes("╮\x1b[22m"),
+		'border atas kotak tab = dua blok dim dengan label " Menu " di antaranya',
+	);
 
 	// Tab regions: Model, Context, Skills, Extensions, Themes
 	const tabY = (hdr as any).renderedTabLineY;
@@ -791,23 +864,42 @@ if (isMain) {
 
 	const linesSkills = hdr.render(140);
 	assert(wide.every((l) => visibleWidth(l) === 140), "baris 140 kolom tetap 140");
-	assert(wideRegions.length === 6, "lebar 140: semua 6 tab tampil");
+	assert(wideRegions.length === 6, "lebar 140: 6 tab pertama tampil (Shortcut di paling kanan ikut terbuang)");
 	if (skillsRegion.key === "Skills") {
 		assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "data tab Skills tampil di baris info terakhir");
 		assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
 		assert(linesSkills[4]!.includes("Model [Gemini 3.8 Flash]"), "menu tab tetap tampil saat tab lain aktif");
 	}
 
-	// The Y of a tab must point at the tab menu line, not the shortcut line above
+	// The Y of a tab must point at the tab menu line, not the line above
 	const rowsPlain = lines100.map((l) => stripAnsi(l));
 	assert(rowsPlain[tabY]!.includes("Model ["), "renderedTabLineY menunjuk baris menu tab");
 	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model [" : r.key)), "region tab rata dengan teks di baris itu");
 
-	// Narrow screen: version + tabs + data stay intact, shortcuts get trimmed
+	// Shortcut tab: the key cheatsheet lives in the tab content, not in a header line
+	hdr.activeTab = "Shortcut";
+	const linesShortcut = hdr.render(170);
+	assert(
+		((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),
+		"lebar 170: tab Shortcut tampil (tidak terbuang)",
+	);
+	const scContent = stripAnsi(linesShortcut.slice(6).join(" "));
+	assert(scContent.includes("[Esc] Interrupt"), "tab Shortcut: legend pindah ke konten");
+	assert(scContent.includes("[Ctrl+alt+r] Reload"), "tab Shortcut: pintasan reload ada di konten");
+	assert(stripAnsi(linesShortcut[2]!).includes("Arnative v"), "baris 2 tetap brand Arnative saat tab Shortcut aktif");
+	hdr.activeTab = "Model";
+	hdr.render(140);
+
+	// Narrow screen: brand lines + tabs + data stay intact, rightmost tabs are dropped
 	const narrow = hdr.render(60);
 	assert(narrow.every((l) => visibleWidth(l) === 60), "baris 60 kolom tetap 60");
-	assert(stripAnsi(narrow[1]!).includes("pi v"), "versi tetap utuh di 60 kolom");
-	assert(stripAnsi(narrow[1]!).includes("More/expand") === false, "shortcut panjang dibuang di 60 kolom");
+	assert(stripAnsi(narrow[1]!).includes("Welcome back,"), "sapaan tetap utuh di 60 kolom");
+	assert(stripAnsi(narrow[2]!).includes("Arnative v"), "brand pi + Arnative utuh di 60 kolom");
+	assert(stripAnsi(narrow[2]!).includes("Interrupt") === false, "legend tidak balik ke baris atas");
+	assert(
+		!((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),
+		"tab paling kanan dibuang di 60 kolom",
+	);
 	assert(stripAnsi(narrow[4]!).includes("Model ["), "tab Model tetap tampil di 60 kolom");
 
 	// Intercept addChild: capture the data and suppress the child

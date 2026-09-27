@@ -11,7 +11,7 @@ A visual layer and tool styling tailored to your vibe coding.
 pi-arnative replaces pi’s default terminal chrome with a unified, cohesive visual aesthetic.
 
 - Warm Themes: Cohesive, contrast-checked color palettes generated without drift.
-- Tabbed Header: Compact box menu with quick access to Directory, Model, Skills, Extensions, and Themes.
+- Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, Themes, and Shortcut.
 - Rounded Tool Boxes: Clear status, spinner, and duration for every tool call.
 - Enhanced Footer: 2-line layout showing directory path, git branch, model, and token metrics.
 - Transcript Clock: Timestamps for messages with clean bubble backgrounds.
@@ -36,10 +36,26 @@ pi --extension ./extensions/footer.ts
 | Key / Action | Result |
 | --- | --- |
 | `/usage` | Show session usage & token metrics |
-| `ctrl+alt+t` | Cycle header tabs (Directory → Model → Context → Skills → Extensions → Themes) |
+| `ctrl+alt+t` | Cycle header tabs (Directory → Model → Context → Skills → Extensions → Themes → Shortcut) |
+| `ctrl+alt+n` | Start a new session (`/new`) — see [Keybindings](#keybindings) |
 | `ctrl+alt+r` | Quick reload runtime (`/reload`) |
 | Click tab | Open selected header tab |
 | Click tool / `ctrl+e` | Toggle tool output box |
+
+Same cheatsheet in the header's **Shortcut** tab; on narrow terminals the rightmost tabs drop off first.
+
+## Keybindings
+
+`ctrl+alt+n` is a plain user keybinding, not a package shortcut — pi-arnative never registers it.
+Add it once to `~/.pi/agent/keybindings.json`:
+
+```json
+{
+  "app.session.new": "ctrl+alt+n"
+}
+```
+
+Restart pi to pick it up.
 
 ## Architecture
 
