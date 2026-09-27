@@ -9,9 +9,13 @@
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { formatTokens } from "../lib/usage-store.ts";
+
+// The TUI drops key-release events before handleInput, so press+release cannot
+// fire this twice even when the terminal reports event types (Kitty flag 2).
+const RELOAD_SHORTCUT = Key.ctrlAlt("r");
 
 // Intercept the built-in FooterComponent to force a pure 2-line footer
 const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
@@ -472,7 +476,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				handleInput(data: string) {
-					if (matchesKey(data, "ctrl+alt+r")) {
+					if (matchesKey(data, RELOAD_SHORTCUT)) {
 						this.setText("");
 						if (this.onSubmit) {
 							this.onSubmit("/reload");
@@ -654,5 +658,12 @@ if (isMain) {
 	assert(getToolWorkingMessage("mcp", { tool: "fetch_repo" }) === "Fetching", "mcp fetch -> Fetching");
 	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "lebar kotak seragam (sisi+prompt)");
 	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "terlalu sempit: tak diubah");
+
+	// Guard: the reload shortcut must match every encoding a terminal can deliver,
+	// so a typo in the key id fails here instead of silently doing nothing.
+	assert(matchesKey("\x1b\x12", RELOAD_SHORTCUT), "shortcut cocok dgn ctrl+alt+r legacy (ESC + 0x12)");
+	assert(matchesKey("\x1b[114;7u", RELOAD_SHORTCUT), "shortcut cocok dgn ctrl+alt+r Kitty CSI-u");
+	assert(!matchesKey("\x12", RELOAD_SHORTCUT), "ctrl+r polos tidak memicu reload");
+	assert(!matchesKey("r", RELOAD_SHORTCUT), "huruf r tidak memicu reload");
 	console.log("footer.ts self-check OK");
 }
