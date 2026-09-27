@@ -37,6 +37,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "scripts": {
+    "dev": "pi --extension ./extensions/tools.ts --extension ./extensions/section-headers.ts --extension ./extensions/footer.ts --extension ./extensions/timestamps.ts --extension ./extensions/ui-render-tweaks.ts --extension ./extensions/usage.ts",
     "test": "node lib/box.ts && node lib/ansi.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts",
     "themes": "node themes/gen-themes.mjs"
   }
