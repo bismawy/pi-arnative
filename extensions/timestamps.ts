@@ -12,7 +12,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import { ansiBgOpen, stripAnsi } from "../lib/ansi.ts";
+import { ansiBgOpen, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 
 const USER_TIMESTAMPS_MAP = new Map<string, number>();

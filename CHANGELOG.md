@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5] - 2026-09-28
+
+### Fixed
+- `timestamps.ts`: missing `themeOf` import crashed `session_start` with "themeOf is not defined" on `/reload` and session resume (0.2.4 regression).
+
+---
+
 ## [0.2.4] - 2026-09-28
 
 ### Added
