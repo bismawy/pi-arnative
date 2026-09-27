@@ -11,7 +11,7 @@ A visual layer and tool styling tailored to your vibe coding.
 pi-arnative replaces pi’s default terminal chrome with a unified, cohesive visual aesthetic.
 
 - Warm Themes: Cohesive, contrast-checked color palettes generated without drift.
-- Tabbed Header: Compact box menu with quick access to Model, Skills, Extensions, and Themes.
+- Tabbed Header: Compact box menu with quick access to Directory, Model, Skills, Extensions, and Themes.
 - Rounded Tool Boxes: Clear status, spinner, and duration for every tool call.
 - Enhanced Footer: 2-line layout showing directory path, git branch, model, and token metrics.
 - Transcript Clock: Timestamps for messages with clean bubble backgrounds.
@@ -36,7 +36,7 @@ pi --extension ./extensions/footer.ts
 | Key / Action | Result |
 | --- | --- |
 | `/usage` | Show session usage & token metrics |
-| `ctrl+alt+t` | Cycle header tabs (Model → Directory → Context → Skills → Extensions → Themes) |
+| `ctrl+alt+t` | Cycle header tabs (Directory → Model → Context → Skills → Extensions → Themes) |
 | `ctrl+alt+r` | Quick reload runtime (`/reload`) |
 | Click tab | Open selected header tab |
 | Click tool / `ctrl+e` | Toggle tool output box |

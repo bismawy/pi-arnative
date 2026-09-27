@@ -34,7 +34,7 @@ import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes";
 
 // Tab order for Ctrl+Alt+T and for the menu line.
-export const TAB_ORDER: TabKey[] = ["Model", "Directory", "Context", "Skills", "Extensions", "Themes"];
+export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Themes"];
 
 export const SECTION_ICONS: Record<TabKey, string> = {
 	Model: "\uf1b2",
@@ -276,7 +276,7 @@ export function getCwd(ctx?: { cwd?: string }): string {
 }
 
 export class ArnativeHeader implements Component {
-	public activeTab: TabKey = "Model";
+	public activeTab: TabKey = "Directory";
 	private renderedTabLineY = -1;
 	private renderedTabRegions: Array<{ key: TabKey; startX: number; endX: number }> = [];
 
@@ -303,27 +303,25 @@ export class ArnativeHeader implements Component {
 
 	getTabsData(width: number): Array<{ key: TabKey; name: string; icon: string; count: number; label: string }> {
 		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
-		const cwd = getCwd(this.ctx);
-		// Tab row stays compact (basename only): the full path is in the content
-		// line below, and render() expands this label when every tab still fits.
-		const dirBase = cwd.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop() || cwd;
-		const dirLabel = dirBase ? `Directory: ${dirBase}` : "Directory";
+		// Tab row stays compact: the Directory tab shows just its name, the full path
+		// lives in the content line below.
+		const dirLabel = "Directory";
 		const fullModelName = formatModelDisplayName(modelObj);
 		// Drop bracketed details from the tail of the name ("... Free (1M) [OpenCode] (Freeflow)"
 		// -> "Space Bunny Free"); the details still show in the Model tab data line.
-		let modelLabel = `Model: ${fullModelName.replace(/(\s*\([^()]*\)|\s*\[[^[\]]*\])+$/, "").trim()}`;
+		let modelLabel = `Model [${fullModelName.replace(/(\s*\([^()]*\)|\s*\[[^[\]]*\])+$/, "").trim()}]`;
 		// Responsive on medium screens: drop the provider when columns < 112
 		if (width < 112 && modelLabel.includes(" (")) {
-			modelLabel = `Model: ${fullModelName.slice(0, fullModelName.indexOf(" (")).trim()}`;
+			modelLabel = `Model [${fullModelName.slice(0, fullModelName.indexOf(" (")).trim()}]`;
 		}
 		// Below 88 columns: shorten the model name
 		if (width < 88 && modelLabel.length > 18) {
-			modelLabel = `Model: ${modelLabel.slice(7, 18).trim()}…`;
+			modelLabel = `Model [${modelLabel.slice(7, 18).trim()}…]`;
 		}
 
 		return [
-			{ key: "Model", name: "Model", icon: SECTION_ICONS.Model, count: 0, label: modelLabel },
 			{ key: "Directory", name: "Directory", icon: SECTION_ICONS.Directory, count: 0, label: dirLabel },
+			{ key: "Model", name: "Model", icon: SECTION_ICONS.Model, count: 0, label: modelLabel },
 			{
 				key: "Context",
 				name: "Context",
@@ -418,6 +416,7 @@ export class ArnativeHeader implements Component {
 			`${fgFirst(th, ["tint"], "[!]")} ${fgFirst(th, ["dim"], "Bash")}`,
 			`${fgFirst(th, ["tint"], "[Ctrl+o]")} ${fgFirst(th, ["dim"], "More/expand")}`,
 			`${fgFirst(th, ["tint"], "[Ctrl+alt+t]")} ${fgFirst(th, ["dim"], "Next tab")}`,
+			`${fgFirst(th, ["tint"], "[Ctrl+alt+r]")} ${fgFirst(th, ["dim"], "Reload")}`,
 		];
 		// Shortcut list is trimmed from the right (longest prefix that still fits) so
 		// narrow screens never clip the tabs or the data.
@@ -434,7 +433,8 @@ export class ArnativeHeader implements Component {
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
 
 		const tabParts: Array<{ key: TabKey; plain: string; formatted: string }> = [];
-		const makeTabPart = (t: { key: TabKey; icon: string; label: string }, label = t.label) => {
+		const makeTabPart = (t: { key: TabKey; icon: string; label: string }) => {
+			const { label } = t;
 			const plain = `${t.icon} ${label}`;
 			const isActive = t.key === this.activeTab;
 			const iconStyled = isActive ? fgFirst(th, ["accent"], t.icon) : fgFirst(th, ["dim"], t.icon);
@@ -455,22 +455,9 @@ export class ArnativeHeader implements Component {
 				usedWidth += w;
 			}
 		}
-		// All tabs fit? Then the Directory tab may show the whole path instead of the
-		// basename. Skipped when it would push another tab off the menu.
-		if (kept.length === tabParts.length) {
-			const i = kept.findIndex((t) => t.key === "Directory");
-			const cwdFull = getCwd(this.ctx);
-			const dirTab = tabs[i];
-			if (i >= 0 && dirTab && cwdFull) {
-				const full = makeTabPart(dirTab, `Directory: ${cwdFull}`);
-				if (usedWidth - visibleWidth(kept[i]!.plain) + visibleWidth(full.plain) <= innerW) {
-					kept[i] = full;
-					usedWidth += visibleWidth(full.plain) - visibleWidth(tabParts[i]!.plain);
-				}
-			}
-		}
 		this.renderedTabRegions = [];
-		let curX = INFO_X;
+		// The tab row has its own left border + a leading space before the first tab.
+		let curX = INFO_X + 2;
 		for (const t of kept) {
 			const w = visibleWidth(t.plain);
 			this.renderedTabRegions.push({ key: t.key, startX: curX, endX: curX + w - 1 });
@@ -723,8 +710,13 @@ if (isMain) {
 	// Only "dim" is colored, so the box line colors can be asserted.
 	const ansiTheme = { fg: (c: string, t: string) => (c === "dim" ? `\x1b[2m${t}\x1b[22m` : t) };
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
-	assert(hdr.activeTab === "Model", "default tab adalah Model");
+	assert(hdr.activeTab === "Directory", "default tab adalah Directory");
 
+	// Default view: the working directory path, shown on open
+	const linesDefault = hdr.render(100);
+	assert(stripAnsi(linesDefault[6]!).includes("/run/media/bisma/DATA/Pi/pi-arnative"), "path direktori tampil sejak tab pertama dibuka");
+
+	hdr.activeTab = "Model";
 	const lines100 = hdr.render(100);
 	assert(lines100.length === 8, "render 100 = border + 6 baris logo + border (3 baris info mengisi 3 baris logo)");
 	assert(lines100.every((l) => visibleWidth(l) === 100), "semua baris render 100 tepat 100 kolom");
@@ -737,11 +729,13 @@ if (isMain) {
 		"ascii Pi asli di kolom kiri, 6 baris",
 	);
 	assert(stripAnsi(lines100[1]!).includes("pi v") && stripAnsi(lines100[1]!).includes("Arnative"), "baris versi + merek");
-	assert(stripAnsi(lines100[4]!).includes("Model: Gemini 3.8 Flash"), "menu tab Model tampil");
-	// Directory tab: whole path in the content line, no truncation
+	assert(stripAnsi(lines100[4]!).includes("Model [Gemini 3.8 Flash]"), "menu tab Model tampil (Model [nama])");
+	// Directory tab: name only in the menu, whole path in the content line below
 	hdr.activeTab = "Directory";
 	hdr.render(100);
-	assert(stripAnsi(lines100[4]!).includes("Directory:"), "tab Directory tampil di menu");
+	assert(stripAnsi(lines100[4]!).includes("Directory"), "tab Directory tampil di menu");
+	assert(!stripAnsi(lines100[4]!).includes("Directory: /"), "menu Directory tanpa path (detail hanya saat diklik)");
+	assert(stripAnsi(lines100[4]!).indexOf("Directory") < stripAnsi(lines100[4]!).indexOf("Model ["), "Directory tab berada paling kiri");
 	hdr.activeTab = "Model";
 	hdr.render(100);
 	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "data tab aktif Model tampil di baris info terakhir");
@@ -801,20 +795,20 @@ if (isMain) {
 	if (skillsRegion.key === "Skills") {
 		assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "data tab Skills tampil di baris info terakhir");
 		assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
-		assert(linesSkills[4]!.includes("Model: Gemini 3.8 Flash"), "menu tab tetap tampil saat tab lain aktif");
+		assert(linesSkills[4]!.includes("Model [Gemini 3.8 Flash]"), "menu tab tetap tampil saat tab lain aktif");
 	}
 
 	// The Y of a tab must point at the tab menu line, not the shortcut line above
 	const rowsPlain = lines100.map((l) => stripAnsi(l));
-	assert(rowsPlain[tabY]!.includes("Model:"), "renderedTabLineY menunjuk baris menu tab");
-	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model:" : r.key)), "region tab rata dengan teks di baris itu");
+	assert(rowsPlain[tabY]!.includes("Model ["), "renderedTabLineY menunjuk baris menu tab");
+	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model [" : r.key)), "region tab rata dengan teks di baris itu");
 
 	// Narrow screen: version + tabs + data stay intact, shortcuts get trimmed
 	const narrow = hdr.render(60);
 	assert(narrow.every((l) => visibleWidth(l) === 60), "baris 60 kolom tetap 60");
 	assert(stripAnsi(narrow[1]!).includes("pi v"), "versi tetap utuh di 60 kolom");
 	assert(stripAnsi(narrow[1]!).includes("More/expand") === false, "shortcut panjang dibuang di 60 kolom");
-	assert(stripAnsi(narrow[4]!).includes("Model:"), "tab Model tetap tampil di 60 kolom");
+	assert(stripAnsi(narrow[4]!).includes("Model ["), "tab Model tetap tampil di 60 kolom");
 
 	// Intercept addChild: capture the data and suppress the child
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };

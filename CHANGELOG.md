@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.2] - 2026-09-27
+
+### Added
+- `ctrl+alt+r` reload legend in the header shortcut line (`[Ctrl+alt+r] Reload`), shown from 142 columns on.
+
+### Changed
+- `Directory` is now the first header tab (and the default tab on open), so the working directory shows immediately. Tab order: `Directory → Model → Context → Skills → Extensions → Themes`.
+- The `Directory` tab label is just `Directory`; the full path moved to the tab content line, shown on click.
+- Model tab label uses brackets: `Model [Deepseek V4.1 Flash]` instead of `Model: Deepseek V4.1 Flash`.
+
+### Fixed
+- Click hit-areas for header tabs were off by 2 columns (tab box border + leading space were not counted), so the leftmost tab looked dead on its last 2 columns.
+
+---
+
 ## [0.2.1] - 2026-09-27
 
 ### Fixed
