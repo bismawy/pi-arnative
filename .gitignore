@@ -1,12 +1,12 @@
 node_modules/
 
-# artefak lokal (symlink node_modules ke salinan terpasang, screenshot temp)
+# local artifacts (node_modules symlink to the installed copy, temp screenshots)
 node_modules
 .clipboard-ref.png
 package-lock.json
 
-# notepad dev — bukan bagian rilis publik
+# dev notepad — not part of the public release
 MEMORY.md
 
-# artefak rilis
+# release artifacts
 *.tgz

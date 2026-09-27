@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.4] - 2026-09-28
+
+### Added
+- `lib/check.ts` and `lib/format.ts`: shared self-check helpers (`assert`, `isMain`) and shared display formatting (model names, capitalize, expand-hint key) — footer, header tabs and tool boxes now agree by construction.
+
+### Fixed
+- A crashing third-party tool renderer (e.g. pi-web-access `get_content` with missing args) no longer exits pi: every external renderer call is wrapped in a safe fallback, matching pi's own `updateDisplay` semantics.
+- Restored / `--continue` sessions now show the real send time on user messages (timestamps prefilled from session history). A message with no recorded time shows no clock instead of a fake "now".
+- The spinner animates at the documented 500 ms cadence (was 150 ms); footer status stripping no longer carries a broken ANSI-regex leftover.
+- The usage log prefilter no longer silently undercounts if the JSONL key order/shape changes.
+
+### Changed
+- Self-check boilerplate, ANSI stripping and model-name formatting were deduplicated into `lib/`; dead compatibility exports removed. Behavior unchanged, `npm test` green.
+
+---
+
 ## [0.2.3] - 2026-09-27
 
 ### Added

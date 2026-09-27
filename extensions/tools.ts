@@ -8,19 +8,15 @@
  *   │ 󱞩 first output line        │
  *   ╰────────────────────────────╯
  * Click / ctrl+e = full title + detail (output dim; edit = toolDiff*).
- * Collapsed summary: bash/write `󱞩 first output line`; grep/find/read numeric
- * (→ N matches / → N files / N lines); edit `󱞩 +N / -M`. Plain tools show no
- * summary line when expanded (output is already full) — no duplicated first line.
- * Duration is right-aligned and space-aware (title truncated via visibleWidth when
- * it doesn't fit); empty when unmeasured (restored sessions).
+ * Collapsed summary: bash/write `󱞩 first line`; grep/find/read numeric
+ * (→ N matches / → N files / N lines); edit `󱞩 +N / -M`. Expanded plain output
+ * gets no summary line (no duplicated first line).
  * Colors: tool name accent, paths/links tint, box lines + 󱞩 dim. Execution is a
  * pure delegate (spread of the built-in tools).
  * "has a result" lives in context.state, read at render() -> restore/reload safe,
- * no stale 󰔟 box. The gap between boxes (built-in Spacer) is stripped by a render
- * patch (same pattern as the footer patch).
- * Third-party tools with no renderer of their own (memory_write, scratchpad, MCP…)
- * get the same treatment: shell "self" + box with a one-line summary and
- * `[ctrl+o to expand]`; full detail only when expanded.
+ * no stale 󰔟 box. Third-party tools with no renderer of their own (memory_write,
+ * scratchpad, MCP…) get the same box: shell "self", one-line summary,
+ * `[ctrl+o to expand]` for the full detail.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -31,12 +27,14 @@ import {
 	createReadTool,
 	createWriteTool,
 	getMarkdownTheme,
-	keyText,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { renderBoxLines as box } from "../lib/box.ts";
+import { stripAnsi } from "../lib/ansi.ts";
+import { assert, isMain } from "../lib/check.ts";
+import { expandKeyName } from "../lib/format.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
@@ -63,7 +61,7 @@ function syncTicker(): void {
 }
 
 export function spinIcon(): string {
-	return FRAMES[Math.floor(Date.now() / 150) % FRAMES.length];
+	return FRAMES[Math.floor(Date.now() / 500) % FRAMES.length];
 }
 
 export class Lines {
@@ -143,7 +141,7 @@ export function titleRow(
 	}
 	const durW = visibleWidth(durStr);
 	const avail = Math.max(8, inner - durW);
-	const wrapW = Math.max(4, avail - 1); // minimal 1 spasi sebelum durasi
+	const wrapW = Math.max(4, avail - 1); // keep at least 1 space before the duration
 	const lines = expanded ? wrapTextWithAnsi(head, wrapW) : [truncateToWidth(head, wrapW, "…")];
 	const pad = Math.max(1, avail - visibleWidth(lines[0]));
 	lines[0] = `${lines[0]}${" ".repeat(pad)}${durStr}`;
@@ -182,13 +180,7 @@ export function toolSummary(name: string, text: string, args?: any): string {
 
 // Expand hint `[ctrl+o to expand]` (key text follows the active keybinding).
 export function expandHint(th: Theme): string {
-	let key = "ctrl+o";
-	try {
-		key = keyText("app.tools.expand") || key;
-	} catch {
-		// outside a pi session: keep the literal
-	}
-	return th.fg("dim", `[${key} to expand]`);
+	return th.fg("dim", `[${expandKeyName()} to expand]`);
 }
 
 // Expanded detail: themed markdown (same layout as a normal pi message — code
@@ -204,8 +196,7 @@ export const fullText = (r: TResult, _th: Theme, width = 0): string[] => {
 	}
 };
 
-const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
-const isBlankLine = (l: string): boolean => l.replace(ANSI_RE, "").trim() === "";
+const isBlankLine = (l: string): boolean => stripAnsi(l).trim() === "";
 
 // Drop blank lines at both edges (the built-in Spacer) — that's the gap between boxes.
 export function stripBlankEdges(lines: string[]): string[] {
@@ -217,11 +208,9 @@ export function stripBlankEdges(lines: string[]): string[] {
 }
 
 // The inter-box gap is the built-in Spacer(1) of ToolExecutionComponent, stripped
-// with a prototype render patch + global guard (same pattern as the footer patch).
-// ONLY lines we draw ourselves (our boxes) get stripped: third-party tools use
-// their own "self" shell too, so the marker is a name list (filled by minimal() +
-// BOXED_TOOLS) rather than the shell. Without that bound their lines would lose
-// the Spacer + Box padding and stick to the neighbour.
+// with a prototype render patch (same pattern as the footer patch). Only lines we
+// draw ourselves are stripped: third-party tools use their own "self" shell too, so
+// the marker is a name list (OWN_BOX, filled by minimal() + BOXED_TOOLS), not the shell.
 const OWN_BOX = new Set<string>();
 const hasOwnRendererDef = (self: { toolDefinition?: { renderCall?: unknown; renderResult?: unknown } }): boolean =>
 	Boolean(self?.toolDefinition?.renderCall || self?.toolDefinition?.renderResult);
@@ -238,19 +227,24 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 }
 
 // --- Tools without their own renderer: same box, one-line summary ---
-// Without this pi renders them as a plain bg block (name + 10 output lines).
-// Our renderer is installed through the prototype (same pattern as the gap patch)
-// only for tools that define no renderCall/renderResult of their own (our own
-// tools and pi-web-access etc. are untouched).
+// Without this pi renders them as a plain bg block (name + 10 output lines). Our
+// renderer is installed through the prototype (same pattern as the gap patch) only
+// for tools that define no renderCall/renderResult of their own (our own tools and
+// pi-web-access etc. are untouched).
 //
-// Exceptions: the pi-web-access tools that look different from our box
-// (`web_search`, `fetch_content`, `get_search_content`; that package hardcodes
-// their display names as "search "/"fetch "/"get_content "). Their renderer
-// content is used as-is and only wrapped in our box. `source_check` is
-// deliberately NOT boxed: its partial phase (curator: URLs + approval state)
-// would disappear because our partial path returns nothing.
-// The `todo` tool (@juicesharp/rpiv-todo) is boxed with a check-square icon
-// (\uf14a) and the toolPendingBg/toolSuccessBg theme backgrounds.
+// BOXED_TOOLS exceptions: the pi-web-access tools whose display names that package
+// hardcodes as "search "/"fetch "/"get_content " — their renderer content is used
+// as-is and only wrapped in our box. `source_check` is deliberately NOT boxed: its
+// partial phase (curator: URLs + approval state) would disappear because our partial
+// path returns nothing. The `todo` tool (@juicesharp/rpiv-todo) is boxed with a
+// check-square icon (\uf14a) and the toolPendingBg/toolSuccessBg backgrounds.
+//
+// MCP tools (pi-mcp-adapter) already use the "self" shell, but their result renderer
+// prints the WHOLE output on error (unbounded, outside the box) and their call args
+// can run to dozens of lines: a 1-line summary + [ctrl+o to expand] is tighter while
+// the invoked tool stays visible. pi-fff "override" mode re-registers `find`/`grep`
+// with its own renderers, replacing our boxed versions -> box theirs too (ours carry
+// renderShell "self" = minimal).
 const BOXED_TOOLS = new Map([
 	["web_search", "search"],
 	["fetch_content", "fetch"],
@@ -260,17 +254,10 @@ const BOXED_TOOLS = new Map([
 const displayName = (name: string): string => BOXED_TOOLS.get(name) ?? name;
 for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
 
-// MCP tools (pi-mcp-adapter) already use the "self" shell, but we render their
-// result ourselves: their result renderer prints the WHOLE output on error
-// (unbounded, outside the box) and the JSON title+args in the call can be dozens
-// of lines. A 1-line summary + [ctrl+o to expand] is tighter; their args lines
-// still feed the call box so the invoked MCP tool stays visible.
 const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
 
-// pi-fff "override" mode re-registers `find`/`grep` with its own renderers, replacing our
-// boxed versions -> plain text again. Box theirs too; ours carry renderShell "self" (minimal).
 const FFF_OVERRIDE = ["find", "grep"];
-const pakaiCallMereka = (self: any): boolean =>
+const usesTheirCallRenderer = (self: any): boolean =>
 	BOXED_TOOLS.has(self.toolName) ||
 	MCP_TOOL(self.toolName) ||
 	(FFF_OVERRIDE.includes(self.toolName) && self.toolDefinition?.renderShell !== "self");
@@ -287,6 +274,18 @@ const mcpInfo = (name: string, args: any, th: Theme): string => {
 const CALL_ROWS = 2;
 const capped = (th: Theme, rows: string[], expanded: boolean): string[] =>
 	expanded || rows.length <= CALL_ROWS ? rows : [...rows.slice(0, CALL_ROWS), th.fg("dim", expandHint(th))];
+
+// Third-party renderers run unguarded here (at render time, unlike pi's own
+// updateDisplay which wraps them in try/catch + fallback): a throw becomes an
+// uncaughtException that exits pi. e.g. pi-web-access' get_content renderCall
+// slices args.responseId — undefined on a partial/malformed tool call.
+const safeCall = <T>(fn: () => T): T | null => {
+	try {
+		return fn();
+	} catch {
+		return null;
+	}
+};
 
 // Lines from a third-party renderer component (right padding trimmed, ANSI kept).
 const componentLines = (component: any, width: number): string[] => {
@@ -333,20 +332,20 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	};
 
 	proto.getRenderShell = function (): string {
-		if (pakaiCallMereka(this)) return "self";
+		if (usesTheirCallRenderer(this)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
 	};
 
 	proto.getCallRenderer = function () {
 		const name: string = this.toolName;
-		const mine = pakaiCallMereka(this);
+		const mine = usesTheirCallRenderer(this);
 		const own = origCall.call(this);
 		if (own && !mine) return own;
 		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
 				const icon = th.fg("warning", spinIcon());
-				const theirs = own ? componentLines(own.call(this, args, th, ctx), width - 6) : [];
+				const theirs = own ? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6) : [];
 				if (name === "todo" && theirs.length)
 					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
 				if (mine && theirs.length)
@@ -362,7 +361,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
 		const fff = FFF_OVERRIDE.includes(name) && this.toolDefinition?.renderShell !== "self";
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).
-		if (own && !pakaiCallMereka(this)) return own;
+		if (own && !usesTheirCallRenderer(this)) return own;
 		const boxed = BOXED_TOOLS.has(name);
 		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
 			if (opts.isPartial) return EMPTY;
@@ -375,7 +374,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 			// box. Their renderer content is only used on success.
 			const theirs =
 				(boxed || fff) && !isErr
-					? own.call(this, { content: result.content, details: result.details }, opts, th, ctx)
+					? safeCall(() => own.call(this, { content: result.content, details: result.details }, opts, th, ctx))
 					: null;
 			return new Lines((width) => {
 				const tint = tintOf(th);
@@ -383,13 +382,12 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
 				if (fff && boxed2.length) {
-					const callLines = componentLines(origCall.call(this)?.call(this, ctx.args, th, ctx), width - 6);
+					const callLines = componentLines(safeCall(() => origCall.call(this)?.call(this, ctx.args, th, ctx)), width - 6);
 					return box(th, width, boxedRows(icon, [callLines[0]?.trim() || displayName(name), ...boxed2]));
 				}
 				if (name === "todo" && boxed2.length) {
 					// todo call result (status completed / in_progress)
-					const callComp = origCall.call(this)?.call(this, ctx.args, th, ctx);
-					const callLines = componentLines(callComp, width - 6);
+					const callLines = componentLines(safeCall(() => origCall.call(this)?.call(this, ctx.args, th, ctx)), width - 6);
 					const combined = [...callLines, ...boxed2];
 					const bgType = isErr ? "toolErrorBg" : "toolSuccessBg";
 					return box(th, width, formatTodoRows(combined, th), bgType);
@@ -467,9 +465,9 @@ function minimal(
 			}
 		},
 		renderCall(args: any, theme: Theme, context: TCtx) {
-			const st = (context.state ?? {}) as Record<string, unknown>;
 			return new Lines((width) => {
-				if (st.hasResult) return [];
+				// Read context.state live (never capture): renderResult may create it after renderCall.
+				if (context.state?.hasResult) return [];
 				const tint = tintOf(theme);
 				const inner = Math.max(8, width - 4);
 				const rows = titleRow(
@@ -624,53 +622,65 @@ function arnativeTools(pi: ExtensionAPI) {
 export default arnativeTools;
 
 // Self-check: `node extensions/tools.ts`.
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"));
-if (isMain) {
-	const assert = (cond: boolean, msg: string) => {
-		if (!cond) {
-			console.error(`FAIL: ${msg}`);
-			process.exit(1);
-		}
-	};
+if (isMain(import.meta.url)) {
 	const mark = (s: string) => `<${s}>`;
 	const th: Theme = { fg: (_c, s) => s };
 	const R = { content: [{ type: "text", text: "path:1:match a\npath:2:match b\npath:3:match c" }] };
 
-	assert(smartTitle("echo hi") === "echo hi", "teks pendek utuh");
-	assert(smartTitle("ls a b c d e f g h") === "ls a b c d e…", "potong di batas 6 kata");
-	assert(smartTitle("a b c d e f g") === "a b c d e f…", "7 kata -> 6 kata + elipsis");
-	assert(smartTitle("a b c d e f") === "a b c d e f", "6 kata utuh");
+	assert(smartTitle("echo hi") === "echo hi", "short text kept intact");
+	assert(smartTitle("ls a b c d e f g h") === "ls a b c d e…", "cut at the 6-word limit");
+	assert(smartTitle("a b c d e f g") === "a b c d e f…", "7 words -> 6 words + ellipsis");
+	assert(smartTitle("a b c d e f") === "a b c d e f", "6 words kept intact");
 
 	assert(paintLinks("cd /run/media/x && echo hi", mark) === "cd </run/media/x> && echo hi", "filter path absolut");
 	assert(paintLinks("git clone https://github.com/a/b", mark) === "git clone <https://github.com/a/b>", "filter link URL");
-	assert(paintLinks("ls extensions/tools.ts", mark) === "ls <extensions/tools.ts>", "filter path relatif");
-	assert(paintLinks("echo plain 2>&1", mark) === "echo plain 2>&1", "teks polos tak tersentuh");
+	assert(paintLinks("ls extensions/tools.ts", mark) === "ls <extensions/tools.ts>", "relative path filter");
+	assert(paintLinks("echo plain 2>&1", mark) === "echo plain 2>&1", "plain text untouched");
 
 	// right-aligned duration, space-aware (overflow bug regression)
 	const t1 = titleRow(th, "✓", "$", "echo hi", 30, "0.1s", false);
-	assert(t1.length === 1 && visibleWidth(t1[0]) === 30, "durasi rata kanan pas selebar inner");
-	assert(t1[0].endsWith("0.1s"), "durasi di ujung kanan judul");
+	assert(t1.length === 1 && visibleWidth(t1[0]) === 30, "duration right-aligned within the inner width");
+	assert(t1[0].endsWith("0.1s"), "duration at the right end of the title");
 	const t2 = titleRow(th, "✓", "$", "word ".repeat(40), 30, "0.1s", false);
-	assert(t2.length === 1 && visibleWidth(t2[0]) === 30, "collapsed: judul panjang tetap 1 baris pas");
+	assert(t2.length === 1 && visibleWidth(t2[0]) === 30, "collapsed: long title stays 1 line, within width");
 	const t3 = titleRow(th, "✓", "$", "word ".repeat(40), 30, "0.1s", true);
-	assert(t3.every((l) => visibleWidth(l) <= 30), "expanded: semua baris <= inner");
+	assert(t3.every((l) => visibleWidth(l) <= 30), "expanded: every line <= inner");
 	const t4 = titleRow(th, "✓", "$", "echo hi", 30, "", false);
-	assert(!t4[0].includes("0.1s"), "tanpa durasi: kosong (restore sesi lama)");
+	assert(!t4[0].includes("0.1s"), "no duration: empty (restored session)");
+
+	// crash regression: third-party renderCall throwing at build time (pi-web-access
+	// get_content: responseId.slice on undefined) must be contained, not crash pi
+	assert(
+		safeCall(() => {
+			const args: { responseId?: string } = {};
+			return args.responseId!.slice(0, 8);
+		}) === null,
+		"renderCall throws -> null (not a crash)",
+	);
+	assert(
+		componentLines(
+			safeCall(() => {
+				throw new Error("renderer crash");
+			}),
+			10,
+		).length === 0,
+		"renderer crash -> 0 lines",
+	);
 
 	// no duplicate summary
-	assert(resText(R, th, (s) => s, false, true) === "", "expand: ringkasan kosong");
-	assert(resText(R, th, (s) => s, false, false) === "󱞩 path:1:match a", "collapsed: baris pertama tampil");
+	assert(resText(R, th, (s) => s, false, true) === "", "expand: empty summary");
+	assert(resText(R, th, (s) => s, false, false) === "󱞩 path:1:match a", "collapsed: first line shown");
 	assert(numRes((n) => `→ ${n} matches`)(R, th, (s) => s, false, false) === "󱞩 → 3 matches", "grep: N matches");
 	assert(
 		numRes((n) => `→ ${n} matches`)({ content: [{ type: "text", text: "Error: bad" }] }, th, (s) => s, true, false) ===
 			"󱞩 Error: bad",
-		"error: jatuh ke baris pertama",
+		"error: falls back to the first line",
 	);
 
 	// inter-box gap stripped
-	assert(stripBlankEdges(["", "a", "", "b", "  ", ""]).join() === "a,,b", "baris kosong tepi dibuang");
-	assert(stripBlankEdges(["", "\x1b[2m\x1b[22m", "x"]).join() === "x", "baris ANSI kosong = blank");
-	assert(stripBlankEdges(["a"]).join() === "a", "tanpa blank tetap utuh");
+	assert(stripBlankEdges(["", "a", "", "b", "  ", ""]).join() === "a,,b", "blank edge lines dropped");
+	assert(stripBlankEdges(["", "\x1b[2m\x1b[22m", "x"]).join() === "x", "blank ANSI line counts as blank");
+	assert(stripBlankEdges(["a"]).join() === "a", "no blanks: kept intact");
 
 	// tools without their own renderer -> same box (memory_write etc.)
 	const noRenderer = { toolName: "memory_write", toolDefinition: {} };
@@ -679,11 +689,11 @@ if (isMain) {
 	assert(
 		ToolExecutionComponent.prototype.hasRendererDefinition.call(noDefinition) === true &&
 			ToolExecutionComponent.prototype.getRenderShell.call(noDefinition) === "self",
-		"tool tanpa definisi: shell self (kotak kita, bukan fallback polos)",
+		"tool without a definition: self shell (our box, not the plain fallback)",
 	);
 	assert(
 		ToolExecutionComponent.prototype.hasRendererDefinition.call({ toolName: "x", toolDefinition: {} }) === true,
-		"tool dengan definisi tetap punya renderer",
+		"tool with a definition still has its renderer",
 	);
 	const noDefOut = (ToolExecutionComponent.prototype.getResultRenderer.call(noDefinition) as any)(
 		{ content: [{ type: "text", text: '{\n  "pattern": "**/*.ts"\n}\nTool glob not found' }] },
@@ -691,52 +701,52 @@ if (isMain) {
 		th,
 		{ args: { pattern: "**/*.ts" }, state: {} },
 	).render(60);
-	assert(noDefOut[0].startsWith("\u256d") && noDefOut[noDefOut.length - 1].startsWith("\u2570"), "tool tanpa definisi: hasil dibungkus kotak");
+	assert(noDefOut[0].startsWith("\u256d") && noDefOut[noDefOut.length - 1].startsWith("\u2570"), "tool without a definition: result wrapped in a box");
 	assert(
 		noDefOut.some((l: string) => l.includes("\u2713 glob")) &&
 			noDefOut.some((l: string) => l.includes('[ctrl+o to expand]')),
-		"tool tanpa definisi: judul + ringkasan + expand hint",
+		"tool without a definition: title + summary + expand hint",
 	);
 	const withRenderer = { toolName: "bash", toolDefinition: { renderResult: () => undefined } };
-	assert(ToolExecutionComponent.prototype.getRenderShell.call(noRenderer) === "self", "tool polos -> shell self");
+	assert(ToolExecutionComponent.prototype.getRenderShell.call(noRenderer) === "self", "plain tool -> self shell");
 	assert(
 		ToolExecutionComponent.prototype.getRenderShell.call(withRenderer) === "default",
-		"tool ber-renderer -> shell aslinya (tak disentuh)",
+		"tool with a renderer -> its own shell (untouched)",
 	);
 	assert(
 		toolSummary("memory_write", "Appended to MEMORY.md\n\nExisting MEMORY.md preview (1 lines)", {
 			content: "## omaga-sync workflow (2026-08-23)\n- Repo: /x",
 		}) === "Appended to MEMORY.md. ## omaga-sync workflow (2026-08-23)",
-		"memory_write: ringkasan + judul seksi yang baru ditulis",
+		"memory_write: summary + the heading just written",
 	);
 	assert(
-		toolSummary("memory_write", "Appended to daily log: /x/y.md", { content: "- catatan tanpa judul" }) ===
+		toolSummary("memory_write", "Appended to daily log: /x/y.md", { content: "- note without a heading" }) ===
 			"Appended to daily log: /x/y.md",
-		"memory_write daily: tanpa judul tetap baris pertama",
+		"memory_write daily: no heading -> first line",
 	);
-	assert(toolSummary("todo", "line1\nline2") === "line1", "tool lain: baris pertama saja");
+	assert(toolSummary("todo", "line1\nline2") === "line1", "other tools: first line only");
 	assert(
 		toolSummary("mcp", '{\n  "url": "https://example.com",\n  "ok": true\n}') === '"url": "https://example.com",',
-		"baris pertama hanya '{' -> ringkasan baris berikutnya (JSON MCP)",
+		"first line is just '{' -> next line becomes the summary (MCP JSON)",
 	);
 	assert(
 		toolSummary("mcp", '{\n  "url": "https://example.com",\n  "ok": true\n}', {}) === '"url": "https://example.com",' &&
 			toolSummary("mcp", "{") === "{",
-		"ringkasan JSON: pakai baris berisi, fallback ke baris pertama",
+		"JSON summary: use the content line, fall back to the first",
 	);
-	assert(toolSummary("memory_write", "Appended to MEMORY.md") === "Appended to MEMORY.md", "ballast: ringkasan biasa utuh");
+	assert(toolSummary("memory_write", "Appended to MEMORY.md") === "Appended to MEMORY.md", "ballast: plain summary kept intact");
 
 	// distinct subtle bg: memory_write only
 	assert(boxBgOf("memory_write") === "customMessageBg", "memory_write -> bg customMessageBg");
-	assert(boxBgOf("bash") === undefined && boxBgOf("todo") === undefined, "tool lain tanpa bg tambahan");
+	assert(boxBgOf("bash") === undefined && boxBgOf("todo") === undefined, "other tools get no extra bg");
 	const bgSeen: string[] = [];
 	const thBgMem: Theme = { fg: (_c, s) => s, bg: (c, s) => (bgSeen.push(c), `<${s}>`) };
 	const bgLines = box(thBgMem, 20, ["memory_write  0.1s", "󱞩 Appended to MEMORY.md"], boxBgOf("memory_write"));
-	assert(bgSeen.length === bgLines.length && bgSeen.every((c) => c === "customMessageBg"), "bg dipakai di semua baris kotak");
-	assert(bgLines.every((l) => visibleWidth(l.replace(/[<>]/g, "")) === 20), "bg tidak merusak lebar baris kotak");
-	assert(bgLines[0]!.replace(/[<>]/g, "").startsWith("╭"), "garis atas tetap utuh");
+	assert(bgSeen.length === bgLines.length && bgSeen.every((c) => c === "customMessageBg"), "bg used on every box line");
+	assert(bgLines.every((l) => visibleWidth(l.replace(/[<>]/g, "")) === 20), "bg does not break the box line width");
+	assert(bgLines[0]!.replace(/[<>]/g, "").startsWith("╭"), "top line stays intact");
 
-	// pi-web-access web_search/fetch_content/get_search_content: isi renderer mereka, kotak kita
+	// pi-web-access: their renderer content, our box
 	const paResult: any = { render: () => ["\x1b[32mPi Coding Agent\x1b[39m (77 matches, 77 shown)"] };
 	const paCall: any = { render: () => ["\x1b[1mget_content \x1b[22m\x1b[36mfind 4\x1b[39m"] };
 	const boxedRes = {
@@ -745,7 +755,7 @@ if (isMain) {
 	};
 	assert(
 		ToolExecutionComponent.prototype.getRenderShell.call(boxedRes) === "self",
-		"pi-web-access: shell dipaksa self (ikut kotak kita, bukan blok bg)",
+		"pi-web-access: shell forced to self (joins our box, not a bg block)",
 	);
 	const searchRes = {
 		toolName: "web_search",
@@ -753,18 +763,18 @@ if (isMain) {
 	};
 	assert(
 		ToolExecutionComponent.prototype.getRenderShell.call(searchRes) === "self",
-		"web_search: shell dipaksa self (ikut kotak kita)",
+		"web_search: shell forced to self (joins our box)",
 	);
 	const bRes = ToolExecutionComponent.prototype.getResultRenderer.call(boxedRes) as any;
 	const bOut = bRes(
-		{ content: [{ type: "text", text: "raw panjang yang tak perlu ditampilkan" }], details: { matchCount: 77 } },
+		{ content: [{ type: "text", text: "raw text that must not be rendered" }], details: { matchCount: 77 } },
 		{ expanded: false, isPartial: false },
 		th,
 		{ args: {} },
 	).render(60);
-	assert(bOut[0].startsWith("╭") && bOut[bOut.length - 1].startsWith("╰"), "pi-web-access: hasil dibungkus kotak kita");
-	assert(bOut.some((l: string) => l.includes("(77 matches, 77 shown)")), "pi-web-access: info renderer mereka dipertahankan");
-	assert(!bOut.some((l: string) => l.includes("raw panjang")), "pi-web-access: teks mentah tidak dipakai saat renderer ada");
+	assert(bOut[0].startsWith("╭") && bOut[bOut.length - 1].startsWith("╰"), "pi-web-access: result wrapped in our box");
+	assert(bOut.some((l: string) => l.includes("(77 matches, 77 shown)")), "pi-web-access: their renderer info kept");
+	assert(!bOut.some((l: string) => l.includes("raw text")), "pi-web-access: raw text not used when a renderer exists");
 	assert(
 		bRes(
 			{
@@ -777,7 +787,7 @@ if (isMain) {
 		)
 			.render(60)
 			.some((l: string) => l.includes("x get_content")),
-		"pi-web-access: details.error -> ikon x (bukan ✓)",
+		"pi-web-access: details.error -> x icon (not ✓)",
 	);
 	const bErr = bRes(
 		{ content: [{ type: "text", text: "No URL specified. Provide url, urlIndex, or query." }] },
@@ -788,18 +798,18 @@ if (isMain) {
 	assert(
 		bErr.some((l: string) => l.includes("No URL specified")) &&
 			bErr.filter((l: string) => l.includes("╭")).length === 1,
-		"error: satu kotak saja (tanpa kotak bersarang)",
+		"error: a single box (no nested box)",
 	);
 	assert(
 		bRes({ content: [{ type: "text", text: "x" }] }, { expanded: false, isPartial: true }, th, { args: {} }).render(60)
 			.length === 0,
-		"pi-web-access: fase partial kosong (tanpa kotak ganda)",
+		"pi-web-access: empty partial phase (no double box)",
 	);
 	const bCall = ToolExecutionComponent.prototype.getCallRenderer.call(boxedRes) as any;
 	const bCallOut = bCall({}, th, { args: {}, state: {} }).render(60);
 	assert(
 		bCallOut[0].startsWith("╭") && bCallOut.some((l: string) => l.includes("find 4")),
-		"pi-web-access: baris args renderer mereka masuk kotak",
+		"pi-web-access: their renderer arg lines go in the box",
 	);
 
 	// pi-fff override mode: find/grep re-registered with own renderers, no renderShell
@@ -808,7 +818,7 @@ if (isMain) {
 	const fffFind = { toolName: "find", toolDefinition: { renderCall: () => fffCall, renderResult: () => fffRes } };
 	assert(
 		ToolExecutionComponent.prototype.getRenderShell.call(fffFind) === "self",
-		"pi-fff find: shell dipaksa self (ikut kotak kita)",
+		"pi-fff find: shell forced to self (joins our box)",
 	);
 	const fffOut = (ToolExecutionComponent.prototype.getResultRenderer.call(fffFind) as any)(
 		{ content: [{ type: "text", text: "src/a.ts\nsrc/b.ts" }] },
@@ -816,26 +826,26 @@ if (isMain) {
 		th,
 		{ args: { pattern: "*.ts", path: "D:/Pi/x" }, state: {} },
 	).render(60);
-	assert(fffOut[0].startsWith("╭") && fffOut[fffOut.length - 1].startsWith("╰"), "pi-fff find: hasil dibungkus kotak");
-	assert(fffOut.some((l: string) => l.includes("*.ts in D:/Pi/x")), "pi-fff find: judul renderCall ikut masuk kotak");
-	assert(fffOut.some((l: string) => l.includes("6 more lines")), "pi-fff find: ringkasan renderResult ikut masuk kotak");
+	assert(fffOut[0].startsWith("╭") && fffOut[fffOut.length - 1].startsWith("╰"), "pi-fff find: result wrapped in a box");
+	assert(fffOut.some((l: string) => l.includes("*.ts in D:/Pi/x")), "pi-fff find: renderCall title goes in the box");
+	assert(fffOut.some((l: string) => l.includes("6 more lines")), "pi-fff find: renderResult summary goes in the box");
 
 	const oursFind = { toolName: "find", toolDefinition: { renderShell: "self", renderCall: () => fffCall, renderResult: () => fffRes } };
 	assert(
 		(ToolExecutionComponent.prototype.getCallRenderer.call(oursFind) as any)() === fffCall &&
 			(ToolExecutionComponent.prototype.getResultRenderer.call(oursFind) as any)() === fffRes,
-		"find kita (renderShell self): renderer sendiri apa adanya, tak dibungkus kotak lagi",
+		"our find (renderShell self): its own renderer as-is, not boxed again",
 	);
 
 	// Guard: source_check is deliberately NOT boxed — its curator partial carries
 	// URLs + approval state, while our partial path returns nothing. Without this
 	// assert a later edit of BOXED_TOOLS would swallow it silently.
 	for (const n of ["source_check"]) {
-		const theirs = () => "renderer-mereka";
+		const theirs = () => "their-renderer";
 		assert(
 			ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: n, toolDefinition: { renderResult: theirs } })() ===
-				"renderer-mereka",
-			`${n}: sengaja tidak dipaksa kotak (partial kurator butuh URL)`,
+				"their-renderer",
+			`${n}: deliberately not boxed (the curator partial needs URLs)`,
 		);
 	}
 
@@ -845,12 +855,12 @@ if (isMain) {
 	const mcpTool = { toolName: "mcp", toolDefinition: { renderCall: mcpTheirs, renderResult: mcpTheirs } };
 	assert(
 		(ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any) !== mcpTheirs,
-		"mcp: renderer hasil pihak ketiga dilewati (dump error dibatasi)",
+		"mcp: third-party result renderer skipped (error dump capped)",
 	);
 	assert(
 		(ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: "mcp__tinyfish", toolDefinition: { renderResult: mcpTheirs } }) as any) !==
 			mcpTheirs,
-		"mcp__<server>: renderer mereka dilewati (jalur kotak kita)",
+		"mcp__<server>: their renderer skipped (our box path)",
 	);
 	const mcpPayload = {
 		content: [{ type: "text", text: "x Failed to call tool\nu Expected parameters:\n{\n  \"required\": []\n}" }],
@@ -862,19 +872,19 @@ if (isMain) {
 		th,
 		{ args: { tool: "fetch_content", server: "tinyfish" }, state: {} },
 	).render(96);
-	assert(mcpOut.length <= 6, `mcp error collapsed tetap pendek (${mcpOut.length} baris)`);
+	assert(mcpOut.length <= 6, `mcp error collapsed stays short (${mcpOut.length} lines)`);
 	assert(
 		mcpOut.some((l: string) => l.includes("fetch_content @ tinyfish")),
-		"mcp: judul menyebut tool MCP yang dipanggil",
+		"mcp: title names the invoked MCP tool",
 	);
-	assert(mcpOut.some((l: string) => l.includes("[ctrl+o to expand]")), "mcp: ada petunjuk expand");
+	assert(mcpOut.some((l: string) => l.includes("[ctrl+o to expand]")), "mcp: expand hint present");
 	const mcpFull = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any)(
 		mcpPayload,
 		{ expanded: true, isPartial: false },
 		th,
 		{ args: { tool: "fetch_content", server: "tinyfish" }, state: {} },
 	).render(96);
-	assert(mcpFull.length > mcpOut.length, "mcp: expand menampilkan dump + args lengkap");
+	assert(mcpFull.length > mcpOut.length, "mcp: expand shows the full dump + args");
 
 	// Gap is only stripped for our own box lines.
 	// The default export registers the tools (filling OWN_BOX); a pi stub suffices.
@@ -886,22 +896,22 @@ if (isMain) {
 	} as never);
 	assert(
 		OWN_BOX.has("bash") && OWN_BOX.has("read") && OWN_BOX.has("edit") && OWN_BOX.has("fetch_content") && OWN_BOX.has("web_search"),
-		"OWN_BOX: tool kotak kita + tool boxed terdaftar",
+		"OWN_BOX: our own tools + boxed tools registered",
 	);
-	assert(!OWN_BOX.has("mcp") && !OWN_BOX.has("source_check"), "OWN_BOX: renderer pihak lain tidak dirapatkan");
-	assert(hasOwnRendererDef(mcpTool) && !hasOwnRendererDef(noRenderer), "patokan rapat: definisi renderer tool");
+	assert(!OWN_BOX.has("mcp") && !OWN_BOX.has("source_check"), "OWN_BOX: third-party renderers not tightened");
+	assert(hasOwnRendererDef(mcpTool) && !hasOwnRendererDef(noRenderer), "tightened benchmark: tool renderer definition");
 	assert(
 		capped(th, ["a", "b", "c"], false).length === CALL_ROWS + 1 &&
 			capped(th, ["a", "b", "c"], true).length === 3 &&
 			capped(th, ["a"], false).length === 1,
-		"baris call pihak ketiga dibatasi hanya saat collapsed",
+		"third-party call lines capped only when collapsed",
 	);
 	assert(
 		mcpInfo("bash", { tool: "x" }, th) === "" && mcpInfo("mcp", { tool: "x", server: "s" }, th).includes("x @ s"),
-		"mcpInfo hanya untuk tool MCP",
+		"mcpInfo only for MCP tools",
 	);
 
-	const ctxState: TCtx = { args: { content: "## Judul\n- x" }, state: {} };
+	const ctxState: TCtx = { args: { content: "## Heading\n- x" }, state: {} };
 	const resRenderer = ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any;
 	const out = resRenderer(
 		{ content: [{ type: "text", text: "Appended to MEMORY.md\n\nExisting MEMORY.md preview" }] },
@@ -909,12 +919,12 @@ if (isMain) {
 		th,
 		ctxState,
 	).render(60);
-	assert(out[0].startsWith("╭") && out[out.length - 1].startsWith("╰"), "hasil tool polos dibungkus kotak");
+	assert(out[0].startsWith("╭") && out[out.length - 1].startsWith("╰"), "plain tool result wrapped in a box");
 	assert(
-		out.some((l: string) => l.includes("Appended to MEMORY.md. ## Judul")),
-		"kotak memuat ringkasan + judul",
+		out.some((l: string) => l.includes("Appended to MEMORY.md. ## Heading")),
+		"box carries the summary + heading",
 	);
-	assert(out.some((l: string) => l.includes("[ctrl+o to expand]")), "collapsed: ada petunjuk expand");
+	assert(out.some((l: string) => l.includes("[ctrl+o to expand]")), "collapsed: expand hint present");
 	assert(
 		resRenderer(
 			{ content: [{ type: "text", text: "Appended to MEMORY.md\n\nExisting preview" }] },
@@ -922,22 +932,22 @@ if (isMain) {
 			th,
 			ctxState,
 		).render(60).length > out.length,
-		"expand: detail lengkap ikut tampil",
+		"expand: full detail shown too",
 	);
 
 	// stale 󰔟 box regression (restore-safe)
 	const st: Record<string, unknown> = {};
 	const comp = new Lines(() => (st.hasResult ? [] : ["row"]));
-	assert(comp.render(10).length === 1, "running: kotak 󰔟 tampil");
+	assert(comp.render(10).length === 1, "running: 󰔟 box shown");
 	st.hasResult = true;
-	assert(comp.render(10).length === 0, "final: kotak running hilang (restore-safe)");
-	assert(FRAMES.includes(spinIcon()), "ikon animasi selalu frame valid");
+	assert(comp.render(10).length === 0, "final: running box gone (restore-safe)");
+	assert(FRAMES.includes(spinIcon()), "animation icon is always a valid frame");
 	ACTIVE = 3;
 	syncTicker();
-	assert(TICK !== null, "ticker hidup selama ada tool berjalan");
+	assert(TICK !== null, "ticker alive while a tool is running");
 	ACTIVE = 0;
 	syncTicker();
-	assert(TICK === null, "ticker mati saat idle (tanpa leak timer)");
+	assert(TICK === null, "ticker stops when idle (no timer leak)");
 
 	// todo render: \uf14a + 2 lines (title & status) + background box
 	const todoCall = () => ({ render: () => ["todo → Test subject"] });
@@ -949,7 +959,7 @@ if (isMain) {
 	};
 	const todoCallOut = (ToolExecutionComponent.prototype.getCallRenderer.call(todoTool) as any)({}, thBgTodo, { state: {} }).render(60);
 	assert(todoCallOut[0].includes("[bg:toolPendingBg]"), "todo call: background pending");
-	assert(todoCallOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo call: ikon \uf14a di judul");
+	assert(todoCallOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo call: \uf14a icon in the title");
 
 	const todoResultOut = (ToolExecutionComponent.prototype.getResultRenderer.call(todoTool) as any)(
 		{ content: [] },
@@ -958,8 +968,8 @@ if (isMain) {
 		{ state: {}, args: {} },
 	).render(60);
 	assert(todoResultOut[0].includes("[bg:toolSuccessBg]"), "todo result: background success");
-	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: ikon \uf14a di baris 1");
-	assert(todoResultOut.some((l: string) => l.includes("● completed")), "todo result: status dengan prefix resHead di baris 2");
+	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: \uf14a icon on line 1");
+	assert(todoResultOut.some((l: string) => l.includes("● completed")), "todo result: status with the resHead prefix on line 2");
 
 	// Expanded detail: themed markdown, error text intact and no longer plain dim.
 	const errDetail = fullText(
@@ -967,15 +977,15 @@ if (isMain) {
 		th,
 		40,
 	);
-	const plain = errDetail.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
-	assert(plain.includes("Tool glob not found") && plain.includes('"pattern"'), "detail error: isi utuh");
+	const plain = stripAnsi(errDetail.join("\n"));
+	assert(plain.includes("Tool glob not found") && plain.includes('"pattern"'), "error detail: content intact");
 	assert(
 		errDetail.every((l: string) => visibleWidth(l) === 40),
-		"detail error: dirender markdown (di-wrap + dipad ke lebar), bukan split baris polos",
+		"error detail: rendered as markdown (wrapped + padded to width), not a plain line split",
 	);
 	assert(
 		fullText({ content: [{ type: "text", text: "a\nb" }] }, th, 0).join("|") === th.fg("dim", "a") + "|" + th.fg("dim", "b"),
-		"tanpa width (self-check) tetap dump dim",
+		"no width (self-check) still dumps dim",
 	);
 	console.log("OK");
 }

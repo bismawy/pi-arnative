@@ -1,14 +1,13 @@
 /**
  * Arnative Usage Dashboard (/usage): table UI + the /usage command.
  * Data layer (session scan + cache + aggregation) lives in lib/usage-store.ts —
- * shared with the Model tab; the old API is still re-exported here (compatibility).
+ * shared with the Model tab.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { boxEdge, boxRow } from "../lib/box.ts";
+import { assert, isMain } from "../lib/check.ts";
 import { collectUsageSummary, formatTokens, getModelAllTimeUsage, type UsageSummary } from "../lib/usage-store.ts";
-export { collectUsageSummary, formatTokens, getModelAllTimeUsage };
-export type { UsageEntry, UsageModelStats, UsageProviderStats, UsageSummary } from "../lib/usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -250,7 +249,7 @@ export class UsageModalComponent implements Component {
 
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("usage", {
-		description: "Dashboard penggunaan token & model Arnative",
+		description: "Arnative token & model usage dashboard",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (!ctx.hasUI) return;
 			await ctx.ui.custom<void>((tui, theme, _kb, done) => {
@@ -261,14 +260,7 @@ export default function (pi: ExtensionAPI) {
 }
 
 // Self-check: `node extensions/usage.ts`
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"));
-if (isMain) {
-	const assert = (cond: boolean, msg: string) => {
-		if (!cond) {
-			console.error(`FAIL: ${msg}`);
-			process.exit(1);
-		}
-	};
+if (isMain(import.meta.url)) {
 
 	assert(formatTokens(0) === "-", "formatTokens 0 = -");
 	assert(formatTokens(500) === "500", "formatTokens 500 = 500");
@@ -281,13 +273,13 @@ if (isMain) {
 	assert(formatCost(1234.5) === "$1.2k", "formatCost 1234.5 = $1.2k");
 
 	const summary = collectUsageSummary();
-	assert(summary.providers.length > 0, "collectUsageSummary mendeteksi providers");
-	assert(summary.totals.sessions > 0, "collectUsageSummary mendeteksi total sessions");
-	assert(summary.totals.msgs > 0, "collectUsageSummary mendeteksi total msgs");
-	assert(summary.totals.cost >= 0, "collectUsageSummary menghitung cost");
+	assert(summary.providers.length > 0, "collectUsageSummary detects providers");
+	assert(summary.totals.sessions > 0, "collectUsageSummary detects total sessions");
+	assert(summary.totals.msgs > 0, "collectUsageSummary detects total msgs");
+	assert(summary.totals.cost >= 0, "collectUsageSummary counts cost");
 
 	const modelUsage = getModelAllTimeUsage("gemini-3.8-flash");
-	assert(modelUsage.input > 0, "getModelAllTimeUsage mengambil input tokens gemini-3.8-flash");
+	assert(modelUsage.input > 0, "getModelAllTimeUsage reads input tokens for gemini-3.8-flash");
 
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m`,
@@ -295,19 +287,19 @@ if (isMain) {
 	};
 	const modal = new UsageModalComponent(fakeTheme, () => {}, () => {});
 	const lines = modal.render(100);
-	assert(lines.length >= 10, "render modal menghasilkan baris-baris tabel");
-	assert(lines[0]!.includes("╭") && lines[0]!.includes("╮"), "border atas membulat");
-	assert(visibleWidth(lines[0]!) === 100, "border kotak full width (100 kolom)");
-	assert(lines[1]!.includes("LLM Usage"), "judul LLM Usage di dalam kotak");
-	assert(lines[2]!.includes("sessions"), "deskripsi di bawah judul");
-	assert(lines[lines.length - 1]!.includes("╰") && lines[lines.length - 1]!.includes("╯"), "border bawah membulat");
+	assert(lines.length >= 10, "modal render produces table lines");
+	assert(lines[0]!.includes("╭") && lines[0]!.includes("╮"), "round top border");
+	assert(visibleWidth(lines[0]!) === 100, "box border full width (100 columns)");
+	assert(lines[1]!.includes("LLM Usage"), "LLM Usage title inside the box");
+	assert(lines[2]!.includes("sessions"), "description below the title");
+	assert(lines[lines.length - 1]!.includes("╰") && lines[lines.length - 1]!.includes("╯"), "round bottom border");
 	assert(
 		lines.every((l) => visibleWidth(l) <= 100),
-		"semua baris muat dalam lebar 100",
+		"every line fits within width 100",
 	);
 	assert(
 		lines.every((l) => ["╭", "│", "├", "╰"].some((c) => l.includes(c))),
-		"tidak ada baris tanpa sisi kotak (garis aksen hilang)",
+		"no line missing a box side (accent line gone)",
 	);
 
 	console.log("usage.ts self-check OK");

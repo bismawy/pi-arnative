@@ -4,6 +4,7 @@
  * never loads it as an extension.
  */
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { assert, isMain } from "./check.ts";
 
 export type BoxTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 export type Dim = (s: string) => string;
@@ -41,19 +42,13 @@ export function renderBoxLines(theme: BoxTheme, width: number, rows: string[], b
 	return lines;
 }
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"))) {
-	const assert = (cond: boolean, msg: string) => {
-		if (!cond) {
-			console.error(`FAIL: ${msg}`);
-			process.exit(1);
-		}
-	};
+if (isMain(import.meta.url)) {
 	const th: BoxTheme = { fg: (_c, t) => t };
-	const plain = renderBoxLines(th, 24, ["halo", "dunia yang panjang sekali"]);
-	assert(plain[0]!.startsWith("╭") && plain[plain.length - 1]!.startsWith("╰"), "bingkai atas/bawah utuh");
-	assert(plain.every((l) => visibleWidth(l) === 24), "semua baris selebar 24");
-	assert(plain[1] === "│ halo                 │", "baris isi dipad rata");
-	assert(renderBoxLines(th, 24, ["x".repeat(40)]).length === 4, "baris panjang di-wrap");
-	assert(renderBoxLines(th, 20, ["hi"], "customMessageBg").length === 3, "bg diabaikan saat tema tanpa bg");
+	const plain = renderBoxLines(th, 24, ["hello", "a rather long world"]);
+	assert(plain[0]!.startsWith("╭") && plain[plain.length - 1]!.startsWith("╰"), "top/bottom frame intact");
+	assert(plain.every((l) => visibleWidth(l) === 24), "every line is 24 wide");
+	assert(plain[1] === "│ hello                │", "content line padded flush");
+	assert(renderBoxLines(th, 24, ["x".repeat(40)]).length === 4, "long line wrapped");
+	assert(renderBoxLines(th, 20, ["hi"], "customMessageBg").length === 3, "bg ignored when the theme has no bg");
 	console.log("lib/box.ts OK");
 }

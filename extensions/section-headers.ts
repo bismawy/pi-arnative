@@ -1,15 +1,13 @@
 /**
  * Arnative header box & horizontal tab system:
  * - Round-corner box, fixed height 5 lines: "pi" 3x6 logo on the left, a vertical
- *   divider, then 3 left-aligned info lines (version/shortcuts, tabs, data).
- * - Info line 1: "Welcome back, <device username>" (os.userInfo, env fallback). Line 2:
- *   pi + Arnative brand with versions. The tab box labels itself on its top border
- *   ("╭─ Menu ───╮").
+ *   divider, then 3 left-aligned info lines (greeting/brand, tab menu, tab data).
+ * - Greeting = OS account name; brand line = pi + Arnative with versions. The tab
+ *   box labels itself on its top border ("╭─ Menu ───╮").
  * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Themes/Shortcut
- *   with item counts. Tab icon = accent, tab text = tint. The key cheatsheet lives in
- *   the Shortcut tab, not in a header line.
- * - Box divider '├────┤'.
- * - Active tab content (left-aligned, neatly wrapped, tint, never stacked).
+ *   with item counts. Icon = accent, text = tint. The key cheatsheet lives in the
+ *   Shortcut tab, not in a header line.
+ * - Box divider '├────┤'. Active tab content is left-aligned, wrapped, tint.
  * - Hides pi's built-in stacked list in loadedResourcesContainer.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -33,6 +31,9 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { renderBoxLines } from "../lib/box.ts";
+import { stripAnsi, themeOf } from "../lib/ansi.ts";
+import { assert, isMain } from "../lib/check.ts";
+import { capitalize, modelDisplayParts } from "../lib/format.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes" | "Shortcut";
@@ -49,9 +50,6 @@ export const SECTION_ICONS: Record<TabKey, string> = {
 	Themes: "\uee72",
 	Shortcut: "\uf11c", // nf-fa-keyboard_o
 };
-
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
-export const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
 
 export type Themeish = { fg?(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 
@@ -76,7 +74,7 @@ export function fgFirst(th: Themeish, names: string[], text: string): string {
 
 export function sectionNameOf(text: string): "Context" | "Skills" | "Extensions" | "Themes" | null {
 	const nl = text.indexOf("\n");
-	const first = (nl === -1 ? text : text.slice(0, nl)).replace(ANSI_RE, "").trim();
+	const first = stripAnsi(nl === -1 ? text : text.slice(0, nl)).trim();
 	const m = /^\[([A-Za-z]+)\]$/.exec(first);
 	const name = m ? m[1] : null;
 	if (name === "Context" || name === "Skills" || name === "Extensions" || name === "Themes") {
@@ -288,26 +286,10 @@ export const tabStore: Map<TabKey, string[]> =
 
 let activeHeaderInstance: ArnativeHeader | null = null;
 
-function capitalize(s: string): string {
-	return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
-}
-
 // Model name formatted exactly like in the footer: Gemini 3.8 Flash (Antigravity), Deepseek V4.1 Flash (Yarz), etc.
 export function formatModelDisplayName(model?: { id?: string; name?: string; provider?: string }): string {
-	if (!model) return "No Model";
-	let name = model.name || model.id || "Model";
-	const provider = model.provider ? model.provider.charAt(0).toUpperCase() + model.provider.slice(1) : "";
-	if (name === model.id) {
-		name = name
-			.split(/[-_]/)
-			.map((w) => (w.length > 0 ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
-			.join(" ");
-	}
-	if (provider && name.toLowerCase().endsWith(`(${provider.toLowerCase()})`)) {
-		name = name.slice(0, name.lastIndexOf("(")).trim();
-	}
-	const provStr = provider ? ` (${provider})` : "";
-	return `${name}${provStr}`;
+	const { name, provider } = modelDisplayParts(model);
+	return provider ? `${name} (${provider})` : name;
 }
 
 // Full working directory for the Directory tab. ctx.cwd is authoritative; the
@@ -567,7 +549,7 @@ export class ArnativeHeader implements Component {
 				infoLines.push(fgFirst(th, ["tint", "text"], line));
 			}
 		} else if (activeItems.length === 0) {
-			infoLines.push(fgFirst(th, ["tint"], "(kosong)"));
+			infoLines.push(fgFirst(th, ["tint"], "(empty)"));
 		} else if (this.activeTab === "Model") {
 			// The Model tab already carries tint styling + a dim separator
 			infoLines.push(...activeItems);
@@ -664,8 +646,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
-		activeThemeProxy = (ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme ?? activeThemeProxy;
-		// Daftarkan Custom Header
+		activeThemeProxy = themeOf<Themeish>(ctx) ?? activeThemeProxy;
+		// Register the custom header
 		ctx.ui?.setHeader?.((tui, theme) => {
 			return new ArnativeHeader(tui, theme, ctx);
 		});
@@ -686,57 +668,50 @@ export default function (pi: ExtensionAPI) {
 }
 
 // Self-check: `node extensions/section-headers.ts`
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"));
-if (isMain) {
-	const assert = (cond: boolean, msg: string) => {
-		if (!cond) {
-			console.error(`FAIL: ${msg}`);
-			process.exit(1);
-		}
-	};
+if (isMain(import.meta.url)) {
 
-	assert(sectionNameOf("\x1b[33m[Skills]\x1b[39m\n  a, b") === "Skills", "header [Skills] terdeteksi");
-	assert(sectionNameOf("pi v0.87.1") === null, "teks non-seksi tak terdeteksi");
+	assert(sectionNameOf("\x1b[33m[Skills]\x1b[39m\n  a, b") === "Skills", "header [Skills] detected");
+	assert(sectionNameOf("pi v0.87.1") === null, "non-section text is not detected");
 
 	// Parsing & wrapping
-	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody koma = 3");
-	assert(extractItemsFromBody("  x\n  y\n  z").length === 3, "extractItemsFromBody baris = 3");
+	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody splits 3 comma items");
+	assert(extractItemsFromBody("  x\n  y\n  z").length === 3, "extractItemsFromBody returns 3 lines");
 
 	// Directory path wrapping: never truncated, always the full path
 	const wp = wrapPath("/run/media/bisma/DATA/Pi/pi-arnative", 20);
-	assert(wp.join("") === "/run/media/bisma/DATA/Pi/pi-arnative", "wrapPath tak menghilangkan segmen");
-	assert(wp.every((l) => visibleWidth(l) <= 20), "wrapPath hormati lebar");
-	assert(wrapPath("D:\\Pi\\pi-arnative", 80).join("") === "D:/Pi/pi-arnative", "wrapPath normalisasi backslash");
-	assert(wrapPath("/a/very-long-segment-name", 6).every((l) => visibleWidth(l) <= 6), "segmen panjang diiris");
+	assert(wp.join("") === "/run/media/bisma/DATA/Pi/pi-arnative", "wrapPath drops no segment");
+	assert(wp.every((l) => visibleWidth(l) <= 20), "wrapPath respects the width");
+	assert(wrapPath("D:\\Pi\\pi-arnative", 80).join("") === "D:/Pi/pi-arnative", "wrapPath normalizes backslashes");
+	assert(wrapPath("/a/very-long-segment-name", 6).every((l) => visibleWidth(l) <= 6), "long segment is sliced");
 
 	const wrapTest = wrapCommaItems(["item1", "item2", "item3", "item4"], 15);
-	assert(wrapTest.length >= 2, "wrapCommaItems membungkus baris");
-	assert(visibleWidth(wrapTest[0]!) <= 15, "lebar baris wrap sesuai batas");
+	assert(wrapTest.length >= 2, "wrapCommaItems wraps into lines");
+	assert(visibleWidth(wrapTest[0]!) <= 15, "wrapped line width within the limit");
 
 	const cLine = centerLine("test", 20);
-	assert(visibleWidth(cLine) === 20, "centerLine tepat 20 kolom");
-	assert(cLine.startsWith("│") && cLine.endsWith("│"), "centerLine diawali dan diakhiri │");
+	assert(visibleWidth(cLine) === 20, "centerLine is exactly 20 columns");
+	assert(cLine.startsWith("│") && cLine.endsWith("│"), "centerLine starts and ends with │");
 
 	// Model name formatting
 	assert(
 		formatModelDisplayName({ name: "Gemini 3.8 Flash", provider: "antigravity" }) ===
 			"Gemini 3.8 Flash (Antigravity)",
-		"formatModelDisplayName dengan name dan provider",
+		"formatModelDisplayName with name and provider",
 	);
 	assert(
 		formatModelDisplayName({ id: "deepseek-v4.1-flash", provider: "yarz" }) ===
 			"Deepseek V4.1 Flash (Yarz)",
-		"formatModelDisplayName konversi id jadi titlecase",
+		"formatModelDisplayName converts id to titlecase",
 	);
 
 	// Package & version resolver
-	assert(packageNameOf("@bismawy/pi-agentrouter") === "@bismawy/pi-agentrouter", "label npm polos");
-	assert(packageNameOf("footer.ts") === "footer.ts", "label lokal");
+	assert(packageNameOf("@bismawy/pi-agentrouter") === "@bismawy/pi-agentrouter", "plain npm label");
+	assert(packageNameOf("footer.ts") === "footer.ts", "local label");
 
 	const gitTmp = mkdtempSync(join(tmpdir(), "pi-ver-"));
-	mkdirSync(join(gitTmp, "git", "github.com", "uji/arnative"), { recursive: true });
-	writeFileSync(join(gitTmp, "git", "github.com", "uji/arnative", "package.json"), JSON.stringify({ version: "9.9.9" }));
-	assert(installedVersion("uji/arnative", join(gitTmp, "npm"), join(gitTmp, "git")) === "9.9.9", "versi dari klon git");
+	mkdirSync(join(gitTmp, "git", "github.com", "test/arnative"), { recursive: true });
+	writeFileSync(join(gitTmp, "git", "github.com", "test/arnative", "package.json"), JSON.stringify({ version: "9.9.9" }));
+	assert(installedVersion("test/arnative", join(gitTmp, "npm"), join(gitTmp, "git")) === "9.9.9", "version from the git clone");
 	rmSync(gitTmp, { recursive: true, force: true });
 
 	// ArnativeHeader component & mouse tab click
@@ -760,77 +735,77 @@ if (isMain) {
 	// Only "dim" is colored, so the box line colors can be asserted.
 	const ansiTheme = { fg: (c: string, t: string) => (c === "dim" ? `\x1b[2m${t}\x1b[22m` : t) };
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
-	assert(hdr.activeTab === "Directory", "default tab adalah Directory");
+	assert(hdr.activeTab === "Directory", "default tab is Directory");
 
 	// Default view: the working directory path, shown on open
 	const linesDefault = hdr.render(100);
-	assert(stripAnsi(linesDefault[6]!).includes("/run/media/bisma/DATA/Pi/pi-arnative"), "path direktori tampil sejak tab pertama dibuka");
+	assert(stripAnsi(linesDefault[6]!).includes("/run/media/bisma/DATA/Pi/pi-arnative"), "directory path shown as soon as the first tab opens");
 
 	hdr.activeTab = "Model";
 	const lines100 = hdr.render(100);
-	assert(lines100.length === 8, "render 100 = border + 6 baris logo + border (3 baris info mengisi 3 baris logo)");
-	assert(lines100.every((l) => visibleWidth(l) === 100), "semua baris render 100 tepat 100 kolom");
-	assert(lines100[0]!.includes("╭") && lines100[0]!.includes("╮"), "border atas rounded");
-	assert(lines100[7]!.includes("╰") && lines100[7]!.includes("╯"), "border bawah rounded");
+	assert(lines100.length === 8, "render 100 = border + 6 logo lines + border (3 info lines fill 3 logo lines)");
+	assert(lines100.every((l) => visibleWidth(l) === 100), "every line at width 100 is exactly 100 columns");
+	assert(lines100[0]!.includes("╭") && lines100[0]!.includes("╮"), "round top border");
+	assert(lines100[7]!.includes("╰") && lines100[7]!.includes("╯"), "round bottom border");
 	const logoPlain = buildLogoLines(null);
-	assert(logoPlain.length === 6 && visibleWidth(logoPlain[0]!) === 13, "ascii Pi asli utuh (6 baris x 13 kolom)");
+	assert(logoPlain.length === 6 && visibleWidth(logoPlain[0]!) === 13, "real Pi ascii intact (6 lines x 13 columns)");
 	assert(
 		lines100.slice(1, 7).every((l, i) => stripAnsi(l).slice(2, 15) === logoPlain[i]),
-		"ascii Pi asli di kolom kiri, 6 baris",
+		"real Pi ascii in the left column, 6 lines",
 	);
 	assert(
 		/Welcome back, \S/.test(stripAnsi(lines100[1]!)) && !stripAnsi(lines100[1]!).includes("pi v"),
-		"baris 1: sapaan pakai username device",
+		"line 1: greeting uses the device username",
 	);
 	assert(
 		stripAnsi(lines100[2]!).includes("pi v") && /Arnative v\d+\.\d+\.\d+/.test(stripAnsi(lines100[2]!)),
-		"baris 2: pi + Arnative + versi build Arnative",
+		"line 2: pi + Arnative + the Arnative build version",
 	);
-	assert(/╭─ Menu ─+╮/.test(stripAnsi(lines100[3]!)), "border atas kotak tab memuat label Menu");
-	assert(!stripAnsi(lines100[1]!).includes("Interrupt"), "legend pintasan tidak lagi di baris atas");
+	assert(/╭─ Menu ─+╮/.test(stripAnsi(lines100[3]!)), "tab box top border carries the Menu label");
+	assert(!stripAnsi(lines100[1]!).includes("Interrupt"), "shortcut legend no longer on the top line");
 	// Both brand names use the theme accent, not only "pi".
 	const accentTheme = {
 		fg: (c: string, t: string) => (c === "accent" ? `<A>${t}</A>` : c === "dim" ? `<D>${t}</D>` : t),
 	};
 	const accentHeader = new ArnativeHeader(fakeTui, accentTheme as any, fakeCtx);
 	const accentLine = accentHeader.render(100)[2]!;
-	assert(accentLine.includes("<A>\x1b[1mpi"), "nama pi pakai aksen tema");
-	assert(accentLine.includes("<A>\x1b[1mArnative"), "nama Arnative pakai aksen tema yang sama");
+	assert(accentLine.includes("<A>\x1b[1mpi"), "the pi name uses the theme accent");
+	assert(accentLine.includes("<A>\x1b[1mArnative"), "the Arnative name uses the same theme accent");
 	const greetLine = accentHeader.render(100)[1]!;
-	assert(greetLine.includes("<D>Welcome back,"), "kata sapaan pakai warna dim");
-	assert(greetLine.includes(`<A>\x1b[1m${deviceUser()}`), "username device pakai aksen tema");
-	assert(stripAnsi(lines100[4]!).includes("Model [Gemini 3.8 Flash]"), "menu tab Model tampil (Model [nama])");
+	assert(greetLine.includes("<D>Welcome back,"), "greeting text uses the dim color");
+	assert(greetLine.includes(`<A>\x1b[1m${deviceUser()}`), "device username uses the theme accent");
+	assert(stripAnsi(lines100[4]!).includes("Model [Gemini 3.8 Flash]"), "Model tab in the menu (Model [name])");
 	// Directory tab: name only in the menu, whole path in the content line below
 	hdr.activeTab = "Directory";
 	hdr.render(100);
-	assert(stripAnsi(lines100[4]!).includes("Directory"), "tab Directory tampil di menu");
-	assert(!stripAnsi(lines100[4]!).includes("Directory: /"), "menu Directory tanpa path (detail hanya saat diklik)");
-	assert(stripAnsi(lines100[4]!).indexOf("Directory") < stripAnsi(lines100[4]!).indexOf("Model ["), "Directory tab berada paling kiri");
+	assert(stripAnsi(lines100[4]!).includes("Directory"), "Directory tab shown in the menu");
+	assert(!stripAnsi(lines100[4]!).includes("Directory: /"), "Directory menu entry has no path (detail only on click)");
+	assert(stripAnsi(lines100[4]!).indexOf("Directory") < stripAnsi(lines100[4]!).indexOf("Model ["), "Directory tab is leftmost");
 	hdr.activeTab = "Model";
 	hdr.render(100);
-	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "data tab aktif Model tampil di baris info terakhir");
+	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "active Model tab data on the last info line");
 	// Directory tab content: full path, wrapped, nothing lost
 	hdr.activeTab = "Directory";
 	const linesDir = hdr.render(100);
 	const dirContent = stripAnsi(linesDir[6]!);
-	assert(dirContent.includes("/run/media/bisma"), "path lengkap tab Directory (awal) tampil");
-	assert(dirContent.includes("pi-arnative"), "path lengkap tab Directory (akhir) tampil — tanpa truncate");
+	assert(dirContent.includes("/run/media/bisma"), "full Directory tab path (start) shown");
+	assert(dirContent.includes("pi-arnative"), "full Directory tab path (end) shown — no truncation");
 	hdr.activeTab = "Model";
 	hdr.render(100);
 	// Inner box rules: bottom line is one fully dimmed block (the "─" runs are colored too, not
 	// just the corners); the top one is the same except it carries the tinted " Menu " label.
-	assert((lines100[5]!.match(/\x1b\[/g) ?? []).length === 8, 'garis kotak bawah (baris 5) = satu blok dim penuh');
+	assert((lines100[5]!.match(/\x1b\[/g) ?? []).length === 8, 'bottom box line (row 5) = one fully dimmed block');
 	assert(
 		lines100[3]!.includes("\x1b[2m╭─\x1b[22m Menu \x1b[2m─") && lines100[3]!.includes("╮\x1b[22m"),
-		'border atas kotak tab = dua blok dim dengan label " Menu " di antaranya',
+		'tab box top border = two dim blocks with the " Menu " label between them',
 	);
 
 	// Tab regions: Model, Context, Skills, Extensions, Themes
 	const tabY = (hdr as any).renderedTabLineY;
-	assert(tabY > 0, "posisi Y baris tab tercatat");
+	assert(tabY > 0, "tab line Y position recorded");
 	const tabRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
-	assert(tabRegions.length >= 3, "region tab terisi (tab kanan bisa terpotong di 100 kolom)");
-	assert(tabRegions.some((r) => r.key === "Directory"), "tab Directory ada di menu (lebar 100)");
+	assert(tabRegions.length >= 3, "tab regions filled (right tabs may be cut at 100 columns)");
+	assert(tabRegions.some((r) => r.key === "Directory"), "Directory tab present in the menu (width 100)");
 
 	// Click the Extensions tab (when truncated at 100 columns, use the rightmost tab)
 	const extRegion = tabRegions.find((r) => r.key === "Extensions") ?? tabRegions[tabRegions.length - 1]!;
@@ -840,12 +815,12 @@ if (isMain) {
 		x: Math.floor((extRegion.startX + extRegion.endX) / 2),
 		y: tabY,
 	} as any);
-	assert(clickExt?.handled === true, "klik mouse pada tab handled");
-	assert(hdr.activeTab === extRegion.key, "activeTab berubah ke tab yang diklik");
-	assert(renderRequested === true, "requestRender dipanggil saat tab berganti");
+	assert(clickExt?.handled === true, "mouse click on the tab is handled");
+	assert(hdr.activeTab === extRegion.key, "activeTab switches to the clicked tab");
+	assert(renderRequested === true, "requestRender called when the tab switches");
 
 	const linesExt = hdr.render(100);
-	assert(stripAnsi(linesExt[6]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "data tab aktif tampil di baris info terakhir");
+	assert(stripAnsi(linesExt[6]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "active tab data on the last info line");
 
 	// Click the Skills tab (measured at a width where every tab fits)
 	const wide = hdr.render(140);
@@ -860,47 +835,47 @@ if (isMain) {
 		x: Math.floor((skillsRegion.startX + skillsRegion.endX) / 2),
 		y: skillsY,
 	} as any);
-	assert(hdr.activeTab === skillsRegion.key, `activeTab berubah ke ${skillsRegion.key} setelah klik`);
+	assert(hdr.activeTab === skillsRegion.key, `activeTab switches to ${skillsRegion.key} after the click`);
 
 	const linesSkills = hdr.render(140);
-	assert(wide.every((l) => visibleWidth(l) === 140), "baris 140 kolom tetap 140");
-	assert(wideRegions.length === 6, "lebar 140: 6 tab pertama tampil (Shortcut di paling kanan ikut terbuang)");
+	assert(wide.every((l) => visibleWidth(l) === 140), "lines at 140 columns stay 140");
+	assert(wideRegions.length === 6, "width 140: first 6 tabs shown (rightmost Shortcut dropped too)");
 	if (skillsRegion.key === "Skills") {
-		assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "data tab Skills tampil di baris info terakhir");
-		assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "data Model tidak tampil di konten tab Skills");
-		assert(linesSkills[4]!.includes("Model [Gemini 3.8 Flash]"), "menu tab tetap tampil saat tab lain aktif");
+		assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "Skills tab data on the last info line");
+		assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "Model data not shown in the Skills tab content");
+		assert(linesSkills[4]!.includes("Model [Gemini 3.8 Flash]"), "tab menu still shown while another tab is active");
 	}
 
 	// The Y of a tab must point at the tab menu line, not the line above
 	const rowsPlain = lines100.map((l) => stripAnsi(l));
-	assert(rowsPlain[tabY]!.includes("Model ["), "renderedTabLineY menunjuk baris menu tab");
-	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model [" : r.key)), "region tab rata dengan teks di baris itu");
+	assert(rowsPlain[tabY]!.includes("Model ["), "renderedTabLineY points at the tab menu line");
+	assert(tabRegions.every((r) => rowsPlain[tabY]!.slice(r.startX, r.endX + 1).includes(r.key === "Model" ? "Model [" : r.key)), "tab regions align with the text on that line");
 
 	// Shortcut tab: the key cheatsheet lives in the tab content, not in a header line
 	hdr.activeTab = "Shortcut";
 	const linesShortcut = hdr.render(170);
 	assert(
 		((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),
-		"lebar 170: tab Shortcut tampil (tidak terbuang)",
+		"width 170: Shortcut tab shown (not dropped)",
 	);
 	const scContent = stripAnsi(linesShortcut.slice(6).join(" "));
-	assert(scContent.includes("[Esc] Interrupt"), "tab Shortcut: legend pindah ke konten");
-	assert(scContent.includes("[Ctrl+alt+r] Reload"), "tab Shortcut: pintasan reload ada di konten");
-	assert(stripAnsi(linesShortcut[2]!).includes("Arnative v"), "baris 2 tetap brand Arnative saat tab Shortcut aktif");
+	assert(scContent.includes("[Esc] Interrupt"), "Shortcut tab: legend moved into the content");
+	assert(scContent.includes("[Ctrl+alt+r] Reload"), "Shortcut tab: reload shortcut present in the content");
+	assert(stripAnsi(linesShortcut[2]!).includes("Arnative v"), "line 2 keeps the Arnative brand while the Shortcut tab is active");
 	hdr.activeTab = "Model";
 	hdr.render(140);
 
 	// Narrow screen: brand lines + tabs + data stay intact, rightmost tabs are dropped
 	const narrow = hdr.render(60);
-	assert(narrow.every((l) => visibleWidth(l) === 60), "baris 60 kolom tetap 60");
-	assert(stripAnsi(narrow[1]!).includes("Welcome back,"), "sapaan tetap utuh di 60 kolom");
-	assert(stripAnsi(narrow[2]!).includes("Arnative v"), "brand pi + Arnative utuh di 60 kolom");
-	assert(stripAnsi(narrow[2]!).includes("Interrupt") === false, "legend tidak balik ke baris atas");
+	assert(narrow.every((l) => visibleWidth(l) === 60), "lines at 60 columns stay 60");
+	assert(stripAnsi(narrow[1]!).includes("Welcome back,"), "greeting stays intact at 60 columns");
+	assert(stripAnsi(narrow[2]!).includes("Arnative v"), "pi + Arnative brand intact at 60 columns");
+	assert(stripAnsi(narrow[2]!).includes("Interrupt") === false, "legend does not come back to the top line");
 	assert(
 		!((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),
-		"tab paling kanan dibuang di 60 kolom",
+		"rightmost tab dropped at 60 columns",
 	);
-	assert(stripAnsi(narrow[4]!).includes("Model ["), "tab Model tetap tampil di 60 kolom");
+	assert(stripAnsi(narrow[4]!).includes("Model ["), "Model tab still shown at 60 columns");
 
 	// Intercept addChild: capture the data and suppress the child
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };
@@ -912,8 +887,8 @@ if (isMain) {
 		render: (_w: number) => ["should be hidden"],
 	};
 	container.addChild(fakeSection);
-	assert(fakeSection.render(80).length === 0, "child di loadedResourcesContainer di-suppress (render = [])");
-	assert(tabStore.get("Skills")?.includes("new-skill-1") === true, "data baru masuk ke tabStore");
+	assert(fakeSection.render(80).length === 0, "child of loadedResourcesContainer suppressed (render = [])");
+	assert(tabStore.get("Skills")?.includes("new-skill-1") === true, "new data lands in tabStore");
 
 	console.log("section-headers.ts self-check OK");
 }

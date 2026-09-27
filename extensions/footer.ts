@@ -11,6 +11,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
+import { stripAnsi } from "../lib/ansi.ts";
+import { assert, isMain } from "../lib/check.ts";
+import { capitalize, modelDisplayParts } from "../lib/format.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 
 // The TUI drops key-release events before handleInput, so press+release cannot
@@ -99,19 +102,9 @@ function formatModelName(
 	dim: (t: string) => string,
 ): string {
 	if (!model) return dim("No Model");
-	let name = model.name || model.id;
-	const provider = model.provider ? model.provider.charAt(0).toUpperCase() + model.provider.slice(1) : "";
-	if (name === model.id) {
-		name = name
-			.split(/[-_]/)
-			.map((w) => (w.length > 0 ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
-			.join(" ");
-	}
-	if (provider && name.toLowerCase().endsWith(`(${provider.toLowerCase()})`)) {
-		name = name.slice(0, name.lastIndexOf("(")).trim();
-	}
+	const { name, provider } = modelDisplayParts({ id: model.id, name: model.name, provider: model.provider });
 	const provStr = provider ? ` ${dim(`(${provider})`)}` : "";
-	const capThinking = thinkingLevel && thinkingLevel !== "off" ? thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1) : "";
+	const capThinking = thinkingLevel && thinkingLevel !== "off" ? capitalize(thinkingLevel) : "";
 	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${tint(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${acc(name)}${provStr}`;
 }
@@ -140,15 +133,12 @@ export function formatDuration(ms: number): string {
 	return `${s}s`;
 }
 
-// Full box editor + `> ` prompt. pi only draws lines above and below
-// (pi-tui editor.js: "no side borders, just horizontal lines above and below")
-// and no prompt char, so the `│` sides, the round ╭╮╰╯ corners and the prompt
-// are added here.
-// `lines` are already rendered by pi at the NARROWER width - 5: 2 columns for the
-// sides, 3 for the " > " prompt; the border is then patched with dashes to match.
-// `visible` = editor content line count (private `renderedVisibleLineCount`);
-// autocomplete lines come AFTER the bottom border and are deliberately outside the box.
-// JetBrainsMono Nerd Font has the round corner glyphs (verified via fontconfig).
+// Full box editor: pi draws only the top/bottom lines (pi-tui editor.js: "no side
+// borders, just horizontal lines above and below") and no prompt char, so the `│`
+// sides, the round ╭╮╰╯ corners and the `> ` prompt are added here. `lines` are
+// already rendered at width - 5 (2 sides + 3 prompt) and the border is patched with
+// dashes to match. `visible` = content line count (private `renderedVisibleLineCount`);
+// autocomplete lines stay outside the box. JetBrainsMono NF has the round glyphs.
 export function boxEditorLines(
 	lines: readonly string[],
 	visible: number,
@@ -234,6 +224,14 @@ function poke(): void {
  * Tool name → active progress text (gerund).
  * Fallback when unregistered: "Working".
  */
+// Verb for an MCP sub-action (shared by the `mcp` and `mcp__*` tool names).
+function mcpStatusOf(sub: string): string {
+	if (sub.includes("search") || sub.includes("find")) return "Searching";
+	if (sub.includes("fetch") || sub.includes("get") || sub.includes("read")) return "Fetching";
+	if (sub.includes("edit") || sub.includes("write") || sub.includes("patch")) return "Editing";
+	return "Executing";
+}
+
 export function getToolWorkingMessage(toolName: string, args?: any): string {
 	const n = (toolName ?? "").trim();
 	if (!n) return "Working";
@@ -257,21 +255,11 @@ export function getToolWorkingMessage(toolName: string, args?: any): string {
 	if (n === "mcpScript") return "Running script";
 	if (n === "mcp") {
 		const sub = typeof args === "object" && args ? (args.tool || args.search || args.describe || args.action) : "";
-		if (sub) {
-			const s = String(sub).toLowerCase();
-			if (s.includes("search") || s.includes("find")) return "Searching";
-			if (s.includes("fetch") || s.includes("get") || s.includes("read")) return "Fetching";
-			if (s.includes("edit") || s.includes("write") || s.includes("patch")) return "Editing";
-			return "Executing";
-		}
-		return "Executing";
+		return sub ? mcpStatusOf(String(sub).toLowerCase()) : "Executing";
 	}
 	if (n.startsWith("mcp__")) {
 		const sub = typeof args === "object" && args?.tool ? String(args.tool).toLowerCase() : "";
-		if (sub.includes("search") || sub.includes("find")) return "Searching";
-		if (sub.includes("fetch") || sub.includes("get") || sub.includes("read")) return "Fetching";
-		if (sub.includes("edit") || sub.includes("write") || sub.includes("patch")) return "Editing";
-		return "Executing";
+		return mcpStatusOf(sub);
 	}
 
 	return "Working";
@@ -367,7 +355,7 @@ export default function (pi: ExtensionAPI) {
 						const segs: string[] = [];
 						const cleanStatus = (s: string) => {
 							if (s.includes("MCP:")) {
-								let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
+								let clean = stripAnsi(s);
 								const idx = clean.indexOf("MCP:");
 								let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
 								rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
@@ -397,7 +385,7 @@ export default function (pi: ExtensionAPI) {
 								const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
 								return `${acc("\uedcf")}  ${tint("Jev:")} ${bullet} ${tint(label)}`;
 							}
-							let clean = s.replace(/\x1b\[[0-9;]*m/g, "").replace(/^[0-9;]+m/, "");
+							let clean = stripAnsi(s);
 							clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
 							return tint(clean.trim());
 						};
@@ -612,37 +600,30 @@ export default function (pi: ExtensionAPI) {
 }
 
 // Self-check: `node extensions/footer.ts`
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"));
-if (isMain) {
-	const assert = (cond: boolean, msg: string) => {
-		if (!cond) {
-			console.error(`FAIL: ${msg}`);
-			process.exit(1);
-		}
-	};
-	assert(shortenCwd("/run/media/bisma/DATA/Pi/pi-arnative") === "\u2026/Pi/pi-arnative", "cwd dalam -> 2 segmen terakhir");
-	assert(shortenCwd("/home/bisma") === "/home/bisma", "cwd dangkal tak diubah");
-	assert(shortenCwd("D:\\Pi\\a\\pi-arnative") === "D:/\u2026/a/pi-arnative", "path Windows jauh: drive dipertahankan");
-	assert(shortenCwd("D:\\Pi\\pi-arnative") === "D:\\Pi\\pi-arnative", "path Windows dangkal tak diubah");
-	assert(shortenCwd("/a/x/y/z") === "\u2026/y/z", "path jauh -> tail");
-	assert(shortenCwd("") === "", "cwd kosong");
-	assert(formatDuration(0) === "-", "durasi kosong = -");
-	assert(formatDuration(5_000) === "5s", "detik saja");
-	assert(formatDuration(65_000) === "1m 5s", "menit + detik");
-	assert(formatDuration(3_700_000) === "1h 1m", "jam + menit");
+if (isMain(import.meta.url)) {
+	assert(shortenCwd("/run/media/bisma/DATA/Pi/pi-arnative") === "\u2026/Pi/pi-arnative", "cwd inside -> last 2 segments");
+	assert(shortenCwd("/home/bisma") === "/home/bisma", "shallow cwd left unchanged");
+	assert(shortenCwd("D:\\Pi\\a\\pi-arnative") === "D:/\u2026/a/pi-arnative", "long Windows path: drive kept");
+	assert(shortenCwd("D:\\Pi\\pi-arnative") === "D:\\Pi\\pi-arnative", "shallow Windows path left unchanged");
+	assert(shortenCwd("/a/x/y/z") === "\u2026/y/z", "long path -> tail");
+	assert(shortenCwd("") === "", "empty cwd");
+	assert(formatDuration(0) === "-", "empty duration = -");
+	assert(formatDuration(5_000) === "5s", "seconds only");
+	assert(formatDuration(65_000) === "1m 5s", "minutes + seconds");
+	assert(formatDuration(3_700_000) === "1h 1m", "hours + minutes");
 
 	const plain = (s: string) => s;
-	const D = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"; // 8 kolom = lebar isi pada uji ini
+	const D = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"; // 8 columns = content width in this test
 	const boxed = boxEditorLines([D, "  hi    ", "  lo    ", D, "  /mo "], 2, plain);
-	assert(boxed[0] === `\u256d${D}\u2500\u2500\u2500\u256e`, "kotak editor: korner atas selebar isi");
-	assert(boxed[1] === "\u2502 >   hi    \u2502", "kotak editor: prompt ' > ' di baris pertama");
-	assert(boxed[2] === "\u2502     lo    \u2502", "kotak editor: baris lanjutan indent, tanpa > kedua");
-	assert(boxed[3] === `\u2570${D}\u2500\u2500\u2500\u256f`, "kotak editor: korner bawah");
-	assert(boxed[4] === "  /mo ", "baris autocomplete tetap di luar kotak");
+	assert(boxed[0] === `\u256d${D}\u2500\u2500\u2500\u256e`, "editor box: top corner spans the content");
+	assert(boxed[1] === "\u2502 >   hi    \u2502", "editor box: ' > ' prompt on the first line");
+	assert(boxed[2] === "\u2502     lo    \u2502", "editor box: continuation indented, no second >");
+	assert(boxed[3] === `\u2570${D}\u2500\u2500\u2500\u256f`, "editor box: bottom corner");
+	assert(boxed[4] === "  /mo ", "autocomplete lines stay outside the box");
 	const dimP = (s: string) => `\x1b[2m${s}\x1b[0m`;
 	const boxedDim = boxEditorLines([D, "  hi    ", D], 1, plain, dimP(" > "));
-	assert(visibleWidth(boxedDim[1]!) === visibleWidth(D) + 5, "prompt ber-ANSI (dim) tak menggeser lebar");
-	assert(boxedDim[1]!.startsWith(`\u2502${dimP(" > ")}`), "prompt dim dipertahankan apa adanya");
+	assert(visibleWidth(boxedDim[1]!) === visibleWidth(D) + 5, "ANSI (dim) prompt does not shift the width");
+	assert(boxedDim[1]!.startsWith(`\u2502${dimP(" > ")}`), "dim prompt kept as-is");
 
 	// Self-check: getToolWorkingMessage
 	assert(getToolWorkingMessage("edit") === "Editing", "edit -> Editing");
@@ -656,14 +637,14 @@ if (isMain) {
 	assert(getToolWorkingMessage("todo") === "Updating tasks", "todo -> Updating tasks");
 	assert(getToolWorkingMessage("unknown_tool") === "Working", "unknown -> Working");
 	assert(getToolWorkingMessage("mcp", { tool: "fetch_repo" }) === "Fetching", "mcp fetch -> Fetching");
-	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "lebar kotak seragam (sisi+prompt)");
-	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "terlalu sempit: tak diubah");
+	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "uniform box width (sides + prompt)");
+	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "too narrow: left unchanged");
 
 	// Guard: the reload shortcut must match every encoding a terminal can deliver,
 	// so a typo in the key id fails here instead of silently doing nothing.
-	assert(matchesKey("\x1b\x12", RELOAD_SHORTCUT), "shortcut cocok dgn ctrl+alt+r legacy (ESC + 0x12)");
-	assert(matchesKey("\x1b[114;7u", RELOAD_SHORTCUT), "shortcut cocok dgn ctrl+alt+r Kitty CSI-u");
-	assert(!matchesKey("\x12", RELOAD_SHORTCUT), "ctrl+r polos tidak memicu reload");
-	assert(!matchesKey("r", RELOAD_SHORTCUT), "huruf r tidak memicu reload");
+	assert(matchesKey("\x1b\x12", RELOAD_SHORTCUT), "shortcut matches legacy ctrl+alt+r (ESC + 0x12)");
+	assert(matchesKey("\x1b[114;7u", RELOAD_SHORTCUT), "shortcut matches Kitty CSI-u ctrl+alt+r");
+	assert(!matchesKey("\x12", RELOAD_SHORTCUT), "plain ctrl+r does not trigger reload");
+	assert(!matchesKey("r", RELOAD_SHORTCUT), "bare letter r does not trigger reload");
 	console.log("footer.ts self-check OK");
 }

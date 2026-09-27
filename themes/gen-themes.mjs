@@ -3,7 +3,7 @@
  * Generates the arnative theme variants.
  *
  * Structure source of truth = `themes/arnative.json` (also the default theme,
- * never rewritten here). Palette source of truth = the PALET table below.
+ * never rewritten here). Palette source of truth = the PALETTES table below.
  * Variants are text substitutions on the base, so its original formatting
  * (tabs + grouping blank lines) is preserved.
  *
@@ -20,20 +20,20 @@ const baseText = readFileSync(baseUrl, "utf8");
 const base = JSON.parse(baseText);
 
 // Every theme must set ALL of these, so no color silently inherits the base.
-const KUNCI_VARS = [
+const REQUIRED_VARS = [
 	"accent", "cyan", "blue", "green", "red", "yellow", "text", "gray", "dimGray", "darkGray",
 	"softCyan", "searchBg", "selectedBg", "userMsgBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "customMsgBg",
 ];
-const KUNCI_COLORS = [
+const REQUIRED_COLORS = [
 	"customMessageLabel", "mdHeading", "mdLink",
 	"syntaxComment", "syntaxKeyword", "syntaxFunction", "syntaxVariable", "syntaxString",
 	"syntaxNumber", "syntaxType", "syntaxOperator", "syntaxPunctuation",
 	"thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh",
 ];
-const KUNCI_EXPORT = ["pageBg", "cardBg", "infoBg"];
+const REQUIRED_EXPORT = ["pageBg", "cardBg", "infoBg"];
 
 /** Per-theme palette. `vars.cyan`/`vars.blue` = borderAccent/border, `vars.softCyan` = tint, `vars.green/red/yellow` = success/error/warning + diff. */
-const PALET = {
+const PALETTES = {
 	// --- base hue variants -------------------------------------------------
 	"arnative-sun": {
 		vars: {
@@ -216,57 +216,57 @@ const PALET = {
 };
 
 /** Text substitution on the base; each target must appear exactly once. */
-function render(nama, palet) {
+function render(name, palette) {
 	let out = baseText;
-	const tukar = (oldS, newS, apa) => {
+	const subst = (oldS, newS, what) => {
 		const n = out.split(oldS).length - 1;
-		if (n !== 1) throw new Error(`${nama}: ${apa} "${oldS}" muncul ${n}x (harus 1)`);
+		if (n !== 1) throw new Error(`${name}: ${what} "${oldS}" appears ${n}x (must be 1)`);
 		out = out.replace(oldS, newS);
 	};
 
-	tukar(`"name": ${JSON.stringify(base.name)}`, `"name": ${JSON.stringify(nama)}`, "name");
-	for (const [bagian, kunci, wajib] of [
-		["vars", palet.vars, KUNCI_VARS],
-		["colors", palet.colors, KUNCI_COLORS],
-		["export", palet.export, KUNCI_EXPORT],
+	subst(`"name": ${JSON.stringify(base.name)}`, `"name": ${JSON.stringify(name)}`, "name");
+	for (const [section, keys, required] of [
+		["vars", palette.vars, REQUIRED_VARS],
+		["colors", palette.colors, REQUIRED_COLORS],
+		["export", palette.export, REQUIRED_EXPORT],
 	]) {
-		const kurang = wajib.filter((k) => !(k in kunci));
-		const lebih = Object.keys(kunci).filter((k) => !wajib.includes(k));
-		if (kurang.length || lebih.length) {
-			throw new Error(`${nama}/${bagian}: kurang [${kurang}] lebih [${lebih}]`);
+		const missing = required.filter((k) => !(k in keys));
+		const extra = Object.keys(keys).filter((k) => !required.includes(k));
+		if (missing.length || extra.length) {
+			throw new Error(`${name}/${section}: missing [${missing}] extra [${extra}]`);
 		}
-		for (const k of wajib) {
-			const lama = base[bagian][k];
-			if (lama === undefined) throw new Error(`${nama}: base.${bagian}.${k} tidak ada`);
-			tukar(`"${k}": ${JSON.stringify(lama)}`, `"${k}": ${JSON.stringify(kunci[k])}`, `${bagian}.${k}`);
+		for (const k of required) {
+			const old = base[section][k];
+			if (old === undefined) throw new Error(`${name}: base.${section}.${k} missing`);
+			subst(`"${k}": ${JSON.stringify(old)}`, `"${k}": ${JSON.stringify(keys[k])}`, `${section}.${k}`);
 		}
 	}
 	return out;
 }
 
-const cek = process.argv.includes("--check");
-let gagal = 0;
-for (const nama of Object.keys(PALET)) {
-	const isi = render(nama, PALET[nama]);
-	const berkas = new URL(`${nama}.json`, import.meta.url);
-	if (cek) {
-		let lama = null;
+const check = process.argv.includes("--check");
+let failed = 0;
+for (const name of Object.keys(PALETTES)) {
+	const content = render(name, PALETTES[name]);
+	const file = new URL(`${name}.json`, import.meta.url);
+	if (check) {
+		let old = null;
 		try {
-			lama = readFileSync(berkas, "utf8");
+			old = readFileSync(file, "utf8");
 		} catch {}
-		if (lama !== isi) {
-			console.error(`BEDA: themes/${nama}.json`);
-			gagal++;
+		if (old !== content) {
+			console.error(`DIFFERS: themes/${name}.json`);
+			failed++;
 		}
 	} else {
-		writeFileSync(berkas, isi);
-		console.log(`tulis themes/${nama}.json`);
+		writeFileSync(file, content);
+		console.log(`wrote themes/${name}.json`);
 	}
 }
-if (cek) {
-	if (gagal) {
-		console.error(`${gagal} tema tidak sinkron dengan generator (jalankan: node themes/gen-themes.mjs)`);
+if (check) {
+	if (failed) {
+		console.error(`${failed} themes out of sync with the generator (run: node themes/gen-themes.mjs)`);
 		process.exit(1);
 	}
-	console.log(`OK: ${Object.keys(PALET).length} tema sinkron dengan generator`);
+	console.log(`OK: ${Object.keys(PALETTES).length} themes in sync with the generator`);
 }

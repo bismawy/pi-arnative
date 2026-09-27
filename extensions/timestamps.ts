@@ -12,9 +12,38 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import { ansiBgOpen } from "../lib/ansi.ts";
+import { ansiBgOpen, stripAnsi } from "../lib/ansi.ts";
+import { assert, isMain } from "../lib/check.ts";
 
 const USER_TIMESTAMPS_MAP = new Map<string, number>();
+let getBranch: (() => readonly unknown[]) | null = null;
+let prefilled = false;
+
+function userTextOf(message: { content?: unknown }): string {
+	const c = message.content;
+	if (typeof c === "string") return c;
+	if (Array.isArray(c)) {
+		return c
+			.filter((x) => (x as { type?: string })?.type === "text")
+			.map((x) => (x as { text?: string }).text ?? "")
+			.join("");
+	}
+	return "";
+}
+
+// Restore/reload: history entries never fire message_start, so the map is prefilled
+// once from the session branch before the first render lookup. Keyed by trimmed text
+// (last write wins) — ponytail: duplicate texts share one clock, key by message id if
+// pi ever exposes one at render time.
+function prefillUserTimestamps(entries: readonly unknown[]): void {
+	for (const e of entries) {
+		const entry = e as { message?: { role?: string; content?: unknown; timestamp?: number }; timestamp?: string };
+		const m = entry.message;
+		if (m?.role !== "user") continue;
+		const text = userTextOf(m).trim();
+		if (text) USER_TIMESTAMPS_MAP.set(text, m.timestamp || Date.parse(entry.timestamp ?? "") || Date.now());
+	}
+}
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
 function formatClock(timestamp?: number): string {
@@ -84,15 +113,24 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			const bgOpen = ansiBgOpen(activeThemeProxy, "userMessageBg");
 			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i], bgOpen);
 
+			// Restore/reload safe: old user messages arrive without message_start events,
+			// so fill the map once from the session history before the first lookup.
+			if (!prefilled && getBranch) {
+				prefillUserTimestamps(getBranch());
+				prefilled = true;
+			}
+
 			const textKey = (this as { text?: string }).text?.trim() ?? "";
-			const ts = (this as { _arnativeTimestamp?: number })._arnativeTimestamp ?? USER_TIMESTAMPS_MAP.get(textKey);
+			const ts = USER_TIMESTAMPS_MAP.get(textKey);
+			// No known timestamp -> no clock (a "now" clock would be a lie on old messages).
+			if (!ts) return lines;
 			const timeStr = formatClock(ts);
 			const badge = formatTimeBadge(timeStr, activeThemeProxy);
 			const timeW = visibleWidth(timeStr);
 
 			// First text line sits at index 1 (below the box top padding)
 			const contentLine = lines[1];
-			const cleanContent = contentLine.replace(/\x1b\[[0-9;]*m/g, "").trimEnd();
+			const cleanContent = stripAnsi(contentLine).trimEnd();
 			const contentW = visibleWidth(cleanContent);
 			const minGap = 2;
 
@@ -150,7 +188,7 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 					rest = rest.slice(prefix.length);
 				}
 
-				const cleanText = rest.replace(/\x1b\[[0-9;]*m/g, "").trimEnd();
+				const cleanText = stripAnsi(rest).trimEnd();
 				const textW = visibleWidth(cleanText);
 				const minGap = 2;
 
@@ -167,58 +205,64 @@ export default function (pi: ExtensionAPI) {
 	// Record the user message timestamp (read by the UserMessageComponent render above)
 	pi.on("message_start", async (event) => {
 		if (event.message.role !== "user") return;
-		const text = typeof event.message.content === "string"
-			? event.message.content
-			: event.message.content?.filter((c) => c.type === "text").map((c) => (c as { text: string }).text).join("") ?? "";
-		if (text.trim()) {
-			USER_TIMESTAMPS_MAP.set(text.trim(), event.message.timestamp || Date.now());
+		const text = userTextOf(event.message).trim();
+		if (text) {
+			USER_TIMESTAMPS_MAP.set(text, event.message.timestamp || Date.now());
 		}
 	});
 
 	// The active theme is re-read per session (ctx.ui.theme); render reads it lazily.
 	pi.on("session_start", async (_event, ctx) => {
-		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
+		activeThemeProxy = themeOf<typeof activeThemeProxy>(ctx) ?? activeThemeProxy;
+		// History getter for the restore prefill (render-time, once).
+		getBranch = () => ctx.sessionManager.getBranch();
+		prefilled = false;
 	});
 }
 
 // Self-check: `node extensions/timestamps.ts`
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split("\\").join("/"));
-if (isMain) {
-	const assert = (cond: boolean, msg: string) => {
-		if (!cond) {
-			console.error(`FAIL: ${msg}`);
-			process.exit(1);
-		}
-	};
+if (isMain(import.meta.url)) {
 	const badge = "\x1b[36m17:09\x1b[39m";
 	const badgeW = 5;
 
 	// Clock flush right with a 1-space margin
 	const res1 = placeTimeAtRight("Short text", 30, badge, badgeW, "");
-	assert(visibleWidth(res1) === 30, "panjang baris pas selebar terminal");
-	assert(res1.endsWith(badge + " "), "badge berjarak 1 spasi dari ujung kanan");
+	assert(visibleWidth(res1) === 30, "line length matches the terminal width");
+	assert(res1.endsWith(badge + " "), "badge sits 1 space from the right edge");
 
 	// With the user bubble background
 	const bg = "\x1b[48;2;52;53;61m";
 	const res2 = placeTimeAtRight(`${bg}Short text`, 30, badge, badgeW, bg);
-	assert(res2.includes(badge + " \x1b[49m"), "jam diikuti spasi margin lalu reset bg");
-	assert(res2.endsWith("\x1b[49m"), "background ditutup di akhir baris");
-	assert(visibleWidth(res2) === 30, "panjang baris tetap pas lebar");
+	assert(res2.includes(badge + " \x1b[49m"), "hours, margin space, then bg reset");
+	assert(res2.endsWith("\x1b[49m"), "background closed at end of line");
+	assert(visibleWidth(res2) === 30, "line length still matches the width");
 
 	// bubble bg repair: padding after [0m] must be bg'd, line closed with [49m]
 	const dirty = `${bg}Hello\x1b[0m${" ".repeat(5)}\x1b[49m`;
 	const clean = repairBubbleBg(dirty, bg);
-	assert(clean.includes(`\x1b[0m${bg}`), "bg dipasang ulang setelah reset");
-	assert(clean.endsWith("\x1b[49m"), "bg bubble ditutup di akhir baris");
-	assert(repairBubbleBg("plain", "") === "plain", "tanpa bgOpen: tanpa perubahan");
-	assert(ansiBgOpen(null, "userMessageBg") === "", "tanpa tema: bgOpen kosong");
+	assert(clean.includes(`\x1b[0m${bg}`), "bg re-applied after the reset");
+	assert(clean.endsWith("\x1b[49m"), "bubble bg closed at end of line");
+	assert(repairBubbleBg("plain", "") === "plain", "no bgOpen: unchanged");
+	assert(ansiBgOpen(null, "userMessageBg") === "", "no theme: empty bgOpen");
 	assert(
 		ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;52;53;61m${t}\x1b[49m` }, "userMessageBg") === "\x1b[48;2;52;53;61m",
-		"bgOpen terambil dari probe tema",
+		"bgOpen taken from the theme probe",
 	);
 
-	// Long text: sliceByColumn keeps the width intact
-	const res3 = placeTimeAtRight("a".repeat(40), 30, badge, badgeW, false);
-	assert(visibleWidth(res3) === 30, "teks panjang dipotong pas di targetCol");
+	// Long text: sliceByColumn keeps the width intact (bg branch: badge area carries the bubble bg)
+	const bgOpenTest = "\x1b[48;2;52;53;61m";
+	const res3 = placeTimeAtRight("a".repeat(40), 30, badge, badgeW, bgOpenTest);
+	assert(visibleWidth(res3) === 30, "long text sliced exactly at targetCol");
+	assert(res3.includes(bgOpenTest), "bg branch: bubble bg applied in the badge area");
+
+	// History prefill: old user messages get their real clock on restore
+	assert(userTextOf({ content: "plain" }) === "plain", "userTextOf string content");
+	assert(userTextOf({ content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }) === "ab", "userTextOf text parts joined");
+	prefillUserTimestamps([
+		{ type: "message", timestamp: "2026-01-02T03:04:05.000Z", message: { role: "user", content: "old question", timestamp: 1000 } },
+		{ type: "message", timestamp: "not-a-date", message: { role: "user", content: [{ type: "text", text: "old reply" }] } },
+	]);
+	assert(USER_TIMESTAMPS_MAP.get("old question") === 1000, "prefill stores the message timestamp");
+	assert((USER_TIMESTAMPS_MAP.get("old reply") ?? 0) > 0, "prefill falls back to the entry timestamp");
 	console.log("timestamps.ts self-check OK");
 }

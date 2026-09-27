@@ -21,6 +21,7 @@
     "extensions",
     "lib",
     "themes",
+    "CHANGELOG.md",
     "README.md"
   ],
   "pi": {

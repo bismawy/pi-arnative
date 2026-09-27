@@ -139,7 +139,9 @@ function parseSessionFile(filePath: string): UsageEntry[] {
 		const content = readFileSync(filePath, "utf8");
 		const lines = content.split("\n");
 		for (const line of lines) {
-			if (!line || !line.includes('"role":"assistant"')) continue;
+			// Loose prefilter (fast path only): exact key would break on JSON formatting changes
+			// and silently drop usage. The role is re-checked on the parsed object below.
+			if (!line || !line.includes('"role"')) continue;
 			try {
 				const obj = JSON.parse(line);
 				const m = obj?.message;
