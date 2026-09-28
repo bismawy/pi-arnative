@@ -15,9 +15,19 @@ import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { ansiBgOpen, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 
-const USER_TIMESTAMPS_MAP = new Map<string, number>();
-let getBranch: (() => readonly unknown[]) | null = null;
-let prefilled = false;
+// Shared across reloads: /reload re-imports this module (moduleCache: false), but the
+// prototype patches below survive on the class, so the patched closure and the newly
+// registered handlers must read the SAME map and theme. Module-local state would leave
+// the closure on stale data — and a captured ctx even on an invalidated one (pi throws
+// "stale after session replacement or reload" inside the render pass -> uncaughtException).
+type ThemeProxy = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
+const TS_STATE_KEY = Symbol.for("pi-arnative.chatTimestampState");
+const tsState = ((globalThis as Record<symbol, unknown>)[TS_STATE_KEY] ??= {
+	patched: false,
+	map: new Map<string, number>(),
+	theme: null as ThemeProxy,
+}) as { patched: boolean; map: Map<string, number>; theme: ThemeProxy };
+const USER_TIMESTAMPS_MAP = tsState.map;
 
 function userTextOf(message: { content?: unknown }): string {
 	const c = message.content;
@@ -44,8 +54,6 @@ function prefillUserTimestamps(entries: readonly unknown[]): void {
 		if (text) USER_TIMESTAMPS_MAP.set(text, m.timestamp || Date.parse(entry.timestamp ?? "") || Date.now());
 	}
 }
-let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
-
 function formatClock(timestamp?: number): string {
 	const d = timestamp && timestamp > 0 ? new Date(timestamp) : new Date();
 	const h = String(d.getHours()).padStart(2, "0");
@@ -98,9 +106,8 @@ export function placeTimeAtRight(
 	return `${leftPart}${bg}${pad}${timeBadge} ${reset}`;
 }
 
-const CHAT_TIMESTAMP_PATCHED = Symbol.for("pi-arnative.chatTimestampPatched");
-if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
-	(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED] = true;
+if (!tsState.patched) {
+	tsState.patched = true;
 
 	if (UserMessageComponent?.prototype?.render) {
 		const origRender = UserMessageComponent.prototype.render;
@@ -110,22 +117,15 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 
 			// Fix the bubble bg first (reset Markdown lines make padding dark),
 			// then paste the clock (which deliberately drops the bg in the badge area).
-			const bgOpen = ansiBgOpen(activeThemeProxy, "userMessageBg");
+			const bgOpen = ansiBgOpen(tsState.theme, "userMessageBg");
 			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i], bgOpen);
-
-			// Restore/reload safe: old user messages arrive without message_start events,
-			// so fill the map once from the session history before the first lookup.
-			if (!prefilled && getBranch) {
-				prefillUserTimestamps(getBranch());
-				prefilled = true;
-			}
 
 			const textKey = (this as { text?: string }).text?.trim() ?? "";
 			const ts = USER_TIMESTAMPS_MAP.get(textKey);
 			// No known timestamp -> no clock (a "now" clock would be a lie on old messages).
 			if (!ts) return lines;
 			const timeStr = formatClock(ts);
-			const badge = formatTimeBadge(timeStr, activeThemeProxy);
+			const badge = formatTimeBadge(timeStr, tsState.theme);
 			const timeW = visibleWidth(timeStr);
 
 			// First text line sits at index 1 (below the box top padding)
@@ -165,7 +165,7 @@ if (!(globalThis as Record<symbol, boolean>)[CHAT_TIMESTAMP_PATCHED]) {
 			if (!hasText || lines.length === 0) return lines;
 
 			const timeStr = formatClock(lastMsg?.timestamp);
-			const badge = formatTimeBadge(timeStr, activeThemeProxy);
+			const badge = formatTimeBadge(timeStr, tsState.theme);
 			const timeW = visibleWidth(timeStr);
 
 			// First text line that is neither an OSC zone nor a thinking header
@@ -212,11 +212,15 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// The active theme is re-read per session (ctx.ui.theme); render reads it lazily.
+	// History for old user messages is read HERE, never at render time: the ctx is only
+	// valid inside a handler. A ctx captured in the module throws after session
+	// replacement/reload (pi's "stale after session replacement or reload" guard) and
+	// that throw would land inside a render pass -> uncaughtException. The session
+	// manager already holds the restored history when session_start fires (all reasons:
+	// startup/resume/fork/new/reload).
 	pi.on("session_start", async (_event, ctx) => {
-		activeThemeProxy = themeOf<typeof activeThemeProxy>(ctx) ?? activeThemeProxy;
-		// History getter for the restore prefill (render-time, once).
-		getBranch = () => ctx.sessionManager.getBranch();
-		prefilled = false;
+		tsState.theme = themeOf<ThemeProxy>(ctx) ?? tsState.theme;
+		prefillUserTimestamps(ctx.sessionManager.getBranch());
 	});
 }
 
@@ -264,5 +268,23 @@ if (isMain(import.meta.url)) {
 	]);
 	assert(USER_TIMESTAMPS_MAP.get("old question") === 1000, "prefill stores the message timestamp");
 	assert((USER_TIMESTAMPS_MAP.get("old reply") ?? 0) > 0, "prefill falls back to the entry timestamp");
+
+	// Reload invariant: /reload re-imports the module while the prototype patch below keeps
+	// running, so the fresh handlers MUST write into the same map/theme the patched render reads.
+	const reloaded = (await import(`${import.meta.url}?reload=1`)) as typeof import("./timestamps.ts");
+	const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> = {};
+	const theme = { fg: (_c: string, t: string) => t };
+	reloaded.default({ on: (ev: string, h: never) => void (handlers[ev] = h) } as never);
+	await handlers.session_start(
+		{},
+		{
+			sessionManager: {
+				getBranch: () => [{ timestamp: "", message: { role: "user", content: "after reload", timestamp: 4242 } }],
+			},
+			ui: { theme },
+		},
+	);
+	assert(USER_TIMESTAMPS_MAP.get("after reload") === 4242, "reloaded module prefills the shared map read by the patched render");
+	assert(tsState.theme === theme, "reloaded module shares the theme read by the patched render");
 	console.log("timestamps.ts self-check OK");
 }
