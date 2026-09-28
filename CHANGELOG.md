@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7] - 2026-09-28
+
+### Fixed
+- README screenshot used raw HTML `<img>`, which pi.dev's markdown sanitizer strips; now plain markdown image syntax, so it renders on GitHub, npm and pi.dev alike (supersedes 0.2.6, whose README image was invisible on pi.dev).
+
+---
+
 ## [0.2.6] - 2026-09-28
 
 ### Added
