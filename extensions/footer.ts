@@ -9,16 +9,17 @@
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, modelDisplayParts } from "../lib/format.ts";
+import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 
+// ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
 // The TUI drops key-release events before handleInput, so press+release cannot
 // fire this twice even when the terminal reports event types (Kitty flag 2).
-const RELOAD_SHORTCUT = Key.ctrlAlt("r");
 
 // Intercept the built-in FooterComponent to force a pure 2-line footer
 const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
@@ -464,7 +465,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				handleInput(data: string) {
-					if (matchesKey(data, RELOAD_SHORTCUT)) {
+					if (SHORTCUT_RELOAD.matches(data)) {
 						this.setText("");
 						if (this.onSubmit) {
 							this.onSubmit("/reload");
@@ -642,9 +643,10 @@ if (isMain(import.meta.url)) {
 
 	// Guard: the reload shortcut must match every encoding a terminal can deliver,
 	// so a typo in the key id fails here instead of silently doing nothing.
-	assert(matchesKey("\x1b\x12", RELOAD_SHORTCUT), "shortcut matches legacy ctrl+alt+r (ESC + 0x12)");
-	assert(matchesKey("\x1b[114;7u", RELOAD_SHORTCUT), "shortcut matches Kitty CSI-u ctrl+alt+r");
-	assert(!matchesKey("\x12", RELOAD_SHORTCUT), "plain ctrl+r does not trigger reload");
-	assert(!matchesKey("r", RELOAD_SHORTCUT), "bare letter r does not trigger reload");
+	assert(SHORTCUT_RELOAD.matches("\x1b\x12"), "shortcut matches legacy ctrl+alt+r (ESC + 0x12)");
+	assert(SHORTCUT_RELOAD.matches("\x1b[114;7u"), "shortcut matches Kitty CSI-u ctrl+alt+r");
+	assert(SHORTCUT_RELOAD.matches("\x1br") === IS_WINDOWS_LIKE, "ESC + r triggers reload only where alt+r is bound");
+	assert(!SHORTCUT_RELOAD.matches("\x12"), "plain ctrl+r does not trigger reload");
+	assert(!SHORTCUT_RELOAD.matches("r"), "bare letter r does not trigger reload");
 	console.log("footer.ts self-check OK");
 }

@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Custom `ctrl+alt+<letter>` shortcuts (`t` next tab, `n` new session, `r` reload) never fired on Windows: Windows Terminal ≥ 1.24 aliases every `Ctrl+Alt` combo to AltGr ([microsoft/terminal#20052](https://github.com/microsoft/terminal/pull/20052)), so the legacy `ESC` + control-byte encoding is never emitted. All of them now also accept `alt+<letter>` on Windows **and WSL** (same input translation), matching pi's own convention (`alt+v`, `alt+p`). Linux keeps `ctrl+alt`, macOS keeps `ctrl+option` (plain Option composes characters there).
+- Shortcut ids, platform variants and cheatsheet labels now come from one place (`lib/shortcuts.ts`) instead of being spelled out per extension; the label is derived from the key id that is actually registered, so a cheatsheet can no longer advertise a key the platform never binds.
+- README: platform notes for Windows/WSL, macOS, Linux desktops and multiplexers, including `PI_TUI_ESC_TIMEOUT` for the intermittent “Escape + stray letter” glitch (`ESC`-prefixed shortcuts flushed by pi's ~10 ms lone-ESC timer).
+
+---
+
 ## [0.2.7] - 2026-09-28
 
 ### Fixed

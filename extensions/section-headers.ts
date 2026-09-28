@@ -24,7 +24,6 @@ import {
 import {
 	truncateToWidth,
 	visibleWidth,
-	Key,
 	type Component,
 	type TUI,
 	type TuiMouseEvent,
@@ -34,11 +33,12 @@ import { renderBoxLines } from "../lib/box.ts";
 import { stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, modelDisplayParts } from "../lib/format.ts";
+import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes" | "Shortcut";
 
-// Tab order for Ctrl+Alt+T and for the menu line.
+// Tab order for the next-tab shortcut and for the menu line.
 export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Themes", "Shortcut"];
 
 export const SECTION_ICONS: Record<TabKey, string> = {
@@ -176,9 +176,9 @@ export const SHORTCUTS: string[] = [
 	"[/] Commands",
 	"[!] Bash",
 	"[Ctrl+o] More/expand",
-	"[Ctrl+alt+t] Next tab",
-	"[Ctrl+alt+n] New",
-	"[Ctrl+alt+r] Reload",
+	`[${SHORTCUT_NEXT_TAB.label}] Next tab`,
+	`[${SHORTCUT_NEW_SESSION.label}] New`,
+	`[${SHORTCUT_RELOAD.label}] Reload`,
 ];
 
 export function wrapCommaItems(items: string[], maxWidth: number): string[] {
@@ -633,17 +633,17 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 }
 
 export default function (pi: ExtensionAPI) {
-	// ctrl+alt+t: next tab.
-	pi.registerShortcut(Key.ctrlAlt("t"), {
-		description: "Next header tab",
-		handler: async () => {
-			const hdr = activeHeaderInstance;
-			if (!hdr) return;
-			const order = TAB_ORDER;
-			hdr.activeTab = order[(order.indexOf(hdr.activeTab) + 1) % order.length]!;
-			hdr.tui?.requestRender?.();
-		},
-	});
+	// Next header tab — every platform variant of the shortcut (lib/shortcuts.ts).
+	const nextTab = async () => {
+		const hdr = activeHeaderInstance;
+		if (!hdr) return;
+		const order = TAB_ORDER;
+		hdr.activeTab = order[(order.indexOf(hdr.activeTab) + 1) % order.length]!;
+		hdr.tui?.requestRender?.();
+	};
+	for (const key of SHORTCUT_NEXT_TAB.keys) {
+		pi.registerShortcut(key, { description: "Next header tab", handler: nextTab });
+	}
 
 	pi.on("session_start", async (_event, ctx) => {
 		activeThemeProxy = themeOf<Themeish>(ctx) ?? activeThemeProxy;
@@ -860,7 +860,10 @@ if (isMain(import.meta.url)) {
 	);
 	const scContent = stripAnsi(linesShortcut.slice(6).join(" "));
 	assert(scContent.includes("[Esc] Interrupt"), "Shortcut tab: legend moved into the content");
-	assert(scContent.includes("[Ctrl+alt+r] Reload"), "Shortcut tab: reload shortcut present in the content");
+	assert(
+		scContent.includes(`[${SHORTCUT_RELOAD.label}] Reload`),
+		`Shortcut tab: reload shortcut present in the content (${SHORTCUT_RELOAD.label})`,
+	);
 	assert(stripAnsi(linesShortcut[2]!).includes("Arnative v"), "line 2 keeps the Arnative brand while the Shortcut tab is active");
 	hdr.activeTab = "Model";
 	hdr.render(140);

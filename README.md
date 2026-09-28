@@ -38,22 +38,33 @@ pi --extension ./extensions/footer.ts
 | Key / Action | Result |
 | --- | --- |
 | `/usage` | Show session usage & token metrics |
-| `ctrl+alt+t` | Cycle header tabs (Directory → Model → Context → Skills → Extensions → Themes → Shortcut) |
-| `ctrl+alt+n` | Start a new session (`/new`) — see [Keybindings](#keybindings) |
-| `ctrl+alt+r` | Quick reload runtime (`/reload`) |
+| `ctrl+alt+t` (`alt+t` on Windows/WSL) | Cycle header tabs (Directory → Model → Context → Skills → Extensions → Themes → Shortcut) |
+| `ctrl+alt+n` (`alt+n` on Windows/WSL) | Start a new session (`/new`) — see [Keybindings](#keybindings) |
+| `ctrl+alt+r` (`alt+r` on Windows/WSL) | Quick reload runtime (`/reload`) |
 | Click tab | Open selected header tab |
 | Click tool / `ctrl+e` | Toggle tool output box |
 
-Same cheatsheet in the header's **Shortcut** tab; on narrow terminals the rightmost tabs drop off first.
+Same cheatsheet in the header's **Shortcut** tab — it shows the variant your platform actually uses (on macOS `alt` reads `option`); on narrow terminals the rightmost tabs drop off first.
+
+### Platform notes
+
+- **Windows / WSL:** Windows Terminal ≥ 1.24 aliases every `Ctrl+Alt` combo to AltGr ([microsoft/terminal#20052](https://github.com/microsoft/terminal/pull/20052)), so the legacy `ESC` + control-byte encoding never leaves the terminal. Both variants are registered there; `alt+…` is what pi itself uses for the same reason (`alt+v` paste image, `alt+p` cycle model). Setting `"altGrAliasing": false` in your Windows Terminal profile brings `ctrl+alt+…` back.
+- **macOS:** only `ctrl+option+…` is registered — plain Option composes characters (`Option+r` = ®) unless “Use Option as Meta key” is on. Works in iTerm2 and Terminal.app as-is.
+- **Linux desktops:** `ctrl+alt+t` is “launch terminal” on Ubuntu/Fedora GNOME, which eats the key before pi sees it. Rebind it there if you want tab cycling.
+- **Multiplexers (Herdr/tmux) + slow PTYs:** every `ctrl+alt+…` / `alt+…` shortcut is sent as `ESC` followed by a byte. pi waits only ~10 ms for that second byte before treating a lone `ESC` as the Escape key — and an Escape mid-turn aborts it, leaving a stray `r`/`t`/`n` in the editor. That is why the shortcut can look “glitchy” and why it is intermittent. Raise the window with `PI_TUI_ESC_TIMEOUT=100` in the environment that launches pi (same knob pi auto-applies over SSH, at the cost of a ~100 ms delay before a real Escape registers):
+
+  ```powershell
+  $env:PI_TUI_ESC_TIMEOUT = 100; pi
+  ```
 
 ## Keybindings
 
 `ctrl+alt+n` is a plain user keybinding, not a package shortcut — pi-arnative never registers it.
-Add it once to `~/.pi/agent/keybindings.json`:
+Add it once to `~/.pi/agent/keybindings.json` (the list form keeps Linux and Windows working):
 
 ```json
 {
-  "app.session.new": "ctrl+alt+n"
+  "app.session.new": ["ctrl+alt+n", "alt+n"]
 }
 ```
 
