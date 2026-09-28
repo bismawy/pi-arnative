@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6] - 2026-09-28
+
+### Added
+- Package banner and README screenshot (`assets/banner.webp` as the pi.dev gallery preview via `pi.image`, `assets/pi-arnative.webp` under the README badges).
+
+---
+
 ## [0.2.5] - 2026-09-28
 
 ### Fixed

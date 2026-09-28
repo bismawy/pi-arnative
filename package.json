@@ -25,6 +25,7 @@
     "README.md"
   ],
   "pi": {
+    "image": "https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/banner.webp",
     "extensions": [
       "./extensions/*.ts"
     ],

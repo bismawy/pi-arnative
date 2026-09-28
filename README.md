@@ -6,6 +6,8 @@ A visual layer and tool styling tailored to your vibe coding.
 [![badge](https://shieldcn.dev/npm/react.svg?variant=outline&size=xs)](https://www.npmjs.com/package/@bismawy/pi-arnative)
 [![license](https://shieldcn.dev/github/bismawy/pi-arnative/license.svg?variant=outline&size=xs)](https://github.com/bismawy/pi-arnative)
 
+<img src="https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/pi-arnative.webp" alt="Arnative: tabbed header, rounded tool boxes, transcript clock and /usage dashboard" width="100%">
+
 ## Overview
 
 pi-arnative replaces pi’s default terminal chrome with a unified, cohesive visual aesthetic.
