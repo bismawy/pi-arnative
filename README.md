@@ -1,6 +1,6 @@
 # Arnative
 
-A visual layer and tool styling tailored to your vibe coding.
+Refined aesthetics. Cohesive tools. Built for Pi.
 
 [![Custom badge](https://shieldcn.dev/badge/pi-%20Packages.svg?variant=outline&size=xs&logo=ri%3APiPiBold)](https://pi.dev/packages/@bismawy/pi-arnative)
 [![badge](https://shieldcn.dev/npm/react.svg?variant=outline&size=xs)](https://www.npmjs.com/package/@bismawy/pi-arnative)
