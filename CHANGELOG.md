@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Fixed NPM version badge in `README.md` to reference `@bismawy/pi-arnative` instead of placeholder `react`.
+
+---
+
 ## [0.2.8] - 2026-09-28
 
 ### Fixed
