@@ -72,6 +72,28 @@ export function fgFirst(th: Themeish, names: string[], text: string): string {
 	return text;
 }
 
+/**
+ * Collapsed body of a pi startup section ("[Skills]\n  a, b"). pi 0.99 dropped
+ * ExpandableText's own getCollapsedText/getExpandedText fields for a `build` callback
+ * plus a `state` object, so both shapes are read here and older pi keeps working.
+ * Returns null when the child is not an expandable section.
+ */
+export function sectionBodyOf(child: any): string | null {
+	if (typeof child?.getCollapsedText === "function") return String(child.getCollapsedText());
+	if (typeof child?.build === "function" && child?.state && typeof child.state === "object") {
+		return String(child.build());
+	}
+	return null;
+}
+
+/** Text of a themed text line, whichever pi version built it (pi 0.99 defers it to `build`). */
+export function themedTextOf(child: any): string {
+	if (typeof child?.build === "function") return String(child.build());
+	const direct = child?.text ?? child?.content;
+	if (typeof direct === "string" && direct !== "") return direct;
+	return typeof child?.getText === "function" ? String(child.getText()) : "";
+}
+
 export function sectionNameOf(text: string): "Context" | "Skills" | "Extensions" | "Themes" | null {
 	const nl = text.indexOf("\n");
 	const first = stripAnsi(nl === -1 ? text : text.slice(0, nl)).trim();
@@ -587,20 +609,19 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 		const origAddChild = containerProto.addChild;
 		containerProto.addChild = function (child: any): unknown {
 			try {
-				const sectionName = sectionNameOf(String(child?.getCollapsedText?.() ?? ""));
+				const body = sectionBodyOf(child);
+				const sectionName = body === null ? null : sectionNameOf(body);
 				const isSection =
-					child &&
-					typeof child.getCollapsedText === "function" &&
-					typeof child.getExpandedText === "function" &&
+					body !== null &&
 					typeof child.setText === "function" &&
+					typeof child.render === "function" &&
 					(sectionName === null ? false : SECTION_ICONS[sectionName] !== undefined);
 
-				if (isSection && sectionName) {
+				if (isSection && sectionName && body !== null) {
 					// Mark this container as the loadedResourcesContainer
 					(this as Record<string, unknown>)._isLoadedResourcesContainer = true;
 
-					const origCollapsed = child.getCollapsedText.bind(child) as () => string;
-					const rawBody = origCollapsed().split("\n").slice(1).join("\n");
+					const rawBody = body.split("\n").slice(1).join("\n");
 					const items = extractItemsFromBody(rawBody, sectionName === "Extensions");
 					tabStore.set(sectionName, items);
 
@@ -613,7 +634,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 					}
 				} else if ((this as Record<string, unknown>)._isLoadedResourcesContainer) {
 					// pi core's "[Extension issues]" -> wrap in an arnative box.
-					const text = String(child?.text ?? child?.content ?? (typeof child?.getText === "function" ? child.getText() : ""));
+					const text = themedTextOf(child);
 					if (text.includes("[Extension issues]") && typeof child.render === "function") {
 						const origRender = child.render.bind(child);
 						child.render = (w: number) => renderBoxLines(activeThemeProxy, w, origRender(w), undefined, "warning");
@@ -892,6 +913,23 @@ if (isMain(import.meta.url)) {
 	container.addChild(fakeSection);
 	assert(fakeSection.render(80).length === 0, "child of loadedResourcesContainer suppressed (render = [])");
 	assert(tabStore.get("Skills")?.includes("new-skill-1") === true, "new data lands in tabStore");
+
+	// pi 0.99 ExpandableText shape: `build` callback + `state` object, no getters.
+	const modernSection = {
+		state: { expanded: false },
+		build: () => "[Themes]\n  arnative-sun, arnative-dusk",
+		setText: () => {},
+		render: (_w: number) => ["should be hidden"],
+	};
+	container.addChild(modernSection);
+	assert(modernSection.render(80).length === 0, "pi 0.99 section suppressed (build + state shape)");
+	assert(tabStore.get("Themes")?.includes("arnative-sun") === true, "pi 0.99 section data lands in tabStore");
+
+	// Startup help block is not a resource section and must survive untouched.
+	const helpBlock = { build: () => "\u2580\u2580\u2588  v0.99.1\n\u2588\u2580 \u2588 escape interrupt", state: { expanded: false }, render: () => ["help"] };
+	container.addChild(helpBlock);
+	assert(sectionBodyOf(helpBlock) === "\u2580\u2580\u2588  v0.99.1\n\u2588\u2580 \u2588 escape interrupt", "sectionBodyOf reads the build shape");
+	assert(sectionNameOf(sectionBodyOf(helpBlock)!) === null, "startup help block is not a resource section");
 
 	console.log("section-headers.ts self-check OK");
 }

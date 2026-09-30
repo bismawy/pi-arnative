@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- The startup `[Context]`, `[Skills]`, `[Extensions]` and `[Themes]` lists stacked under the header again on pi ≥ 0.99: pi replaced `ExpandableText`'s `getCollapsedText`/`getExpandedText` fields with a `build` callback plus a `state` object, so the section detector matched nothing and the tabs stayed at `[0]`. Both shapes are read now (`sectionBodyOf`), and the same applies to the `[Extension issues]` box, which read the stale `child.text` snapshot instead of the theme-aware `build()` output.
 - Fixed NPM version badge in `README.md` to reference `@bismawy/pi-arnative` instead of placeholder `react`.
 
 ---
