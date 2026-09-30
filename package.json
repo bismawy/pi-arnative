@@ -1,6 +1,6 @@
 {
   "name": "@bismawy/pi-arnative",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Arnative look for Pi: warm-neutral themes, rounded tool boxes, tabbed header, compact footer, transcript clock, and a /usage dashboard.",
   "keywords": [
     "pi-package",
