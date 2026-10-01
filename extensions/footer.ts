@@ -176,7 +176,64 @@ export function boxEditorLines(
 	return out;
 }
 
+/**
+ * Wraps the footer status lines: `groups` separated by `sep`, with the already-joined
+ * `metrics` right-aligned on the last group line when they fit, else on a line of
+ * their own.
+ *
+ * `rows` is the footer line budget (line 1 plus the status lines): 2 reproduces the
+ * classic layout as long as it fits, 3 lets the metrics take their own line instead
+ * of crowding the statuses. `maxRows` caps the growth — a group wider than the
+ * terminal is never split, the caller truncates it.
+ */
+export function layoutStatusLines(
+	groups: readonly string[],
+	metrics: string,
+	sep: string,
+	width: number,
+	rows: number,
+	maxRows = Number.MAX_SAFE_INTEGER,
+	vw: (s: string) => number = visibleWidth,
+): string[] {
+	if (rows > maxRows) rows = maxRows;
+	const budget = Math.max(1, rows - 1);
+	const out: string[] = [];
+	let line = "";
+
+	for (const group of groups) {
+		const candidate = line ? line + sep + group : group;
+		// An empty line is never flushed: an oversized group must not loop here.
+		if (line && vw(candidate) > width) {
+			out.push(line);
+			line = group;
+		} else {
+			line = candidate;
+		}
+	}
+
+	if (metrics) {
+		const pad = (before: string) => " ".repeat(Math.max(1, width - vw(before) - vw(metrics))) + metrics;
+		if (!line) {
+			line = pad("");
+		} else if (vw(line + sep + metrics) <= width) {
+			// Metrics share the last group line, right-aligned as before.
+			line = line + pad(line);
+		} else if (out.length < budget) {
+			// `budget` is the only thing `rows` controls: 2 lets the metrics take a
+			// line of their own instead of crowding the groups, 1 packs everything.
+			out.push(line);
+			line = pad("");
+		} else {
+			line = line + sep + metrics;
+		}
+	}
+
+	out.push(line);
+	return out;
+}
+
 function parseOptimizer(raw: string | undefined): string | null {
+
 	if (!raw) return null;
 	const m = raw.match(/([A-Za-z0-9_-]+)\s+cache\s+(\d+\/\d+)·[^\s]+\s+([\d.]+%)/);
 	return m ? `${m[1]} ${m[2]} (${m[3]})` : null;
@@ -412,7 +469,6 @@ export default function (pi: ExtensionAPI) {
 							}
 						})();
 						const rawCache = statuses.get("pi-cache-stats");
-						const segs: string[] = [];
 						const cleanStatus = (s: string) => {
 							if (s.includes("MCP:")) {
 								let clean = stripAnsi(s);
@@ -450,12 +506,12 @@ export default function (pi: ExtensionAPI) {
 							return tint(clean.trim());
 						};
 
+						const groups: string[] = [];
 						const mcp = statuses.get("mcp");
-						if (mcp !== undefined) segs.push(cleanStatus(mcp));
+						if (mcp !== undefined) groups.push(cleanStatus(mcp));
 						for (const [k, s] of statuses) {
-							if (k !== "mcp" && k !== "pi-cache-stats") segs.push(cleanStatus(s));
+							if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
 						}
-						const left2 = segs.join(sep);
 
 						const opt = parseOptimizer(rawCache);
 						let usageStr = "";
@@ -465,13 +521,17 @@ export default function (pi: ExtensionAPI) {
 							// fallback
 						}
 						const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-						const right2 = [speedStr, opt ? `${acc("\udb80\udf5b")} ${tint(opt)}` : "", usageStr].filter(Boolean).join(` ${dim("·")} `);
+						const metrics = [speedStr, opt ? `${acc("\udb80\udf5b")} ${tint(opt)}` : "", usageStr].filter(Boolean).join(` ${dim("·")} `);
 
-						if (!right2) {
-							lines.push(truncateToWidth(left2, width));
-						} else {
-							const pad2 = " ".repeat(Math.max(1, width - visibleWidth(left2) - visibleWidth(right2)));
-							lines.push(truncateToWidth(left2 + pad2 + right2, width));
+						// 2 footer lines normally; grow to 3 rather than crowding the second one on
+						// a narrow terminal, then truncate (a single status can still overflow).
+						const MAX_ROWS = 3;
+						for (let rows = 2; ; rows++) {
+							const wrapped = layoutStatusLines(groups, metrics, sep, width, rows, MAX_ROWS);
+							if (rows >= MAX_ROWS || wrapped.every((l) => visibleWidth(l) <= width)) {
+								for (const l of wrapped) lines.push(truncateToWidth(l, width));
+								break;
+							}
 						}
 						return lines;
 					},
@@ -663,6 +723,27 @@ if (isMain(import.meta.url)) {
 	assert(formatDuration(5_000) === "5s", "seconds only");
 	assert(formatDuration(65_000) === "1m 5s", "minutes + seconds");
 	assert(formatDuration(3_700_000) === "1h 1m", "hours + minutes");
+
+	// Self-check: footer status wrapping (2 lines until it crowds, then 3).
+	const vw = (s: string) => s.length;
+	const g = (n: number) => "g".repeat(n);
+	// Wide terminal: everything on one status line, metrics right-aligned.
+	const wide = layoutStatusLines([g(4), g(4), g(4)], "Mmmmm", " | ", 40, 2, 3, vw);
+	assert(wide.length === 1, "wide: statuses share one line");
+	assert(wide[0]!.endsWith("Mmmmm") && vw(wide[0]!) === 40, "wide: metrics right-aligned on that line");
+	// Narrow: groups stop sharing a line and metrics moves to its own third line.
+	const narrow = layoutStatusLines([g(4), g(4), g(4)], g(8), " | ", 14, 3, 3, vw);
+	assert(narrow.length === 3, "narrow: grows to 3 lines");
+	assert(narrow.every((l) => vw(l) <= 14), "narrow: every line fits the terminal");
+	// The same width with a 2-line budget cannot fit -> the caller asks for row 3.
+	assert(
+		layoutStatusLines([g(4), g(4), g(4)], g(8), " | ", 14, 2, 3, vw).some((l) => vw(l) > 14),
+		"2-line budget overflows, so the caller grows to 3"
+	);
+	// Tight cap: never exceed maxRows, even though lines then overflow (caller truncates).
+	assert(layoutStatusLines([g(4), g(4), g(4)], "Mmmmm", " | ", 3, 3, 3, vw).length <= 3, "cap: 3 lines at most");
+	assert(layoutStatusLines([g(9)], "", " | ", 4, 2, 3, vw).length === 1, "oversized group is not split");
+	assert(layoutStatusLines([], "m", " | ", 8, 2, 3, vw).length === 1, "metrics only");
 
 	const plain = (s: string) => s;
 	const D = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"; // 8 columns = content width in this test

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.11] - 2026-10-01
+
+### Changed
+- The footer status area now reflows: 2 lines stay the default while everything fits, but on a narrow terminal the statuses and the metrics (tok/s, cache, context) move onto a 3rd line instead of being truncated. `extensions/footer.ts` `layoutStatusLines()` (`rows` = line budget of the whole footer, `maxRows` caps the growth); self-check covers the wide/narrow/cap cases.
+
 ## [0.2.10] - 2026-10-01
 
 ### Added
