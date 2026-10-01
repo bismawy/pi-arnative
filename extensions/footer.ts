@@ -58,6 +58,23 @@ let assistantStartMs: number | null = null;
 let assistantChars = 0;
 let latestSpeed: number | null = null;
 
+// Live elapsed clock for the working loader: "⠴ Working (50s)".
+const WORK_TIMER_KEY = Symbol.for("pi-arnative.workTimer");
+const WORK_LABEL = "Working";
+let workVerb = WORK_LABEL;
+let workStartMs: number | null = null;
+let workUI: { setWorkingMessage?: (message?: string) => void } | null = null;
+// Verbs of tools still running (toolCallId -> verb): the label must not reset to
+// "Working" while a sibling tool is still going (pi executes tools in parallel).
+const activeToolVerbs = new Map<string, string>();
+
+/** Label while `active` tools remain: last started wins, empty -> default. */
+export function currentToolVerb(active: ReadonlyMap<string, string>): string {
+	let verb = WORK_LABEL;
+	for (const v of active.values()) verb = v;
+	return verb;
+}
+
 function run(cmd: string, args: string[], cwd: string): Promise<string> {
 	return new Promise((resolve) => {
 		execFile(cmd, args, { cwd, timeout: 2000 }, (err, stdout) => {
@@ -233,9 +250,48 @@ function mcpStatusOf(sub: string): string {
 	return "Executing";
 }
 
+/** Loader label with the elapsed suffix; no suffix below 1s (avoids a "(0s)" flicker). */
+export function workingLabel(verb: string, elapsedMs: number): string {
+	return elapsedMs >= 1000 ? `${verb} (${formatDuration(elapsedMs)})` : verb;
+}
+
+function paintWorking(): void {
+	if (!workUI || workStartMs === null) return;
+	try {
+		workUI.setWorkingMessage?.(workingLabel(workVerb, Date.now() - workStartMs));
+	} catch {
+		// ignore
+	}
+}
+
+function stopWorkingClock(): void {
+	const t = (globalThis as Record<symbol, any>)[WORK_TIMER_KEY];
+	if (t) clearInterval(t);
+	(globalThis as Record<symbol, any>)[WORK_TIMER_KEY] = null;
+	workStartMs = null;
+	activeToolVerbs.clear();
+}
+
+/** Start (or restart) the 1s tick from a fresh turn. */
+function startWorkingClock(ctx: { ui?: any }): void {
+	stopWorkingClock();
+	workUI = ctx.ui ?? null;
+	workVerb = WORK_LABEL;
+	workStartMs = Date.now();
+	(globalThis as Record<symbol, any>)[WORK_TIMER_KEY] = setInterval(paintWorking, 1000);
+}
+
+/** Swap the verb (tool change) without resetting the turn clock. */
+function setWorkingVerb(ctx: { ui?: any }, verb: string): void {
+	workUI = ctx.ui ?? null;
+	workVerb = verb;
+	if (workStartMs === null) workStartMs = Date.now();
+	paintWorking();
+}
+
 export function getToolWorkingMessage(toolName: string, args?: any): string {
 	const n = (toolName ?? "").trim();
-	if (!n) return "Working";
+	if (!n) return WORK_LABEL;
 
 	// Standard / file tools
 	if (n === "edit") return "Editing";
@@ -263,7 +319,7 @@ export function getToolWorkingMessage(toolName: string, args?: any): string {
 		return mcpStatusOf(sub);
 	}
 
-	return "Working";
+	return WORK_LABEL;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -278,6 +334,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// A /reload re-imports this module while the old instance's interval (and its
+		// ctx.ui closures) may still be alive; clear it before starting a new one.
+		stopWorkingClock();
 		if (event.reason !== "reload") {
 			sessionStartMs = Date.now();
 			(globalThis as Record<symbol, number>)[SESSION_START_KEY] = sessionStartMs;
@@ -502,29 +561,19 @@ export default function (pi: ExtensionAPI) {
 		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
 		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
 		(globalThis as Record<symbol, any>)[CWD_KEY] = ctx.cwd;
-		try {
-			ctx.ui?.setWorkingMessage?.();
-		} catch {
-			// ignore
-		}
+		startWorkingClock(ctx);
 		void refreshGit(ctx.cwd).then(() => poke());
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
-		try {
-			const msg = getToolWorkingMessage(event.toolName, event.args);
-			ctx.ui?.setWorkingMessage?.(msg);
-		} catch {
-			// ignore
-		}
+		const verb = getToolWorkingMessage(event.toolName, event.args);
+		activeToolVerbs.set(event.toolCallId, verb);
+		setWorkingVerb(ctx, verb);
 	});
 
-	pi.on("tool_execution_end", async (_event, ctx) => {
-		try {
-			ctx.ui?.setWorkingMessage?.();
-		} catch {
-			// ignore
-		}
+	pi.on("tool_execution_end", async (event, ctx) => {
+		activeToolVerbs.delete(event.toolCallId);
+		setWorkingVerb(ctx, currentToolVerb(activeToolVerbs));
 	});
 
 	pi.on("message_update", async (event) => {
@@ -566,6 +615,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
+		stopWorkingClock();
 		try {
 			ctx.ui?.setWorkingMessage?.();
 		} catch {
@@ -587,6 +637,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		stopWorkingClock();
 		rerender = null;
 		const cur = ((globalThis as Record<symbol, number>)[GEN_KEY] ?? 0);
 		if (cur !== runtimeGen) return;
@@ -638,6 +689,19 @@ if (isMain(import.meta.url)) {
 	assert(getToolWorkingMessage("todo") === "Updating tasks", "todo -> Updating tasks");
 	assert(getToolWorkingMessage("unknown_tool") === "Working", "unknown -> Working");
 	assert(getToolWorkingMessage("mcp", { tool: "fetch_repo" }) === "Fetching", "mcp fetch -> Fetching");
+
+	// Self-check: working loader clock
+	assert(workingLabel("Working", 0) === "Working", "no elapsed suffix below 1s");
+	assert(workingLabel("Working", 999) === "Working", "no elapsed suffix at 999ms");
+	assert(workingLabel("Working", 50_000) === "Working (50s)", "elapsed seconds suffix");
+	assert(workingLabel("Executing", 65_000) === "Executing (1m 5s)", "elapsed minutes suffix");
+	assert(currentToolVerb(new Map()) === WORK_LABEL, "no active tool -> default label");
+	assert(currentToolVerb(new Map([["a", "Reading"], ["b", "Writing"]])) === "Writing", "parallel tools: last started wins");
+	assert(currentToolVerb(new Map([["a", "Reading"]])) === "Reading", "after one ends, the remaining tool's label shows");
+	startWorkingClock({ ui: { setWorkingMessage: () => {} } });
+	assert(Boolean((globalThis as Record<symbol, unknown>)[WORK_TIMER_KEY]), "clock starts: timer stored on globalThis");
+	stopWorkingClock();
+	assert((globalThis as Record<symbol, unknown>)[WORK_TIMER_KEY] == null, "clock stops: reload guard clears the timer");
 	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "uniform box width (sides + prompt)");
 	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "too narrow: left unchanged");
 

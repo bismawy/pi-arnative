@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.10] - 2026-10-01
+
+### Added
+- The working loader now shows elapsed turn time next to the label — `⠴ Working (50s)`, `⠴ Executing (1m 5s)`. One `setInterval(1s)` per turn (`extensions/footer.ts`), cleared on `turn_end`/`session_shutdown`; the suffix only appears from 1s (no `(0s)` flicker) and the timer keeps counting across tool switches inside a turn. With parallel tools the label follows the last started tool and only falls back to `Working` when every `toolCallId` has ended.
+
+### Fixed
+- Tool image previews (e.g. `read` on a PNG) no longer break the layout. pi renders a preview as an extra child below the tool box, padded with `result.rows - 1` blank rows, and the gap-stripping patch deleted exactly those rows — the terminal then painted the image over the rows underneath (chat text, editor, footer). Only the leading Spacer is dropped now; from the image sequence on, every line is kept.
+
 ## [0.2.9] - 2026-09-30
 
 ### Fixed

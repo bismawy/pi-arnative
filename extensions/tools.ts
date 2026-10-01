@@ -215,6 +215,23 @@ const OWN_BOX = new Set<string>();
 const hasOwnRendererDef = (self: { toolDefinition?: { renderCall?: unknown; renderResult?: unknown } }): boolean =>
 	Boolean(self?.toolDefinition?.renderCall || self?.toolDefinition?.renderResult);
 
+// Inline image line: kitty (\x1b_G) or iTerm2 (\x1b]1337;File=) graphics payload.
+// pi renders a tool's image preview as an extra child BELOW the box, padding it with
+// `result.rows - 1` blank rows; the last row carries a cursor-up prefix before the
+// sequence. Not exported by pi-tui, so match both prefixes.
+export const isImageLine = (line: string): boolean => line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
+
+/** Drop the leading Spacer only when an image preview follows: its blank tail rows
+ *  are the image's vertical space, and deleting them made the terminal draw the
+ *  image over the rows below (chat text, editor, footer). */
+export function stripEdgesKeepingImages(lines: string[]): string[] {
+	const firstImage = lines.findIndex(isImageLine);
+	if (firstImage < 0) return stripBlankEdges(lines);
+	let s = 0;
+	while (s < firstImage && isBlankLine(lines[s])) s++;
+	return lines.slice(s);
+}
+
 const GAP_KEY = Symbol.for("pi-arnative.toolGapStripped");
 if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[GAP_KEY]) {
 	(globalThis as Record<symbol, boolean>)[GAP_KEY] = true;
@@ -222,7 +239,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	ToolExecutionComponent.prototype.render = function (width: number): string[] {
 		const lines = origRender.call(this, width);
 		const name = (this as { toolName?: string }).toolName ?? "";
-		return OWN_BOX.has(name) || !hasOwnRendererDef(this) ? stripBlankEdges(lines) : lines;
+		return OWN_BOX.has(name) || !hasOwnRendererDef(this) ? stripEdgesKeepingImages(lines) : lines;
 	};
 }
 
@@ -681,6 +698,23 @@ if (isMain(import.meta.url)) {
 	assert(stripBlankEdges(["", "a", "", "b", "  ", ""]).join() === "a,,b", "blank edge lines dropped");
 	assert(stripBlankEdges(["", "\x1b[2m\x1b[22m", "x"]).join() === "x", "blank ANSI line counts as blank");
 	assert(stripBlankEdges(["a"]).join() === "a", "no blanks: kept intact");
+
+	// Image preview: pi pads the image with blank rows (`result.rows - 1`), and the last
+	// one carries a cursor-up prefix before the sequence. Those rows are the image's
+	// vertical space — deleting them made the terminal paint the image over whatever
+	// sits below (chat text, editor, footer). Regression: preview destroyed the layout.
+	const kittySeq = "\x1b[5A\x1b_Ga=T,f=100,i=7,q=2,C=1,m=0;AAAA\x1b\\";
+	const itermSeq = "\x1b]1337;File=inline=1:AAAA\x07";
+	const withImage = ["", "╭─╮", "│ ✓ read form_crop.png │", "╰─╯", "", kittySeq, "", ""];
+	const kept = stripEdgesKeepingImages(withImage);
+	assert(kept.length === 7, "image: only the leading gap dropped, blank tail kept");
+	assert(kept[0] === "╭─╮", "image: leading Spacer removed");
+	assert(kept.indexOf(kittySeq) === 4 && kept.length - 5 === 2, "image: rows after the sequence intact");
+	assert(
+		stripEdgesKeepingImages(["", "a", "", "b", "  ", ""]).join() === "a,,b",
+		"no image: falls back to plain edge stripping",
+	);
+	assert(isImageLine(itermSeq) && !isImageLine("│ plain text │"), "image line detection: kitty + iTerm2 only");
 
 	// tools without their own renderer -> same box (memory_write etc.)
 	const noRenderer = { toolName: "memory_write", toolDefinition: {} };
