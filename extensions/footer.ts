@@ -1,7 +1,8 @@
 /**
- * Arnative footer (forced to 2 lines) + custom editor.
- * Line 1: cwd | duration | branch/tag/status ...... model + thinking level.
- * Line 2: other extension status (mcp first) ...... tok/s · cache · token.
+ * Arnative footer (fixed 3-row grid, no click toggle).
+ * Row 1: cwd | duration | branch/tag/status ...... model + thinking level.
+ * Rows 2-3: extension status (mcp first) ......... tok/s · cache · token,
+ * each side wrapped inside its half of the width and paired row by row.
  *
  * Transcript clock & bubble bg: extensions/timestamps.ts
  * /new header: extensions/section-headers.ts
@@ -177,59 +178,64 @@ export function boxEditorLines(
 }
 
 /**
- * Wraps the footer status lines: `groups` separated by `sep`, with the already-joined
- * `metrics` right-aligned on the last group line when they fit, else on a line of
- * their own.
- *
- * `rows` is the footer line budget (line 1 plus the status lines): 2 reproduces the
- * classic layout as long as it fits, 3 lets the metrics take their own line instead
- * of crowding the statuses. `maxRows` caps the growth — a group wider than the
- * terminal is never split, the caller truncates it.
+ * The footer as a fixed 3-row grid. Row 1 pairs the head cells (cwd line, model);
+ * rows 2-3 pair the wrapped left cells (extension status, mcp first) with the
+ * wrapped right cells (tok/s · cache · token), each side wrapping inside its half
+ * of the terminal so the columns never collide. Right cells stay right-aligned.
+ * A side that runs out of cells leaves its half blank, and a row where both sides
+ * ran out is dropped, so a quiet footer stays 1-3 rows tall.
  */
-export function layoutStatusLines(
-	groups: readonly string[],
-	metrics: string,
-	sep: string,
+export function layoutFooterGrid(
+	headLeft: string,
+	headRight: string,
+	left: readonly string[],
+	right: readonly string[],
+	leftSep: string,
+	rightSep: string,
 	width: number,
-	rows: number,
-	maxRows = Number.MAX_SAFE_INTEGER,
 	vw: (s: string) => number = visibleWidth,
 ): string[] {
-	if (rows > maxRows) rows = maxRows;
-	const budget = Math.max(1, rows - 1);
-	const out: string[] = [];
-	let line = "";
-
-	for (const group of groups) {
-		const candidate = line ? line + sep + group : group;
-		// An empty line is never flushed: an oversized group must not loop here.
-		if (line && vw(candidate) > width) {
-			out.push(line);
-			line = group;
-		} else {
-			line = candidate;
+	const half = Math.max(1, Math.floor(width / 2) - 1);
+	// Wrap each side at half width; the first break happens at most once (rows 2-3),
+	// after that the rest stays on the last row and the pairing truncates it.
+	const wrap = (cells: readonly string[], sep: string): string[] => {
+		const rows: string[] = [];
+		let line = "";
+		for (const cell of cells) {
+			const candidate = line ? line + sep + cell : cell;
+			if (line && rows.length === 0 && vw(candidate) > half) {
+				rows.push(line);
+				line = cell;
+			} else {
+				line = candidate;
+			}
 		}
+		if (line) rows.push(line);
+		return rows;
+	};
+	const leftRows = wrap(left, leftSep);
+	const rightRows = wrap(right, rightSep);
+	const out = [pairRow(headLeft, headRight, width, vw)];
+	for (let i = 0; i < Math.max(leftRows.length, rightRows.length); i++) {
+		const l = leftRows[i];
+		const r = rightRows[i];
+		if (l === undefined && r === undefined) break;
+		out.push(pairRow(l ?? "", r ?? "", width, vw));
 	}
-
-	if (metrics) {
-		const pad = (before: string) => " ".repeat(Math.max(1, width - vw(before) - vw(metrics))) + metrics;
-		if (!line) {
-			line = pad("");
-		} else if (vw(line + sep + metrics) <= width) {
-			// Metrics share the last group line, right-aligned as before.
-			line = line + pad(line);
-		} else if (out.length < budget) {
-			// `budget` is the only thing `rows` controls: 2 lets the metrics take a
-			// line of their own instead of crowding the groups, 1 packs everything.
-			out.push(line);
-			line = pad("");
-		} else {
-			line = line + sep + metrics;
-		}
-	}
-
-	out.push(line);
 	return out;
+}
+
+/** One grid row: `left` at the start, `right` flush to the right edge. */
+function pairRow(left: string, right: string, width: number, vw: (s: string) => number): string {
+	if (!right) return truncateToWidth(left, width);
+	const rightWidth = Math.min(vw(right), width);
+	if (!left) return " ".repeat(width - rightWidth) + truncateToWidth(right, width);
+	if (vw(left) + 1 + rightWidth <= width) {
+		return left + " ".repeat(width - vw(left) - rightWidth) + right;
+	}
+	// Too wide together: the right cell keeps its columns, the left one is cut.
+	const room = Math.max(1, width - rightWidth - 1);
+	return truncateToWidth(left, room) + " " + truncateToWidth(right, width - room - 1);
 }
 
 function parseOptimizer(raw: string | undefined): string | null {
@@ -458,8 +464,6 @@ export default function (pi: ExtensionAPI) {
 							left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 						}
 						const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
-						const pad1 = " ".repeat(Math.max(1, width - visibleWidth(left1) - visibleWidth(right1)));
-						const lines = [truncateToWidth(left1 + pad1 + right1, width)];
 
 						const statuses: ReadonlyMap<string, string> = (() => {
 							try {
@@ -521,19 +525,11 @@ export default function (pi: ExtensionAPI) {
 							// fallback
 						}
 						const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-						const metrics = [speedStr, opt ? `${acc("\udb80\udf5b")} ${tint(opt)}` : "", usageStr].filter(Boolean).join(` ${dim("·")} `);
+						const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${tint(opt)}` : "", usageStr].filter(Boolean);
 
-						// 2 footer lines normally; grow to 3 rather than crowding the second one on
-						// a narrow terminal, then truncate (a single status can still overflow).
-						const MAX_ROWS = 3;
-						for (let rows = 2; ; rows++) {
-							const wrapped = layoutStatusLines(groups, metrics, sep, width, rows, MAX_ROWS);
-							if (rows >= MAX_ROWS || wrapped.every((l) => visibleWidth(l) <= width)) {
-								for (const l of wrapped) lines.push(truncateToWidth(l, width));
-								break;
-							}
-						}
-						return lines;
+						// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
+						// wrapped inside their half of the width — no click toggle.
+						return layoutFooterGrid(left1, right1, groups, metricCells, sep, ` ${dim("·")} `, width);
 					},
 				};
 			});
@@ -724,26 +720,28 @@ if (isMain(import.meta.url)) {
 	assert(formatDuration(65_000) === "1m 5s", "minutes + seconds");
 	assert(formatDuration(3_700_000) === "1h 1m", "hours + minutes");
 
-	// Self-check: footer status wrapping (2 lines until it crowds, then 3).
-	const vw = (s: string) => s.length;
+	// Self-check: the footer grid — head row, then statuses/metrics paired per row.
+	// truncateToWidth appends ANSI resets, so measure through stripAnsi (the real
+	// renderer measures with visibleWidth, which ignores them the same way).
+	const vw = (s: string) => stripAnsi(s).length;
 	const g = (n: number) => "g".repeat(n);
-	// Wide terminal: everything on one status line, metrics right-aligned.
-	const wide = layoutStatusLines([g(4), g(4), g(4)], "Mmmmm", " | ", 40, 2, 3, vw);
-	assert(wide.length === 1, "wide: statuses share one line");
-	assert(wide[0]!.endsWith("Mmmmm") && vw(wide[0]!) === 40, "wide: metrics right-aligned on that line");
-	// Narrow: groups stop sharing a line and metrics moves to its own third line.
-	const narrow = layoutStatusLines([g(4), g(4), g(4)], g(8), " | ", 14, 3, 3, vw);
-	assert(narrow.length === 3, "narrow: grows to 3 lines");
-	assert(narrow.every((l) => vw(l) <= 14), "narrow: every line fits the terminal");
-	// The same width with a 2-line budget cannot fit -> the caller asks for row 3.
-	assert(
-		layoutStatusLines([g(4), g(4), g(4)], g(8), " | ", 14, 2, 3, vw).some((l) => vw(l) > 14),
-		"2-line budget overflows, so the caller grows to 3"
-	);
-	// Tight cap: never exceed maxRows, even though lines then overflow (caller truncates).
-	assert(layoutStatusLines([g(4), g(4), g(4)], "Mmmmm", " | ", 3, 3, 3, vw).length <= 3, "cap: 3 lines at most");
-	assert(layoutStatusLines([g(9)], "", " | ", 4, 2, 3, vw).length === 1, "oversized group is not split");
-	assert(layoutStatusLines([], "m", " | ", 8, 2, 3, vw).length === 1, "metrics only");
+	// Head row: cwd line left, model right-aligned; groups and metrics pair below.
+	const grid = layoutFooterGrid("H".repeat(10), "M".repeat(6), [g(10), g(10), g(10)], ["s".repeat(10), "u".repeat(10)], " | ", " · ", 40, vw);
+	assert(grid.length === 3, "grid: head + two paired rows");
+	assert(grid[0]!.startsWith("H".repeat(10)) && grid[0]!.endsWith("M".repeat(6)), "grid: head pairs cwd and model");
+	assert(grid[0]!.length === 40, "grid: head right-aligns the model");
+	assert(grid[1]!.includes("g") && grid[1]!.endsWith("s".repeat(10)), "grid: row 2 pairs statuses and metrics");
+	assert(grid.every((l) => vw(l) <= 40), "grid: every row fits the terminal");
+	// Each side wraps inside its half: 3 groups + 2 metrics at width 20 -> 3 rows.
+	const tight = layoutFooterGrid("h", "m", [g(6), g(6), g(6)], [g(6), g(6)], " | ", " · ", 20, vw);
+	assert(tight.length === 3, "grid: wraps inside the half width");
+	assert(tight.every((l) => vw(l) <= 20), "grid: wrapped rows still fit");
+	// The right cell survives an oversized left cell (the left one is truncated).
+	const cut = layoutFooterGrid("h", "m", [g(30)], ["R".repeat(4)], " | ", " · ", 12, vw);
+	assert(cut[1]!.endsWith("R".repeat(4)) && vw(cut[1]!) === 12, "grid: right cell survives a wide left cell");
+	// A side that runs out leaves its half blank; rows where both ran out drop.
+	const blank = layoutFooterGrid("h", "m", [], [], " | ", " · ", 20, vw);
+	assert(blank.length === 1, "grid: empty sides drop their rows");
 
 	const plain = (s: string) => s;
 	const D = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"; // 8 columns = content width in this test

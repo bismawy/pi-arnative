@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.12] - 2026-10-02
+
+### Changed
+- The footer is a fixed 3-row grid: row 1 pairs the cwd line with the model, rows 2-3 pair the extension status (mcp first) with the metrics (tok/s · cache · token) — each side wraps inside its half of the terminal, the right cells stay right-aligned, and a row where both sides ran out is dropped. Replaces the adaptive 2→3 reflow; no click toggle (`extensions/footer.ts`, `layoutFooterGrid()` + `pairRow()`).
+
 ## [0.2.11] - 2026-10-01
 
 ### Changed
