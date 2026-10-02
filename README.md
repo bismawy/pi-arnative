@@ -15,7 +15,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 - Warm Themes: Cohesive, contrast-checked color palettes generated without drift.
 - Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, Themes, and Shortcut.
 - Rounded Tool Boxes: Clear status, spinner, and duration for every tool call.
-- Enhanced Footer: 2-line layout showing directory path, git branch, model, and token metrics.
+- Enhanced Footer: fixed 3-row grid — directory/git line, then extension status paired with token metrics.
 - Transcript Clock: Timestamps for messages with clean bubble backgrounds.
 - Usage Dashboard: /usage command to track tokens and session costs.
 
@@ -68,7 +68,7 @@ Add to `~/.pi/agent/keybindings.json` to bind `app.session.new`:
 | --- | --- |
 | `extensions/tools.ts` | Rounded tool boxes, spinners, and duration |
 | `extensions/section-headers.ts` | Tabbed header and resource box |
-| `extensions/footer.ts` | 2-line status footer and boxed editor |
+| `extensions/footer.ts` | 3-row status grid footer and boxed editor |
 | `extensions/timestamps.ts` | Message clock and bubble background fixes |
 | `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection style, and UI polish |
 | `extensions/usage.ts` | `/usage` token dashboard |
