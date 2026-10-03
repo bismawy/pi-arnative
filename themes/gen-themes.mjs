@@ -1,272 +1,349 @@
 #!/usr/bin/env node
 /**
- * Generates the arnative theme variants.
+ * Theme generator — the single source of truth for every `themes/*.json`.
  *
- * Structure source of truth = `themes/arnative.json` (also the default theme,
- * never rewritten here). Palette source of truth = the PALETTES table below.
- * Variants are text substitutions on the base, so its original formatting
- * (tabs + grouping blank lines) is preserved.
+ * Each theme is a handful of parameters (accent hue, chroma, canvas lightness,
+ * neutral tint) plus optional hue overrides for the strong palettes. The
+ * renderer derives every color from a shared OKLCH ramp, so lightness and
+ * saturation stay consistent across themes and no two roles collapse to the
+ * same value by accident.
  *
- *   node themes/gen-themes.mjs           rewrite all variants
- *   node themes/gen-themes.mjs --check   fail when a file differs from the generated output
- *
- * Color validation (contrast, required keys) lives in the self-check in
- * `extensions/ui-render-tweaks.ts` to keep one source of rules.
+ * Usage: node themes/gen-themes.mjs [--check]
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { hexToOklch, oklchToRgb } from "../lib/color.ts";
+import { assert } from "../lib/check.ts";
 
-const baseUrl = new URL("arnative.json", import.meta.url);
-const baseText = readFileSync(baseUrl, "utf8");
-const base = JSON.parse(baseText);
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SCHEMA =
+	"https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json";
 
-// Every theme must set ALL of these, so no color silently inherits the base.
-const REQUIRED_VARS = [
-	"accent", "cyan", "blue", "green", "red", "yellow", "text", "gray", "dimGray", "darkGray",
-	"softCyan", "searchBg", "selectedBg", "userMsgBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg", "customMsgBg",
-];
-const REQUIRED_COLORS = [
-	"customMessageLabel", "mdHeading", "mdLink",
-	"syntaxComment", "syntaxKeyword", "syntaxFunction", "syntaxVariable", "syntaxString",
-	"syntaxNumber", "syntaxType", "syntaxOperator", "syntaxPunctuation",
-	"thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh",
-];
-const REQUIRED_EXPORT = ["pageBg", "cardBg", "infoBg"];
+// --- color helpers ---------------------------------------------------------
 
-/** Per-theme palette. `vars.cyan`/`vars.blue` = borderAccent/border, `vars.softCyan` = tint, `vars.green/red/yellow` = success/error/warning + diff. */
-const PALETTES = {
-	// --- base hue variants -------------------------------------------------
+const hue = (x) => ((x % 360) + 360) % 360;
+const round3 = (x) => +x.toFixed(3);
+
+/** Format OKLCH after gamut-reducing chroma, so the written value renders as-is. */
+function oklch(L, C, H) {
+	const { chroma } = oklchToRgb(L, C, H);
+	return `oklch(${+(L * 100).toFixed(1)}% ${round3(chroma)} ${Math.round(hue(H))})`;
+}
+
+// --- shared ramps ----------------------------------------------------------
+
+const NEUTRAL = { fg: 0.88, fgMuted: 0.72, fgDim: 0.61, fgFaint: 0.49 };
+const THINKING = { off: 0.4, minimal: 0.47, low: 0.55, medium: 0.63, high: 0.71, xhigh: 0.79 };
+const SEMANTIC = { success: 145, error: 25, warning: 85 };
+const SYNTAX_OFFSET = { keyword: 0, func: 45, variable: -45, string: 120, number: 180, type: 90 };
+
+/** Default hue for a role used outside `syntax*` (heading/link/label). */
+const ACCENT_OFFSET = { heading: 0, link: 0, label: 60 };
+
+// --- theme parameters ------------------------------------------------------
+
+/**
+ * `accent` seeds only the hue; `chroma` is the normalized accent chroma.
+ * `hues` overrides the derived hue per role (keyword/func/… /heading/link/label)
+ * to keep the strong palettes recognisable.
+ */
+const THEMES = {
+	arnative: {
+		accent: "#00d7ff",
+		chroma: 0.13,
+		canvasL: 0.27,
+		neutralHue: 232,
+		neutralChroma: 0.012,
+		hues: { heading: 75, label: 282 },
+	},
 	"arnative-sun": {
-		vars: {
-			accent: "#ffb454", cyan: "#ffd166", blue: "#da9b2f", green: "#b5bd68", red: "#d07272",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
-			searchBg: "#634f35", softCyan: "#ceb07e", selectedBg: "#484032", userMsgBg: "#312d25", toolPendingBg: "#29251f",
-			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#2e281f",
-		},
-		colors: {
-			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
-			syntaxComment: "#6A9955", syntaxKeyword: "#569CD6", syntaxFunction: "#DCDCAA",
-			syntaxVariable: "#9CDCFE", syntaxString: "#CE9178", syntaxNumber: "#B5CEA8",
-			syntaxType: "#4EC9B0", syntaxOperator: "#D4D4D4", syntaxPunctuation: "#D4D4D4",
-			thinkingMinimal: "#5f4e30", thinkingLow: "#80673c", thinkingMedium: "#aa8950",
-			thinkingHigh: "#e1a741", thinkingXhigh: "#f2b54a",
-		},
-		export: { pageBg: "#18181e", cardBg: "#1e1e24", infoBg: "#3c3728" },
+		accent: "#ffb454",
+		chroma: 0.14,
+		canvasL: 0.27,
+		neutralHue: 70,
+		neutralChroma: 0.012,
+		hues: { heading: 60, label: 330 },
 	},
 	"arnative-zinc": {
-		vars: {
-			accent: "#a1a1aa", cyan: "#c4c4cc", blue: "#6b6b75", green: "#b5bd68", red: "#d07272",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
-			searchBg: "#4a4a4f", softCyan: "#a2a0ab", selectedBg: "#3b3a40", userMsgBg: "#2a292e", toolPendingBg: "#232225",
-			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#23222a",
-		},
-		colors: {
-			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
-			syntaxComment: "#6A9955", syntaxKeyword: "#569CD6", syntaxFunction: "#DCDCAA",
-			syntaxVariable: "#9CDCFE", syntaxString: "#CE9178", syntaxNumber: "#B5CEA8",
-			syntaxType: "#4EC9B0", syntaxOperator: "#D4D4D4", syntaxPunctuation: "#D4D4D4",
-			thinkingMinimal: "#3d3d44", thinkingLow: "#595962", thinkingMedium: "#6e6e78",
-			thinkingHigh: "#96969f", thinkingXhigh: "#b8b8c2",
-		},
-		export: { pageBg: "#18181e", cardBg: "#1e1e24", infoBg: "#3c3728" },
+		accent: "#a1a1aa",
+		chroma: 0.02,
+		canvasL: 0.26,
+		neutralHue: 285,
+		neutralChroma: 0.005,
+		hues: { heading: 285, label: 285 },
 	},
 	"arnative-violet": {
-		vars: {
-			accent: "#a78bfa", cyan: "#c4b5fd", blue: "#8b6ef5", green: "#b5bd68", red: "#d07272",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
-			searchBg: "#413563", softCyan: "#a99ad6", selectedBg: "#393248", userMsgBg: "#292531", toolPendingBg: "#221f29",
-			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#292240",
-		},
-		colors: {
-			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
-			syntaxComment: "#6A9955", syntaxKeyword: "#569CD6", syntaxFunction: "#DCDCAA",
-			syntaxVariable: "#9CDCFE", syntaxString: "#CE9178", syntaxNumber: "#B5CEA8",
-			syntaxType: "#4EC9B0", syntaxOperator: "#D4D4D4", syntaxPunctuation: "#D4D4D4",
-			thinkingMinimal: "#413364", thinkingLow: "#614899", thinkingMedium: "#765cb2",
-			thinkingHigh: "#8f6ef0", thinkingXhigh: "#a98bfa",
-		},
-		export: { pageBg: "#18181e", cardBg: "#1e1e24", infoBg: "#3c3728" },
+		accent: "#a78bfa",
+		chroma: 0.14,
+		canvasL: 0.27,
+		neutralHue: 295,
+		neutralChroma: 0.012,
+		hues: { heading: 295, label: 330 },
 	},
 	"arnative-emerald": {
-		vars: {
-			accent: "#6ee7b7", cyan: "#a7f3d0", blue: "#34b98a", green: "#b5bd68", red: "#d07272",
-			yellow: "#ffff00", text: "#d4d4d4", gray: "#8d8d8d", dimGray: "#666666", darkGray: "#505050",
-			searchBg: "#356351", softCyan: "#7eceaf", selectedBg: "#324840", userMsgBg: "#25312d", toolPendingBg: "#1f2925",
-			toolSuccessBg: "#202828", toolErrorBg: "#342222", customMsgBg: "#1f3028",
-		},
-		colors: {
-			customMessageLabel: "#9575cd", mdHeading: "#f0c674", mdLink: "#81a2be",
-			syntaxComment: "#6A9955", syntaxKeyword: "#569CD6", syntaxFunction: "#DCDCAA",
-			syntaxVariable: "#9CDCFE", syntaxString: "#CE9178", syntaxNumber: "#B5CEA8",
-			syntaxType: "#4EC9B0", syntaxOperator: "#D4D4D4", syntaxPunctuation: "#D4D4D4",
-			thinkingMinimal: "#305f4d", thinkingLow: "#3c8066", thinkingMedium: "#50aa87",
-			thinkingHigh: "#41e1a4", thinkingXhigh: "#4af2b2",
-		},
-		export: { pageBg: "#18181e", cardBg: "#1e1e24", infoBg: "#3c3728" },
+		accent: "#6ee7b7",
+		chroma: 0.12,
+		canvasL: 0.27,
+		neutralHue: 165,
+		neutralChroma: 0.012,
+		hues: { heading: 165, label: 200 },
 	},
-
-	// --- strongly themed ----------------------------------------------------
-	// Monochrome phosphor green on a near-black canvas.
 	"arnative-matrix": {
-		vars: {
-			accent: "#00ff41", cyan: "#8dffab", blue: "#1f8f4f", green: "#47ff7a", red: "#ff5555",
-			yellow: "#ffe066", text: "#ccffd8", gray: "#6f9f7f", dimGray: "#4f7f5f", darkGray: "#2f4f3a",
-			searchBg: "#284b31", softCyan: "#58e07a", selectedBg: "#10452a", userMsgBg: "#0a1410", toolPendingBg: "#060f0b",
-			toolSuccessBg: "#0b2413", toolErrorBg: "#3b1212", customMsgBg: "#08160f",
+		accent: "#00ff41",
+		chroma: 0.22,
+		canvasL: 0.15,
+		neutralHue: 145,
+		neutralChroma: 0.02,
+		hues: {
+			heading: 145, link: 145, label: 145,
+			keyword: 145, func: 145, variable: 145, string: 145, number: 145, type: 145,
 		},
-		colors: {
-			customMessageLabel: "#8dffab", mdHeading: "#00ff41", mdLink: "#8dffab",
-			syntaxComment: "#4f8f5f", syntaxKeyword: "#00ff41", syntaxFunction: "#9dffb4",
-			syntaxVariable: "#d6ffdf", syntaxString: "#2fbf5f", syntaxNumber: "#7dffa0",
-			syntaxType: "#3fe07a", syntaxOperator: "#b6ffc4", syntaxPunctuation: "#9dffb4",
-			thinkingMinimal: "#1f4a2c", thinkingLow: "#2c7a45", thinkingMedium: "#3fae63",
-			thinkingHigh: "#59d97f", thinkingXhigh: "#00ff41",
-		},
-		export: { pageBg: "#050a06", cardBg: "#0a1410", infoBg: "#123018" },
 	},
-	// Neon magenta/cyan/yellow on a deep indigo canvas.
 	"arnative-cyberpunk": {
-		vars: {
-			accent: "#ff2e97", cyan: "#00f0ff", blue: "#2a7fd4", green: "#00ff9f", red: "#ff4d6d",
-			yellow: "#ffe600", text: "#eaeaf5", gray: "#8b88a8", dimGray: "#6f6a9a", darkGray: "#4a4763",
-			searchBg: "#5f3349", softCyan: "#7fd8f0", selectedBg: "#2b2350", userMsgBg: "#16131f", toolPendingBg: "#0d0b16",
-			toolSuccessBg: "#0d2430", toolErrorBg: "#3a1524", customMsgBg: "#1a1329",
+		accent: "#ff2e97",
+		chroma: 0.2,
+		canvasL: 0.16,
+		neutralHue: 275,
+		neutralChroma: 0.02,
+		hues: {
+			heading: 60, link: 190, label: 190,
+			keyword: 190, func: 60, variable: 320, string: 320, number: 30, type: 150,
 		},
-		colors: {
-			customMessageLabel: "#00f0ff", mdHeading: "#ffe600", mdLink: "#00f0ff",
-			syntaxComment: "#6f6a9a", syntaxKeyword: "#00f0ff", syntaxFunction: "#ffe600",
-			syntaxVariable: "#ffd9f2", syntaxString: "#ff2e97", syntaxNumber: "#ff9a3c",
-			syntaxType: "#00ff9f", syntaxOperator: "#c8c8e8", syntaxPunctuation: "#9a96c0",
-			thinkingMinimal: "#33285c", thinkingLow: "#4d3a94", thinkingMedium: "#7a4fd6",
-			thinkingHigh: "#b84fe8", thinkingXhigh: "#ff4fc3",
-		},
-		export: { pageBg: "#0d0b16", cardBg: "#16131f", infoBg: "#3a2a10" },
 	},
-	// 80s retro: deep purple, neon pink, cyan.
 	"arnative-synthwave": {
-		vars: {
-			accent: "#ff7edb", cyan: "#36f9f6", blue: "#7a5fd6", green: "#72f1b8", red: "#ff5f7e",
-			yellow: "#fede5d", text: "#f2eafb", gray: "#9b8fb8", dimGray: "#848bbd", darkGray: "#55496e",
-			searchBg: "#7a426a", softCyan: "#c3b1f0", selectedBg: "#443a63", userMsgBg: "#2a2138", toolPendingBg: "#1f1830",
-			toolSuccessBg: "#1f2e29", toolErrorBg: "#402134", customMsgBg: "#2e1f3d",
+		accent: "#ff7edb",
+		chroma: 0.17,
+		canvasL: 0.22,
+		neutralHue: 300,
+		neutralChroma: 0.015,
+		hues: {
+			heading: 55, link: 180, label: 180,
+			keyword: 55, func: 180, variable: 280, string: 30, number: 350, type: 320,
 		},
-		colors: {
-			customMessageLabel: "#36f9f6", mdHeading: "#fede5d", mdLink: "#36f9f6",
-			syntaxComment: "#848bbd", syntaxKeyword: "#fede5d", syntaxFunction: "#36f9f6",
-			syntaxVariable: "#f2eafb", syntaxString: "#ff8b39", syntaxNumber: "#f97e72",
-			syntaxType: "#ff7edb", syntaxOperator: "#f2eafb", syntaxPunctuation: "#b8a6e8",
-			thinkingMinimal: "#4a3a6b", thinkingLow: "#6b4f9e", thinkingMedium: "#9166d6",
-			thinkingHigh: "#d47ee8", thinkingXhigh: "#ff7edb",
-		},
-		export: { pageBg: "#1f1830", cardBg: "#2a2138", infoBg: "#443a63" },
 	},
-	// Warm retro: brownish grey canvas, gold + aqua + brick.
 	"arnative-gruvbox": {
-		vars: {
-			accent: "#fabd2f", cyan: "#8ec07c", blue: "#83a598", green: "#b8bb26", red: "#fc6654",
-			yellow: "#fabd2f", text: "#ebdbb2", gray: "#a89984", dimGray: "#928374", darkGray: "#665c54",
-			searchBg: "#6c5d3a", softCyan: "#d5c4a1", selectedBg: "#504945", userMsgBg: "#32302f", toolPendingBg: "#1d2021",
-			toolSuccessBg: "#2a3225", toolErrorBg: "#3c2c27", customMsgBg: "#3c3836",
+		accent: "#fabd2f",
+		chroma: 0.14,
+		canvasL: 0.24,
+		neutralHue: 70,
+		neutralChroma: 0.015,
+		hues: {
+			heading: 45, link: 200, label: 330,
+			keyword: 25, func: 70, variable: 200, string: 70, number: 330, type: 45,
 		},
-		colors: {
-			customMessageLabel: "#d3869b", mdHeading: "#fabd2f", mdLink: "#83a598",
-			syntaxComment: "#928374", syntaxKeyword: "#fb4934", syntaxFunction: "#b8bb26",
-			syntaxVariable: "#83a598", syntaxString: "#b8bb26", syntaxNumber: "#d3869b",
-			syntaxType: "#fabd2f", syntaxOperator: "#ebdbb2", syntaxPunctuation: "#d5c4a1",
-			thinkingMinimal: "#665c54", thinkingLow: "#a89984", thinkingMedium: "#d5c4a1",
-			thinkingHigh: "#fabd2f", thinkingXhigh: "#fe8019",
-		},
-		export: { pageBg: "#1d2021", cardBg: "#282828", infoBg: "#3c3836" },
 	},
-	// Cool and calm Nord: frost blue + aurora.
 	"arnative-nord": {
-		vars: {
-			accent: "#88c0d0", cyan: "#8fbcbb", blue: "#5e81ac", green: "#a3be8c", red: "#d4979d",
-			yellow: "#ebcb8b", text: "#eceff4", gray: "#9da8b7", dimGray: "#7b869b", darkGray: "#4c566a",
-			searchBg: "#476e79", softCyan: "#bcd3e0", selectedBg: "#434c5e", userMsgBg: "#3b4252", toolPendingBg: "#2e3440",
-			toolSuccessBg: "#333f38", toolErrorBg: "#4a383c", customMsgBg: "#38404f",
+		accent: "#88c0d0",
+		chroma: 0.07,
+		canvasL: 0.3,
+		neutralHue: 240,
+		neutralChroma: 0.01,
+		hues: {
+			heading: 40, link: 195, label: 310,
+			keyword: 220, func: 195, variable: 220, string: 95, number: 310, type: 195,
 		},
-		colors: {
-			customMessageLabel: "#b48ead", mdHeading: "#ebcb8b", mdLink: "#88c0d0",
-			syntaxComment: "#64728c", syntaxKeyword: "#81a1c1", syntaxFunction: "#88c0d0",
-			syntaxVariable: "#d8dee9", syntaxString: "#a3be8c", syntaxNumber: "#b48ead",
-			syntaxType: "#8fbcbb", syntaxOperator: "#81a1c1", syntaxPunctuation: "#eceff4",
-			thinkingMinimal: "#4c566a", thinkingLow: "#5e81ac", thinkingMedium: "#81a1c1",
-			thinkingHigh: "#88c0d0", thinkingXhigh: "#8fbcbb",
-		},
-		export: { pageBg: "#272c36", cardBg: "#2e3440", infoBg: "#3b4252" },
 	},
-	// Classic dark purple: pink + cyan + mint.
 	"arnative-dracula": {
-		vars: {
-			accent: "#bd93f9", cyan: "#8be9fd", blue: "#6272a4", green: "#50fa7b", red: "#ff6363",
-			yellow: "#f1fa8c", text: "#f8f8f2", gray: "#8e96ba", dimGray: "#6272a4", darkGray: "#4a4e63",
-			searchBg: "#59427b", softCyan: "#c9b8f2", selectedBg: "#44475a", userMsgBg: "#343746", toolPendingBg: "#21222c",
-			toolSuccessBg: "#26332e", toolErrorBg: "#412936", customMsgBg: "#383a52",
+		accent: "#bd93f9",
+		chroma: 0.14,
+		canvasL: 0.29,
+		neutralHue: 285,
+		neutralChroma: 0.012,
+		hues: {
+			heading: 60, link: 190, label: 330,
+			keyword: 330, func: 135, variable: 190, string: 60, number: 265, type: 190,
 		},
-		colors: {
-			customMessageLabel: "#ff79c6", mdHeading: "#f1fa8c", mdLink: "#8be9fd",
-			syntaxComment: "#6272a4", syntaxKeyword: "#ff79c6", syntaxFunction: "#50fa7b",
-			syntaxVariable: "#8be9fd", syntaxString: "#f1fa8c", syntaxNumber: "#bd93f9",
-			syntaxType: "#8be9fd", syntaxOperator: "#ff79c6", syntaxPunctuation: "#f8f8f2",
-			thinkingMinimal: "#464a5d", thinkingLow: "#6272a4", thinkingMedium: "#7a6fd0",
-			thinkingHigh: "#bd93f9", thinkingXhigh: "#ff79c6",
-		},
-		export: { pageBg: "#21222c", cardBg: "#282a36", infoBg: "#44475a" },
 	},
 };
 
-/** Text substitution on the base; each target must appear exactly once. */
-function render(name, palette) {
-	let out = baseText;
-	const subst = (oldS, newS, what) => {
-		const n = out.split(oldS).length - 1;
-		if (n !== 1) throw new Error(`${name}: ${what} "${oldS}" appears ${n}x (must be 1)`);
-		out = out.replace(oldS, newS);
+// --- role order (matches the pi theme schema) ------------------------------
+
+const ROLE_ORDER = [
+	"accent", "accentSoft", "border", "borderAccent", "borderMuted", "success", "error", "warning",
+	"muted", "dim", "text", "thinkingText",
+	"selectedBg", "scrollbarTrack", "scrollbarThumb", "searchMatchBg", "searchMatchText",
+	"userMessageBg", "userMessageText", "customMessageBg", "customMessageText", "customMessageLabel",
+	"toolPendingBg", "toolSuccessBg", "toolErrorBg", "toolTitle", "toolOutput",
+	"mdHeading", "mdLink", "mdLinkUrl", "mdCode", "mdCodeBlock", "mdCodeBlockBorder", "mdQuote",
+	"mdQuoteBorder", "mdHr", "mdListBullet",
+	"toolDiffAdded", "toolDiffRemoved", "toolDiffContext",
+	"syntaxComment", "syntaxKeyword", "syntaxFunction", "syntaxVariable", "syntaxString",
+	"syntaxNumber", "syntaxType", "syntaxOperator", "syntaxPunctuation",
+	"thinkingOff", "thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh",
+	"thinkingXhigh", "thinkingMax", "bashMode",
+];
+
+// --- derivation ------------------------------------------------------------
+
+function derive(spec) {
+	const h = hexToOklch(spec.accent).H;
+	const c = spec.chroma;
+	const nh = spec.neutralHue;
+	const nc = spec.neutralChroma;
+	const base = spec.canvasL;
+	const H = { ...SYNTAX_OFFSET, ...ACCENT_OFFSET, ...(spec.hues ?? {}) };
+	const roleHue = (role) => hue(H[role]);
+	const sem = (role) => hue(SEMANTIC[role]);
+
+	const vars = {
+		fg: oklch(NEUTRAL.fg, nc, nh),
+		fgMuted: oklch(NEUTRAL.fgMuted, nc, nh),
+		fgDim: oklch(NEUTRAL.fgDim, nc, nh),
+		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
+		accent: oklch(0.78, c, h),
+		accentSoft: oklch(0.82, c * 0.18, h),
+		accentBorder: oklch(0.82, c * 0.6, h),
+		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
+		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
+		warning: oklch(0.86, Math.min(c, 0.14), sem("warning")),
+		surfaceMsg: oklch(base, nc * 0.5, nh),
 	};
 
-	subst(`"name": ${JSON.stringify(base.name)}`, `"name": ${JSON.stringify(name)}`, "name");
-	for (const [section, keys, required] of [
-		["vars", palette.vars, REQUIRED_VARS],
-		["colors", palette.colors, REQUIRED_COLORS],
-		["export", palette.export, REQUIRED_EXPORT],
-	]) {
-		const missing = required.filter((k) => !(k in keys));
-		const extra = Object.keys(keys).filter((k) => !required.includes(k));
-		if (missing.length || extra.length) {
-			throw new Error(`${name}/${section}: missing [${missing}] extra [${extra}]`);
-		}
-		for (const k of required) {
-			const old = base[section][k];
-			if (old === undefined) throw new Error(`${name}: base.${section}.${k} missing`);
-			subst(`"${k}": ${JSON.stringify(old)}`, `"${k}": ${JSON.stringify(keys[k])}`, `${section}.${k}`);
-		}
+	const accentLiteral = oklch(0.8, c * 0.7, h);
+	const roles = {
+		accent: "accent",
+		accentSoft: "accentSoft",
+		border: oklch(0.55, c * 0.35, h),
+		borderAccent: "accentBorder",
+		borderMuted: "fgFaint",
+		success: "success",
+		error: "error",
+		warning: "warning",
+		muted: "fgMuted",
+		dim: "fgDim",
+		text: "fg",
+		thinkingText: "fgMuted",
+
+		selectedBg: oklch(base + 0.07, c * 0.25, h),
+		scrollbarTrack: "fgFaint",
+		scrollbarThumb: "accentSoft",
+		searchMatchBg: oklch(base + 0.14, c * 0.45, h),
+		searchMatchText: "fg",
+		userMessageBg: "surfaceMsg",
+		userMessageText: "fg",
+		customMessageBg: oklch(base + 0.01, c * 0.4, roleHue("label")),
+		customMessageText: "fg",
+		customMessageLabel: oklch(0.78, c * 0.7, roleHue("label")),
+
+		toolPendingBg: oklch(base - 0.02, c * 0.3, h),
+		toolSuccessBg: oklch(base - 0.03, c * 0.4, sem("success")),
+		toolErrorBg: oklch(base - 0.03, c * 0.4, sem("error")),
+		toolTitle: "fg",
+		toolOutput: "fgMuted",
+
+		mdHeading: oklch(0.88, c * 0.6, roleHue("heading")),
+		mdLink: oklch(0.8, c * 0.7, roleHue("link")),
+		mdLinkUrl: "fgDim",
+		mdCode: accentLiteral,
+		mdCodeBlock: "success",
+		mdCodeBlockBorder: "fgMuted",
+		mdQuote: "fgMuted",
+		mdQuoteBorder: "fgMuted",
+		mdHr: "fgFaint",
+		mdListBullet: accentLiteral,
+
+		toolDiffAdded: "success",
+		toolDiffRemoved: "error",
+		toolDiffContext: "fgMuted",
+
+		syntaxComment: "fgDim",
+		syntaxKeyword: accentLiteral,
+		syntaxFunction: oklch(0.86, c * 0.8, roleHue("func")),
+		syntaxVariable: oklch(0.84, c * 0.55, roleHue("variable")),
+		syntaxString: oklch(0.82, c * 0.7, roleHue("string")),
+		syntaxNumber: oklch(0.8, c * 0.7, roleHue("number")),
+		syntaxType: oklch(0.8, c * 0.8, roleHue("type")),
+		syntaxOperator: "fg",
+		syntaxPunctuation: "fgMuted",
+
+		thinkingOff: oklch(THINKING.off, nc, nh),
+		thinkingMinimal: oklch(THINKING.minimal, c * 0.25, h),
+		thinkingLow: oklch(THINKING.low, c * 0.4, h),
+		thinkingMedium: oklch(THINKING.medium, c * 0.6, h),
+		thinkingHigh: oklch(THINKING.high, c * 0.8, h),
+		thinkingXhigh: oklch(THINKING.xhigh, c, h),
+		thinkingMax: "accent",
+
+		bashMode: "success",
+	};
+
+	const exp = {
+		pageBg: oklch(base - 0.06, nc, nh),
+		cardBg: oklch(base - 0.03, nc, nh),
+		infoBg: oklch(base + 0.05, c * 0.25, h),
+	};
+
+	// Roles must match ROLE_ORDER exactly and each value must be a var name or a literal.
+	const missing = ROLE_ORDER.filter((n) => !(n in roles));
+	const extra = Object.keys(roles).filter((n) => !ROLE_ORDER.includes(n));
+	assert(missing.length === 0 && extra.length === 0, `roles vs ROLE_ORDER: missing [${missing}] extra [${extra}]`);
+	for (const [name, value] of Object.entries(roles)) {
+		assert(/^oklch\(/.test(value) || value in vars, `role ${name} is neither a var nor an oklch literal: ${value}`);
 	}
-	return out;
+
+	// Distinct vars must stay visually distinct (roles may alias on purpose).
+	const seen = new Map();
+	for (const [name, value] of Object.entries(vars)) {
+		const { r, g, b } = oklchToRgb(...parseOklch(value));
+		const rgb = `${r},${g},${b}`;
+		if (seen.has(rgb)) throw new Error(`vars ${seen.get(rgb)} and ${name} resolve to the same color`);
+		seen.set(rgb, name);
+	}
+
+	return { vars, roles, exp };
 }
 
+function parseOklch(value) {
+	const m = /\(([\d.]+)% ([\d.]+) ([\d.]+)\)/.exec(value);
+	return [Number(m[1]) / 100, Number(m[2]), Number(m[3])];
+}
+
+// --- rendering -------------------------------------------------------------
+
+function render(name, { vars, roles, exp }) {
+	const lines = [
+		"{",
+		`\t"$schema": ${JSON.stringify(SCHEMA)},`,
+		`\t"name": ${JSON.stringify(name)},`,
+		`\t"appearance": "dark",`,
+		`\t"vars": {`,
+	];
+	const entries = Object.entries(vars);
+	entries.forEach(([k, v], i) => lines.push(`\t\t${JSON.stringify(k)}: ${JSON.stringify(v)}${i < entries.length - 1 ? "," : ""}`));
+	lines.push("\t},", `\t"colors": {`);
+	const roleEntries = ROLE_ORDER.map((r) => [r, roles[r]]);
+	const blank = new Set(["thinkingText", "toolOutput", "mdListBullet", "syntaxPunctuation"]);
+	roleEntries.forEach(([k, v], i) => {
+		if (blank.has(k) && i > 0) lines.push("");
+		lines.push(`\t\t${JSON.stringify(k)}: ${JSON.stringify(v)}${i < roleEntries.length - 1 ? "," : ""}`);
+	});
+	lines.push("\t},", `\t"export": {`);
+	const expEntries = Object.entries(exp);
+	expEntries.forEach(([k, v], i) => lines.push(`\t\t${JSON.stringify(k)}: ${JSON.stringify(v)}${i < expEntries.length - 1 ? "," : ""}`));
+	lines.push("\t}", "}");
+	return lines.join("\n") + "\n";
+}
+
+// --- main ------------------------------------------------------------------
+
 const check = process.argv.includes("--check");
-let failed = 0;
-for (const name of Object.keys(PALETTES)) {
-	const content = render(name, PALETTES[name]);
-	const file = new URL(`${name}.json`, import.meta.url);
+let drifted = 0;
+for (const [name, spec] of Object.entries(THEMES)) {
+	const content = render(name, derive({ ...spec, name }));
+	const file = join(HERE, `${name}.json`);
 	if (check) {
-		let old = null;
-		try {
-			old = readFileSync(file, "utf8");
-		} catch {}
-		if (old !== content) {
-			console.error(`DIFFERS: themes/${name}.json`);
-			failed++;
+		const current = await readFile(file, "utf8").catch(() => "");
+		if (current !== content) {
+			console.error(`✗ ${name}.json is stale — run: node themes/gen-themes.mjs`);
+			drifted++;
 		}
 	} else {
-		writeFileSync(file, content);
-		console.log(`wrote themes/${name}.json`);
+		await writeFile(file, content);
+		console.log(`✓ ${name}.json`);
 	}
 }
 if (check) {
-	if (failed) {
-		console.error(`${failed} themes out of sync with the generator (run: node themes/gen-themes.mjs)`);
-		process.exit(1);
-	}
-	console.log(`OK: ${Object.keys(PALETTES).length} themes in sync with the generator`);
+	if (drifted) process.exit(1);
+	console.log(`✓ ${Object.keys(THEMES).length} themes in sync with gen-themes.mjs`);
 }
