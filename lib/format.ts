@@ -23,6 +23,12 @@ export function modelDisplayParts(model?: { id?: string; name?: string; provider
 	return { name, provider };
 }
 
+// Picker rows for every /arnative list (themes, header & footer presets):
+// `● name` marks the active entry, everything else gets a two-space indent.
+export function markedLabels(names: readonly string[], current: string | undefined): string[] {
+	return names.map((n) => `${n === current ? "● " : "  "}${n}`);
+}
+
 // Expand-hint key follows the active keybinding; outside a pi session keyText() is empty.
 export function expandKeyName(): string {
 	try {

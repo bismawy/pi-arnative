@@ -6,6 +6,8 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 [![badge](https://shieldcn.dev/npm/@bismawy/pi-arnative.svg?variant=outline&size=xs)](https://www.npmjs.com/package/@bismawy/pi-arnative)
 [![license](https://shieldcn.dev/github/bismawy/pi-arnative/license.svg?variant=outline&size=xs)](https://github.com/bismawy/pi-arnative)
 
+<img src="https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/banner.webp" alt="Arnative" width="100%">
+
 ![Arnative: tabbed header, rounded tool boxes, transcript clock and /usage dashboard](https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/pi-arnative.webp)
 
 ## Overview
@@ -13,7 +15,7 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 pi-arnative replaces pi’s default terminal chrome with a unified, cohesive visual aesthetic.
 
 - Warm Themes: Cohesive, contrast-checked color palettes generated without drift.
-- Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, Themes, and Shortcut.
+- Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, and Shortcut.
 - Rounded Tool Boxes: Clear status, spinner, and duration for every tool call.
 - Enhanced Footer: fixed 3-row grid — directory/git line, then extension status paired with token metrics.
 - Transcript Clock: Timestamps for messages with clean bubble backgrounds.
@@ -41,6 +43,7 @@ pi --extension ./extensions/footer.ts
 | `ctrl+alt+r` · `alt+r` | Quick reload (`/reload`) |
 | `ctrl+alt+n` · `alt+n` | New session (`/new`) — requires keybinding below |
 | `/usage` | Show session usage & token metrics |
+| `/arnative` | Settings menu — Themes, Headers, Footers |
 | Click tab | Open selected header tab |
 | Click tool / `ctrl+e` | Toggle tool output box |
 
@@ -67,8 +70,9 @@ Add to `~/.pi/agent/keybindings.json` to bind `app.session.new`:
 | File | Role |
 | --- | --- |
 | `extensions/tools.ts` | Rounded tool boxes, spinners, and duration |
-| `extensions/section-headers.ts` | Tabbed header and resource box |
-| `extensions/footer.ts` | 3-row status grid footer and boxed editor |
+| `extensions/section-headers.ts` | Tabbed header and resource box (preset: `/arnative headers`) |
+| `extensions/footer.ts` | 3-row status grid footer and boxed editor (preset: `/arnative footers`) |
+| `extensions/arnative.ts` | `/arnative` settings menu — live-preview theme/header/footer pickers |
 | `extensions/timestamps.ts` | Message clock and bubble background fixes |
 | `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection style, and UI polish |
 | `extensions/usage.ts` | `/usage` token dashboard |
@@ -78,8 +82,9 @@ Add to `~/.pi/agent/keybindings.json` to bind `app.session.new`:
 <details>
 <summary><b>Themes</b></summary>
 
-- `themes/arnative.json` serves as the structure source of truth.
-- `themes/gen-themes.mjs` generates variants with automated contrast checks.
+- `themes/gen-themes.mjs` is the single source of truth: it **writes every** `themes/*.json`, including the base `arnative.json`.
+- Each theme is a few parameters (accent hue, chroma, canvas lightness, neutral tint) plus optional hue overrides for the strong palettes; all colors are derived as OKLCH from a shared ramp, so lightness/saturation stay consistent and no two `vars` collapse to the same value.
+- `lib/color.ts` holds the OKLCH↔sRGB math and WCAG contrast used by both the generator and the self-check.
 
 **Variants:** `sun` · `zinc` · `violet` · `emerald` · `matrix` · `cyberpunk` · `synthwave` · `gruvbox` · `nord` · `dracula`
 

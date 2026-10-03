@@ -4,17 +4,21 @@
  * Rows 2-3: extension status (mcp first) ......... tok/s · cache · token,
  * each side wrapped inside its half of the width and paired row by row.
  *
+ * Preset (`/arnative footers`): "Arnative (Full)" (default) or "Pi" (built-in footer), live.
  * Transcript clock & bubble bg: extensions/timestamps.ts
  * /new header: extensions/section-headers.ts
  * Selection + box reload: extensions/ui-render-tweaks.ts
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { CustomEditor, FooterComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { capitalize, modelDisplayParts } from "../lib/format.ts";
+import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 
@@ -22,12 +26,49 @@ import { formatTokens } from "../lib/usage-store.ts";
 // The TUI drops key-release events before handleInput, so press+release cannot
 // fire this twice even when the terminal reports event types (Kitty flag 2).
 
+// Footer preset chosen through `/arnative footers`. "Arnative (Full)" = this extension's
+// 3-row grid footer; "Pi" = pi's built-in footer (the boxed editor stays arnative in both —
+// pi's `setEditorComponent()` would close the picker mid-preview). The picker lives in
+// arnative.ts, so the choice is shared through globalThis like the header preset.
+export const FOOTER_PRESETS = ["Arnative (Full)", "Pi"] as const;
+export type FooterPreset = (typeof FOOTER_PRESETS)[number];
+export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
+const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
+const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
+
+export function activeFooterPreset(): FooterPreset {
+	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY];
+	return FOOTER_PRESETS.includes(stored as FooterPreset) ? (stored as FooterPreset) : DEFAULT_FOOTER_PRESET;
+}
+
+/**
+ * Hand the footer slot to the active preset: arnative's grid, or pi's built-in footer.
+ * The editor is deliberately never touched here — pi's `setEditorComponent()` calls
+ * `disposeActiveSelector()`, which would close the `/arnative` picker mid-preview.
+ */
+export function applyFooterPreset(ctx: ExtensionContext): void {
+	if (activeFooterPreset() === "Pi") {
+		ctx.ui?.setFooter?.(undefined);
+		return;
+	}
+	const register = (globalThis as Record<symbol, ((ctx: ExtensionContext) => void) | undefined>)[FOOTER_REGISTRAR_KEY];
+	register?.(ctx);
+}
+
+/** Select a preset and apply it immediately (the footer swaps on the spot). */
+export function setFooterPreset(name: FooterPreset, ctx: ExtensionContext): void {
+	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = name;
+	applyFooterPreset(ctx);
+}
+
 // Intercept the built-in FooterComponent to force a pure 2-line footer
 const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
 if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[PATCHED_KEY]) {
 	(globalThis as Record<symbol, boolean>)[PATCHED_KEY] = true;
 	const origRender = FooterComponent.prototype.render;
 	FooterComponent.prototype.render = function (width: number): string[] {
+		// "Pi" preset = pi's own footer, so keep its stock line count.
+		if (activeFooterPreset() === "Pi") return origRender.call(this, width);
 		const lines = origRender.call(this, width);
 		return lines.length > 2 ? lines.slice(0, 2) : lines;
 	};
@@ -84,47 +125,61 @@ function run(cmd: string, args: string[], cwd: string): Promise<string> {
 	});
 }
 
+// A refresh arriving while one is in flight is queued (last requested cwd wins) and
+// re-run afterwards — it used to be dropped, leaving the footer's git state stale
+// until the next trigger.
+let gitRefreshQueuedCwd: string | null = null;
 async function refreshGit(cwd: string): Promise<void> {
-	if (gitRefreshInFlight) return;
-	gitRefreshInFlight = true;
-	const branch = await run("git", ["branch", "--show-current"], cwd);
-	if (!branch) {
-		git = null;
-		gitRefreshInFlight = false;
+	if (gitRefreshInFlight) {
+		gitRefreshQueuedCwd = cwd;
 		return;
 	}
-	const [tag, status, sync] = await Promise.all([
-		run("git", ["describe", "--tags", "--abbrev=0"], cwd),
-		run("git", ["status", "--porcelain"], cwd),
-		run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
-	]);
-	const uncommitted = status ? status.split("\n").filter((l) => l.trim().length > 0).length : 0;
-	const parts = sync.trim() === "" ? [] : sync.trim().split(/\s+/).map(Number);
-	const behind = parts.length > 0 && parts[0] > 0 ? parts[0] : 0;
-	const ahead = parts.length > 1 && parts[1] > 0 ? parts[1] : 0;
-	git = {
-		branch,
-		tag: tag || "-",
-		uncommitted,
-		ahead,
-		behind,
-	};
-	(globalThis as Record<symbol, any>)[GIT_KEY] = git;
-	gitRefreshInFlight = false;
+	gitRefreshInFlight = true;
+	try {
+		const branch = await run("git", ["branch", "--show-current"], cwd);
+		if (!branch) {
+			git = null;
+			return;
+		}
+		const [tag, status, sync] = await Promise.all([
+			run("git", ["describe", "--tags", "--abbrev=0"], cwd),
+			run("git", ["status", "--porcelain"], cwd),
+			run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
+		]);
+		const uncommitted = status ? status.split("\n").filter((l) => l.trim().length > 0).length : 0;
+		const parts = sync.trim() === "" ? [] : sync.trim().split(/\s+/).map(Number);
+		const behind = parts.length > 0 && parts[0] > 0 ? parts[0] : 0;
+		const ahead = parts.length > 1 && parts[1] > 0 ? parts[1] : 0;
+		git = {
+			branch,
+			tag: tag || "-",
+			uncommitted,
+			ahead,
+			behind,
+		};
+		(globalThis as Record<symbol, any>)[GIT_KEY] = git;
+	} finally {
+		gitRefreshInFlight = false;
+		if (gitRefreshQueuedCwd !== null) {
+			const queued = gitRefreshQueuedCwd;
+			gitRefreshQueuedCwd = null;
+			void refreshGit(queued).then(() => poke());
+		}
+	}
 }
 
 function formatModelName(
 	model: { id: string; name?: string; provider?: string } | undefined,
 	thinkingLevel: string | undefined,
 	acc: (t: string) => string,
-	tint: (t: string) => string,
+	soft: (t: string) => string,
 	dim: (t: string) => string,
 ): string {
 	if (!model) return dim("No Model");
 	const { name, provider } = modelDisplayParts({ id: model.id, name: model.name, provider: model.provider });
 	const provStr = provider ? ` ${dim(`(${provider})`)}` : "";
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? capitalize(thinkingLevel) : "";
-	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${tint(capThinking)} ${dim("·")} ` : "";
+	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${soft(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${acc(name)}${provStr}`;
 }
 
@@ -248,22 +303,36 @@ function parseOptimizer(raw: string | undefined): string | null {
 let usageScanAt = 0;
 let usageScanLen = -1;
 let usageScanNums = { inp: 0, out: 0, read: 0 };
+// Usage of the branch's last entry at scan time: a stream tick mutates that message
+// in place (branch length unchanged), so the delta is applied on top of the cached
+// sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
+let usageScanLast = { inp: 0, out: 0, read: 0 };
+
+const lastUsageOf = (branch: readonly unknown[]): { inp: number; out: number; read: number } => {
+	const last = branch[branch.length - 1] as
+		| { type?: string; message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number } } }
+		| undefined;
+	const u = last?.type === "message" && last.message?.role === "assistant" ? last.message.usage : undefined;
+	return u ? { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0 } : { inp: 0, out: 0, read: 0 };
+};
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
 // without this every frame rescans the whole branch (O(N) per frame).
-function getUsage(
+export function getUsage(
 	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	acc: (t: string) => string,
-	tint: (t: string) => string,
+	soft: (t: string) => string,
 ): string {
 	const branch = ctx.sessionManager.getBranch();
+	const last = lastUsageOf(branch);
 	let inp = 0;
 	let out = 0;
 	let read = 0;
 	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
-		inp = usageScanNums.inp;
-		out = usageScanNums.out;
-		read = usageScanNums.read;
+		// Cached sums + the streaming delta of the last message (mutated in place).
+		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
+		out = usageScanNums.out + last.out - usageScanLast.out;
+		read = usageScanNums.read + last.read - usageScanLast.read;
 	} else {
 		for (const e of branch) {
 			if (e && typeof e === "object" && "type" in e && e.type === "message") {
@@ -279,16 +348,17 @@ function getUsage(
 			}
 		}
 		usageScanNums = { inp, out, read };
+		usageScanLast = last;
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
 	}
 	const parts: string[] = [];
-	if (inp > 0) parts.push(`${acc("↑")}${tint(formatTokens(inp))}`);
-	if (out > 0) parts.push(`${acc("↓")}${tint(formatTokens(out))}`);
-	if (read > 0) parts.push(`${acc("\uf49b")} ${tint(formatTokens(read))}`);
+	if (inp > 0) parts.push(`${acc("↑")}${soft(formatTokens(inp))}`);
+	if (out > 0) parts.push(`${acc("↓")}${soft(formatTokens(out))}`);
+	if (read > 0) parts.push(`${acc("\uf49b")} ${soft(formatTokens(read))}`);
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
-		parts.push(`${acc("\udb81\udfaf")} ${tint(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
+		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	return parts.join(" ");
 }
@@ -425,115 +495,119 @@ export default function (pi: ExtensionAPI) {
 		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
 
 		try {
-			ctx.ui.setFooter((tui, theme, footerData) => {
-				activeThemeProxy = theme;
-				rerender = () => tui.requestRender();
-				const unsub = footerData.onBranchChange(() => {
-					void refreshGit(cwd).then(() => tui.requestRender());
-				});
-				return {
-					dispose() {
-						rerender = null;
-						unsub();
-					},
-					invalidate() {},
-					render(width: number): string[] {
-						const acc = (text: string) => theme.fg("accent", text);
-						const dim = (text: string) => theme.fg("dim", text);
-						const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-						let tintName = "accent";
-						try {
-							fgAny("tint", "");
-							tintName = "tint";
-						} catch {
-							// fallback
-						}
-						const tint = (text: string) => fgAny(tintName, text);
-						const sep = dim(" | ");
-
-						const durationStr = formatDuration(Date.now() - sessionStartMs);
-						const pDuration = `${acc("\uf017")} ${tint(durationStr)}`;
-						const cwdShort = shortenCwd(cwd);
-						let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
-						if (git) {
-							const gitIcon = acc("\uf172");
-							const gitText = git.uncommitted > 0 ? tint(`~${git.uncommitted}`) : tint("clean");
-							const pBranch = `${acc("\uf126")} ${tint(git.branch)}${git.ahead > 0 ? ` ${tint(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${tint(`↓${git.behind}`)}` : ""}`;
-							const pTag = `${acc("\uf02b")} ${tint(git.tag)}`;
-							const pState = `${gitIcon}  ${gitText}`;
-							left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
-						}
-						const right1 = formatModelName(currentModel, currentThinkingLevel, acc, tint, dim);
-
-						const statuses: ReadonlyMap<string, string> = (() => {
+			const registerArnative = (c: ExtensionContext) => {
+				c.ui.setFooter((tui, theme, footerData) => {
+					activeThemeProxy = theme;
+					rerender = () => tui.requestRender();
+					const unsub = footerData.onBranchChange(() => {
+						void refreshGit(cwd).then(() => tui.requestRender());
+					});
+					return {
+						dispose() {
+							rerender = null;
+							unsub();
+						},
+						invalidate() {},
+						render(width: number): string[] {
+							const acc = (text: string) => theme.fg("accent", text);
+							const dim = (text: string) => theme.fg("dim", text);
+							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
+							let softName = "accent";
 							try {
-								return footerData.getExtensionStatuses();
+								fgAny("accentSoft", "");
+								softName = "accentSoft";
 							} catch {
-								return new Map<string, string>();
+								// fallback
 							}
-						})();
-						const rawCache = statuses.get("pi-cache-stats");
-						const cleanStatus = (s: string) => {
-							if (s.includes("MCP:")) {
-								let clean = stripAnsi(s);
-								const idx = clean.indexOf("MCP:");
-								let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
-								rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
-								const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-								return `${acc("\uf233")} ${tint(m ? m[0] : rest || "MCP")}`;
+							const soft = (text: string) => fgAny(softName, text);
+							const sep = dim(" | ");
+
+							const durationStr = formatDuration(Date.now() - sessionStartMs);
+							const pDuration = `${acc("\uf017")} ${soft(durationStr)}`;
+							const cwdShort = shortenCwd(cwd);
+							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
+							if (git) {
+								const gitIcon = acc("\uf172");
+								const gitText = git.uncommitted > 0 ? soft(`~${git.uncommitted}`) : soft("clean");
+								const pBranch = `${acc("\uf126")} ${soft(git.branch)}${git.ahead > 0 ? ` ${soft(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${soft(`↓${git.behind}`)}` : ""}`;
+								const pTag = `${acc("\uf02b")} ${soft(git.tag)}`;
+								const pState = `${gitIcon}  ${gitText}`;
+								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
 							}
-							if (s.includes("ponytail")) {
-								const isActive = s.includes("●");
-								const bullet = isActive ? acc("●") : dim("○");
-								let mode = "FULL";
-								if (/LITE/i.test(s)) mode = "LITE";
-								else if (/ULTRA/i.test(s)) mode = "ULTRA";
-								else if (/FULL/i.test(s)) mode = "FULL";
-								return `${acc("\uef04")}  ${tint("ponytail:")} ${bullet} ${tint(mode)}`;
-							}
-							if (s.includes("jev-eye")) {
-								const isOff = s.includes("OFF") || s.includes("○");
-								const isReview = /REVIEW/i.test(s);
-								let bullet = isOff ? dim("○") : acc("●");
-								if (isReview) {
-									try {
-										bullet = theme.fg("warning", "●");
-									} catch {
-										bullet = acc("●");
-									}
+							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, soft, dim);
+
+							const statuses: ReadonlyMap<string, string> = (() => {
+								try {
+									return footerData.getExtensionStatuses();
+								} catch {
+									return new Map<string, string>();
 								}
-								const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
-								return `${acc("\uedcf")}  ${tint("Jev:")} ${bullet} ${tint(label)}`;
+							})();
+							const rawCache = statuses.get("pi-cache-stats");
+							const cleanStatus = (s: string) => {
+								if (s.includes("MCP:")) {
+									let clean = stripAnsi(s);
+									const idx = clean.indexOf("MCP:");
+									let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
+									rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
+									const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
+									return `${acc("\uf233")} ${soft(m ? m[0] : rest || "MCP")}`;
+								}
+								if (s.includes("ponytail")) {
+									const isActive = s.includes("●");
+									const bullet = isActive ? acc("●") : dim("○");
+									let mode = "FULL";
+									if (/LITE/i.test(s)) mode = "LITE";
+									else if (/ULTRA/i.test(s)) mode = "ULTRA";
+									else if (/FULL/i.test(s)) mode = "FULL";
+									return `${acc("\uef04")}  ${soft("ponytail:")} ${bullet} ${soft(mode)}`;
+								}
+								if (s.includes("jev-eye")) {
+									const isOff = s.includes("OFF") || s.includes("○");
+									const isReview = /REVIEW/i.test(s);
+									let bullet = isOff ? dim("○") : acc("●");
+									if (isReview) {
+										try {
+											bullet = theme.fg("warning", "●");
+										} catch {
+											bullet = acc("●");
+										}
+									}
+									const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
+									return `${acc("\uedcf")}  ${soft("Jev:")} ${bullet} ${soft(label)}`;
+								}
+								let clean = stripAnsi(s);
+								clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
+								return soft(clean.trim());
+							};
+
+							const groups: string[] = [];
+							const mcp = statuses.get("mcp");
+							if (mcp !== undefined) groups.push(cleanStatus(mcp));
+							for (const [k, s] of statuses) {
+								if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
 							}
-							let clean = stripAnsi(s);
-							clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-							return tint(clean.trim());
-						};
 
-						const groups: string[] = [];
-						const mcp = statuses.get("mcp");
-						if (mcp !== undefined) groups.push(cleanStatus(mcp));
-						for (const [k, s] of statuses) {
-							if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
-						}
+							const opt = parseOptimizer(rawCache);
+							let usageStr = "";
+							try {
+								usageStr = getUsage(ctx, acc, soft);
+							} catch {
+								// fallback
+							}
+							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${soft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${soft(opt)}` : "", usageStr].filter(Boolean);
 
-						const opt = parseOptimizer(rawCache);
-						let usageStr = "";
-						try {
-							usageStr = getUsage(ctx, acc, tint);
-						} catch {
-							// fallback
-						}
-						const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${tint(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-						const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${tint(opt)}` : "", usageStr].filter(Boolean);
+							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
+							// wrapped inside their half of the width — no click toggle.
+							return layoutFooterGrid(left1, right1, groups, metricCells, sep, ` ${dim("·")} `, width);
+						},
+					};
+				});
 
-						// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
-						// wrapped inside their half of the width — no click toggle.
-						return layoutFooterGrid(left1, right1, groups, metricCells, sep, ` ${dim("·")} `, width);
-					},
-				};
-			});
-
+			};
+			(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = registerArnative;
+			applyFooterPreset(ctx);
 			class ArnativeEditor extends CustomEditor {
 				constructor(tui: any, editorTheme: any, keybindings: any, options?: any) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
@@ -558,7 +632,7 @@ export default function (pi: ExtensionAPI) {
 							const th = this.getActiveTheme();
 							if (!th) return text;
 							try {
-								return th.fg("tint", text);
+								return th.fg("accentSoft", text);
 							} catch {
 								return th.fg("muted", text);
 							}
@@ -791,5 +865,52 @@ if (isMain(import.meta.url)) {
 	assert(SHORTCUT_RELOAD.matches("\x1br") === IS_WINDOWS_LIKE, "ESC + r triggers reload only where alt+r is bound");
 	assert(!SHORTCUT_RELOAD.matches("\x12"), "plain ctrl+r does not trigger reload");
 	assert(!SHORTCUT_RELOAD.matches("r"), "bare letter r does not trigger reload");
+
+	// getUsage cache: a stream tick mutates the last assistant message in place —
+	// the delta is applied on top of the cached sums (fresh numbers, no O(N) rescan)
+	const usageBranch: Array<{ type: string; message: { role: string; usage?: { input?: number; output?: number; cacheRead?: number } } }> = [
+		{ type: "message", message: { role: "user", content: "hi" } as never },
+		{ type: "message", message: { role: "assistant", usage: { input: 100, output: 50, cacheRead: 10 } } },
+	];
+	const usageCtx = { sessionManager: { getBranch: () => usageBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	const id = (t: string) => t;
+	const s1 = getUsage(usageCtx, id, id);
+	assert(s1.includes("↑100") && s1.includes("↓50"), "getUsage scans the branch");
+	usageBranch[1]!.message.usage = { input: 100, output: 80, cacheRead: 10 }; // stream tick in place
+	const s2 = getUsage(usageCtx, id, id);
+	assert(s2.includes("↓80") && !s2.includes("↓50"), "stream tick: delta applied without a rescan (length unchanged)");
+	usageBranch.push({ type: "message", message: { role: "assistant", usage: { input: 1000, output: 2500, cacheRead: 0 } } });
+	const s3 = getUsage(usageCtx, id, id);
+	assert(s3.includes("↑1.1k") && s3.includes("↓2.6k"), "branch length changed: full rescan");
+
+	// regression: a refresh arriving while one is in flight is re-run with the newest
+	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger)
+	git = null;
+	const noGit = mkdtempSync(join(tmpdir(), "pi-arnative-nogit-"));
+	void refreshGit(noGit); // in flight (deterministic: sync up to the first await), resolves git = null
+	await refreshGit(process.cwd()); // queued behind it with the newest cwd
+	for (let i = 0; i < 100 && git === null; i++) await new Promise((r) => setTimeout(r, 20));
+	assert(git !== null && git.branch.length > 0, "queued git refresh re-ran on the newest cwd (not dropped)");
+	rmSync(noGit, { recursive: true, force: true });
+
+	// Footer presets: Arnative (Full) is the default; Pi hands the footer slot back to pi (the editor stays arnative).
+	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 2, "Arnative (Full) is the default footer preset");
+	assert(markedLabels(FOOTER_PRESETS, "Pi").join(" | ") === "  Arnative (Full) | ● Pi", "footer preset labels mark the active one");
+	let footerCleared = 0;
+	let editorTouched = 0;
+	const presetCtx: any = {
+		ui: {
+			setFooter: (f: unknown) => { if (f === undefined) footerCleared++; },
+			setEditorComponent: () => { editorTouched++; },
+		},
+	};
+	setFooterPreset("Pi", presetCtx);
+	assert(footerCleared === 1 && editorTouched === 0 && activeFooterPreset() === "Pi", "Pi clears the footer only (an editor swap would close the picker)");
+	let registered = 0;
+	(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = () => { registered++; };
+	setFooterPreset("Arnative (Full)", presetCtx);
+	assert(registered === 1 && activeFooterPreset() === "Arnative (Full)", "Arnative (Full) re-runs the arnative registrar");
+	delete (globalThis as Record<symbol, unknown>)[FOOTER_REGISTRAR_KEY];
+
 	console.log("footer.ts self-check OK");
 }

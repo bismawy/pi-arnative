@@ -1,13 +1,14 @@
 /**
  * Arnative header box & horizontal tab system:
- * - Round-corner box, fixed height 5 lines: "pi" 3x6 logo on the left, a vertical
- *   divider, then 3 left-aligned info lines (greeting/brand, tab menu, tab data).
- * - Greeting = OS account name; brand line = pi + Arnative with versions. The tab
- *   box labels itself on its top border ("╭─ Menu ───╮").
- * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Themes/Shortcut
- *   with item counts. Icon = accent, text = tint. The key cheatsheet lives in the
+ * - Round-corner box: left column = the pi block mark (4x8, P accent / i soft) with
+ *   "pi vX" under it; a vertical divider; then the info column = "Arnative vY
+ *   · Welcome back, <User>", the tab menu, the tab data.
+ * - Greeting = OS account name (first letter capitalized). The tab box has no label;
+ *   its column dividers join the borders with ┬/┴ (full height).
+ * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Shortcut
+ *   with item counts. Icon = accent, text = soft. The key cheatsheet lives in the
  *   Shortcut tab, not in a header line.
- * - Box divider '├────┤'. Active tab content is left-aligned, wrapped, tint.
+ * - Box divider '├────┤'. Active tab content is left-aligned, wrapped, soft.
  * - Hides pi's built-in stacked list in loadedResourcesContainer.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -32,14 +33,14 @@ import {
 import { renderBoxLines } from "../lib/box.ts";
 import { stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { capitalize, modelDisplayParts } from "../lib/format.ts";
+import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
-export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Themes" | "Shortcut";
+export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Shortcut";
 
 // Tab order for the next-tab shortcut and for the menu line.
-export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Themes", "Shortcut"];
+export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Shortcut"];
 
 export const SECTION_ICONS: Record<TabKey, string> = {
 	Model: "\uf1b2",
@@ -47,7 +48,6 @@ export const SECTION_ICONS: Record<TabKey, string> = {
 	Context: "\udb84\uddd7",
 	Skills: "\uec21",
 	Extensions: "\ueea8",
-	Themes: "\uee72",
 	Shortcut: "\uf11c", // nf-fa-keyboard_o
 };
 
@@ -94,12 +94,12 @@ export function themedTextOf(child: any): string {
 	return typeof child?.getText === "function" ? String(child.getText()) : "";
 }
 
-export function sectionNameOf(text: string): "Context" | "Skills" | "Extensions" | "Themes" | null {
+export function sectionNameOf(text: string): "Context" | "Skills" | "Extensions" | null {
 	const nl = text.indexOf("\n");
 	const first = stripAnsi(nl === -1 ? text : text.slice(0, nl)).trim();
 	const m = /^\[([A-Za-z]+)\]$/.exec(first);
 	const name = m ? m[1] : null;
-	if (name === "Context" || name === "Skills" || name === "Extensions" || name === "Themes") {
+	if (name === "Context" || name === "Skills" || name === "Extensions") {
 		return name;
 	}
 	return null;
@@ -268,29 +268,21 @@ export function centerLine(text: string, width: number, side = "│"): string {
 	return side + " ".repeat(left) + text + " ".repeat(right) + side;
 }
 
-// pi.dev ASCII logo: P in the theme accent, i in the theme tint
+// pi.dev block mark: the logo grid at terminal aspect (2 chars per column), 4 lines.
+// P (the salmon/blue structure, columns 0-2) in the theme accent; i (the yellow
+// bar, column 3) in the theme soft — same P/i split as the old wordmark.
 export function buildLogoLines(th: Themeish): string[] {
-	const p = (s: string) => fgFirst(th, ["accent"], s);
-	const i = (s: string) => fgFirst(th, ["tint", "text"], s);
-
+	const a = (s: string) => fgFirst(th, ["accent"], s);
+	const t = (s: string) => fgFirst(th, ["accentSoft", "text"], s);
 	return [
-		`${p("██████████")}   `,
-		`${p("██████████")}   `,
-		`${p("████   ███")}   `,
-		`${p("███████")}   ${i("███")}`,
-		`${p("███")}       ${i("███")}`,
-		`${p("███")}       ${i("███")}`,
+		`${a("██████")}  `,
+		`${a("██  ██")}  `,
+		`${a("████")}  ${t("██")}`,
+		`${a("██")}    ${t("██")}`,
 	];
 }
 
 export const ASCII_LOGO_LINES = buildLogoLines(null);
-
-// Logo column width, derived from the art so it is not a magic number.
-const LOGO_W = Math.max(...ASCII_LOGO_LINES.map((l) => visibleWidth(l)));
-// Info area starts at column: "│ " (2) + logo (LOGO_W) + " │ " (3).
-const INFO_X = LOGO_W + 5;
-// Columns left for info: width - "│ " - logo - " │ " - info - " │".
-const infoWidth = (width: number) => Math.max(8, width - LOGO_W - 7);
 
 // Singleton store for loaded resources
 const STORE_KEY = Symbol.for("pi-arnative.resourceStore");
@@ -302,11 +294,47 @@ export const tabStore: Map<TabKey, string[]> =
 		["Context", []],
 		["Skills", []],
 		["Extensions", []],
-		["Themes", []],
 	]);
 (globalThis as Record<symbol, Map<TabKey, string[]>>)[STORE_KEY] = tabStore;
 
-let activeHeaderInstance: ArnativeHeader | null = null;
+// Header preset chosen through `/arnative headers`. "Arnative (Full)" = this extension's
+// header; "Pi" = pi's built-in header. The picker lives in arnative.ts, so the choice is
+// shared through globalThis like the other cross-module state.
+export const HEADER_PRESETS = ["Arnative (Full)", "Pi"] as const;
+export type HeaderPreset = (typeof HEADER_PRESETS)[number];
+export const DEFAULT_HEADER_PRESET: HeaderPreset = "Arnative (Full)";
+const HEADER_PRESET_KEY = Symbol.for("pi-arnative.headerPreset");
+
+export function activeHeaderPreset(): HeaderPreset {
+	const stored = (globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY];
+	return HEADER_PRESETS.includes(stored as HeaderPreset) ? (stored as HeaderPreset) : DEFAULT_HEADER_PRESET;
+}
+
+/** Hand the header slot to the active preset: arnative's box, or pi's built-in ("Pi"). */
+export function applyHeaderPreset(ctx: ExtensionContext): void {
+	if (activeHeaderPreset() === "Pi") {
+		ctx.ui?.setHeader?.(undefined);
+	} else {
+		ctx.ui?.setHeader?.((tui, theme) => new ArnativeHeader(tui, theme, ctx));
+	}
+}
+
+/** Select a preset and apply it immediately (real-time: the header swaps on the spot). */
+export function setHeaderPreset(name: HeaderPreset, ctx: ExtensionContext): void {
+	(globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY] = name;
+	applyHeaderPreset(ctx);
+}
+
+// The installed header instance. globalThis-backed because `/reload` re-imports the
+// extension modules and arnative.ts imports this file, so two copies can coexist.
+const HEADER_INSTANCE_KEY = Symbol.for("pi-arnative.headerInstance");
+function headerInstance(): ArnativeHeader | null {
+	return (globalThis as Record<symbol, ArnativeHeader | undefined>)[HEADER_INSTANCE_KEY] ?? null;
+}
+function setHeaderInstance(instance: ArnativeHeader | null): void {
+	if (instance) (globalThis as Record<symbol, ArnativeHeader>)[HEADER_INSTANCE_KEY] = instance;
+	else delete (globalThis as Record<symbol, ArnativeHeader | undefined>)[HEADER_INSTANCE_KEY];
+}
 
 // Model name formatted exactly like in the footer: Gemini 3.8 Flash (Antigravity), Deepseek V4.1 Flash (Yarz), etc.
 export function formatModelDisplayName(model?: { id?: string; name?: string; provider?: string }): string {
@@ -334,14 +362,14 @@ export class ArnativeHeader implements Component {
 		this.tui = tui;
 		this.themeProxy = themeProxy;
 		this.ctx = ctx;
-		activeHeaderInstance = this;
+		setHeaderInstance(this);
 	}
 
 	invalidate(): void {}
 
 	dispose(): void {
-		if (activeHeaderInstance === this) {
-			activeHeaderInstance = null;
+		if (headerInstance() === this) {
+			setHeaderInstance(null);
 		}
 	}
 
@@ -390,13 +418,6 @@ export class ArnativeHeader implements Component {
 				label: `Extensions [${tabStore.get("Extensions")?.length ?? 0}]`,
 			},
 			{
-				key: "Themes",
-				name: "Themes",
-				icon: SECTION_ICONS.Themes,
-				count: tabStore.get("Themes")?.length ?? 0,
-				label: `Themes [${tabStore.get("Themes")?.length ?? 0}]`,
-			},
-			{
 				key: "Shortcut",
 				name: "Shortcut",
 				icon: SECTION_ICONS.Shortcut,
@@ -443,33 +464,42 @@ export class ArnativeHeader implements Component {
 		}
 		const th = this.themeProxy || (activeThemeProxy as Themeish);
 		const side = fgFirst(th, ["dim"], "│");
-		const dash = "─".repeat(Math.max(0, width - 2));
 
-		// The left column holds the logo + vertical divider, so the info area only
-		// gets width - LOGO_W - 7 columns.
-		const infoW = infoWidth(width);
+		const infoLines: string[] = [];
+		const brand = (name: string) => fgFirst(th, ["accent", "accentSoft"], `\x1b[1m${name}\x1b[22m`);
+		const dim = (text: string) => fgFirst(th, ["dim"], text);
+
+		// Left column: the mark with the pi version under it (no gap). The column is as
+		// wide as the widest of them.
+		const versionStr = VERSION || "0.87.1";
+		const leftLines = [
+			...buildLogoLines(th),
+			`${brand("pi")} ${dim(`v${versionStr}`)}`,
+		];
+		const colW = Math.max(...leftLines.map((l) => visibleWidth(l)));
+		const padLeft = (text: string) => text + " ".repeat(Math.max(0, colW - visibleWidth(text)));
+		// Columns left for info: width - "│ " - left column - " │ " - info - " │".
+		const infoW = Math.max(8, width - colW - 7);
 		const infoLine = (text: string): string => {
 			const t = truncateToWidth(text, infoW);
 			return t + " ".repeat(infoW - visibleWidth(t));
 		};
-
-		const out: string[] = [fgFirst(th, ["dim"], `╭${dash}╮`)];
-		const infoLines: string[] = [];
 		// Inner box: the tab menu line is framed, content is (infoW - 2) columns.
 		const innerW = Math.max(1, infoW - 2);
-		const brand = (name: string) => fgFirst(th, ["accent", "tint"], `\x1b[1m${name}\x1b[22m`);
-		const dim = (text: string) => fgFirst(th, ["dim"], text);
 
-		// 1. Greeting: device username, accent like the brand names below it.
-		infoLines.push(`${dim("Welcome back,")} ${brand(deviceUser())}`);
+		// The column divider runs the full height: it joins the top/bottom borders with
+		// ┬/┴ so there is no gap between the split and the frame.
+		const jx = colW + 3;
+		const border = (l: string, mid: string, r: string) =>
+			fgFirst(th, ["dim"], `${l}${"─".repeat(jx - 1)}${mid}${"─".repeat(Math.max(0, width - jx - 2))}${r}`);
+		const out: string[] = [border("╭", "┬", "╮")];
 
-		// 2. Brand line: pi · Arnative, both in the theme accent, versions dim.
-		const versionStr = VERSION || "0.87.1";
-		infoLines.push(
-			`${brand("pi")} ${dim(`v${versionStr}`)}${dim(" · ")}${brand("Arnative")}${ARNATIVE_VERSION ? ` ${dim(`v${ARNATIVE_VERSION}`)}` : ""}`,
-		);
+		// 1. Brand + greeting on one line ("Arnative vX · Welcome back, <User>"; the username
+		// is capitalized), then a blank line before the tab box.
+		const arnVer = ARNATIVE_VERSION ? ` ${dim(`v${ARNATIVE_VERSION}`)}` : "";
+		infoLines.push(`${brand("Arnative")}${arnVer}${dim(" · ")}${dim("Welcome back,")} ${brand(capitalize(deviceUser()))}`);
 
-		// 2. Tab menu: icon = accent, text = tint (bold when active)
+		// 2. Tab menu: icon = accent, text = soft (bold when active)
 		const tabs = this.getTabsData(width);
 		const sepTabPlain = " │ ";
 		const sepTab = fgFirst(th, ["dim"], sepTabPlain);
@@ -481,7 +511,7 @@ export class ArnativeHeader implements Component {
 			const isActive = t.key === this.activeTab;
 			const iconStyled = isActive ? fgFirst(th, ["accent"], t.icon) : fgFirst(th, ["dim"], t.icon);
 			const labelStyled = isActive
-				? fgFirst(th, ["tint", "text"], `\x1b[1m${label}\x1b[22m`)
+				? fgFirst(th, ["accentSoft", "text"], `\x1b[1m${label}\x1b[22m`)
 				: fgFirst(th, ["dim"], label);
 			return { key: t.key, plain, formatted: `${iconStyled} ${labelStyled}` };
 		};
@@ -499,7 +529,7 @@ export class ArnativeHeader implements Component {
 		}
 		this.renderedTabRegions = [];
 		// The tab row has its own left border + a leading space before the first tab.
-		let curX = INFO_X + 2;
+		let curX = colW + 7;
 		for (const t of kept) {
 			const w = visibleWidth(t.plain);
 			this.renderedTabRegions.push({ key: t.key, startX: curX, endX: curX + w - 1 });
@@ -512,23 +542,29 @@ export class ArnativeHeader implements Component {
 			const t = truncateToWidth(text, tabInnerW);
 			return `${side}${t}${" ".repeat(tabInnerW - visibleWidth(t))}${side}`;
 		};
-		const tabRule = (l: string, r: string, label = ""): string => {
-			// Label rides on the top border ("╭─ Menu ───╮") so no extra text line is spent; the
-			// word is tint so it reads as a label instead of a dimmer stretch of border.
-			const lead = label.length + 1;
-			if (label && tabInnerW - lead > 1) {
-				return `${fgFirst(th, ["dim"], `${l}─`)}${fgFirst(th, ["tint", "text"], label)}${fgFirst(th, ["dim"], `${"─".repeat(tabInnerW - lead)}${r}`)}`;
+		// Columns of the " │ " separators inside the tab row, so the borders can join them
+		// with ┬/┴ and every divider runs the full height of the box.
+		const tabSeps: number[] = [];
+		for (let i = 0, acc = 1; i < kept.length; i++) {
+			acc += visibleWidth(kept[i]!.plain);
+			if (i < kept.length - 1) {
+				tabSeps.push(acc + 1);
+				acc += 3;
 			}
-			return fgFirst(th, ["dim"], `${l}${"─".repeat(tabInnerW)}${r}`);
+		}
+		const tabRule = (l: string, r: string, junction: string): string => {
+			const inner = new Array<string>(tabInnerW).fill("─");
+			for (const s of tabSeps) if (s >= 0 && s < tabInnerW) inner[s] = junction;
+			return fgFirst(th, ["dim"], `${l}${inner.join("")}${r}`);
 		};
-		infoLines.push(tabRule("╭", "╮", " Menu "));
+		infoLines.push(tabRule("╭", "╮", "┬"));
 		// One space from the left border, then " │ " between tabs.
 		infoLines.push(tabRow(tabText));
 		// Tab line = top border (index 0) + the infoLines above + this line.
 		this.renderedTabLineY = infoLines.length;
-		infoLines.push(tabRule("╰", "╯"));
+		infoLines.push(tabRule("╰", "╯", "┴"));
 
-		// 3. Active tab data (left-aligned, neatly wrapped, tint)
+		// 3. Active tab data (left-aligned, neatly wrapped, soft)
 		let activeItems: string[] = [];
 		if (this.activeTab === "Model") {
 			const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
@@ -536,22 +572,22 @@ export class ArnativeHeader implements Component {
 			const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
 			const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
 			const sep = fgFirst(th, ["dim"], " · ");
-			// Model name in tint, its "(Provider)" tail dim.
+			// Model name in soft, its "(Provider)" tail dim.
 			const provSuffix = fullName.match(/(\s*\([^()]*\))$/)?.[1] ?? "";
 			const nameMain = provSuffix ? fullName.slice(0, -provSuffix.length) : fullName;
-			let line = `${fgFirst(th, ["tint", "text"], nameMain)}${provSuffix ? fgFirst(th, ["dim"], provSuffix) : ""}${sep}${fgFirst(th, ["tint", "text"], `Thinking: ${thinkLevel}`)}`;
+			let line = `${fgFirst(th, ["accentSoft", "text"], nameMain)}${provSuffix ? fgFirst(th, ["dim"], provSuffix) : ""}${sep}${fgFirst(th, ["accentSoft", "text"], `Thinking: ${thinkLevel}`)}`;
 
 			// All-time usage of that model (same as /usage): ↑... ↓...  ...
 			const usage = getModelAllTimeUsage(modelObj?.id);
 			const tokenParts: string[] = [];
 			if (usage.input > 0) {
-				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["tint", "text"], formatTokens(usage.input))}`);
+				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${fgFirst(th, ["accentSoft", "text"], formatTokens(usage.input))}`);
 			}
 			if (usage.output > 0) {
-				tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${fgFirst(th, ["tint", "text"], formatTokens(usage.output))}`);
+				tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${fgFirst(th, ["accentSoft", "text"], formatTokens(usage.output))}`);
 			}
 			if (usage.cacheRead > 0) {
-				tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${fgFirst(th, ["tint", "text"], formatTokens(usage.cacheRead))}`);
+				tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${fgFirst(th, ["accentSoft", "text"], formatTokens(usage.cacheRead))}`);
 			}
 			if (tokenParts.length > 0) {
 				line += `${sep}${tokenParts.join(" ")}`;
@@ -564,35 +600,33 @@ export class ArnativeHeader implements Component {
 
 		if (this.activeTab === "Directory") {
 			for (const line of wrapPath(getCwd(this.ctx), infoW)) {
-				infoLines.push(fgFirst(th, ["tint", "text"], line));
+				infoLines.push(fgFirst(th, ["accentSoft", "text"], line));
 			}
 		} else if (this.activeTab === "Shortcut") {
 			for (const line of wrapTokens(SHORTCUTS, infoW)) {
-				infoLines.push(fgFirst(th, ["tint", "text"], line));
+				infoLines.push(fgFirst(th, ["accentSoft", "text"], line));
 			}
 		} else if (activeItems.length === 0) {
-			infoLines.push(fgFirst(th, ["tint"], "(empty)"));
+			infoLines.push(fgFirst(th, ["accentSoft"], "(empty)"));
 		} else if (this.activeTab === "Model") {
-			// The Model tab already carries tint styling + a dim separator
+			// The Model tab already carries soft styling + a dim separator
 			infoLines.push(...activeItems);
 		} else {
 			for (const line of wrapCommaItems(activeItems, infoW)) {
-				// Point 5: selected menu data uses tint only
-				infoLines.push(fgFirst(th, ["tint", "text"], line));
+				// Point 5: selected menu data uses soft only
+				infoLines.push(fgFirst(th, ["accentSoft", "text"], line));
 			}
 		}
 
-		// Compose lines: logo in the left column, vertical divider, left-aligned info.
-		// The logo is taller than the info -> the rest is left blank.
-		const logoLines = buildLogoLines(th);
-		const blankLogo = " ".repeat(LOGO_W);
-		for (let i = 0; i < Math.max(logoLines.length, infoLines.length); i++) {
-			const logo = logoLines[i] ?? blankLogo;
-			out.push(`${side} ${logo} ${side} ${infoLine(infoLines[i] ?? "")} ${side}`);
+		// Compose lines: left column (mark + brand), vertical divider, left-aligned info.
+		// Whichever column is shorter is padded with blanks.
+		const rows = Math.max(leftLines.length, infoLines.length);
+		for (let i = 0; i < rows; i++) {
+			out.push(`${side} ${padLeft(leftLines[i] ?? "")} ${side} ${infoLine(infoLines[i] ?? "")} ${side}`);
 		}
 
 		// Bottom border
-		out.push(fgFirst(th, ["dim"], `╰${dash}╯`));
+		out.push(border("╰", "┴", "╯"));
 
 		return out;
 	}
@@ -608,6 +642,8 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 	if (typeof containerProto?.addChild === "function") {
 		const origAddChild = containerProto.addChild;
 		containerProto.addChild = function (child: any): unknown {
+			// "Pi" preset = pi's own header, so leave pi's startup list untouched.
+			if (activeHeaderPreset() === "Pi") return origAddChild.call(this, child);
 			try {
 				const body = sectionBodyOf(child);
 				const sectionName = body === null ? null : sectionNameOf(body);
@@ -629,8 +665,9 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 					child.render = () => [];
 
 					// Re-render the header when it is already installed
-					if (activeHeaderInstance?.tui) {
-						activeHeaderInstance.tui.requestRender();
+					const hdr = headerInstance();
+					if (hdr?.tui) {
+						hdr.tui.requestRender();
 					}
 				} else if ((this as Record<string, unknown>)._isLoadedResourcesContainer) {
 					// pi core's "[Extension issues]" -> wrap in an arnative box.
@@ -656,7 +693,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 export default function (pi: ExtensionAPI) {
 	// Next header tab — every platform variant of the shortcut (lib/shortcuts.ts).
 	const nextTab = async () => {
-		const hdr = activeHeaderInstance;
+		const hdr = headerInstance();
 		if (!hdr) return;
 		const order = TAB_ORDER;
 		hdr.activeTab = order[(order.indexOf(hdr.activeTab) + 1) % order.length]!;
@@ -668,10 +705,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		activeThemeProxy = themeOf<Themeish>(ctx) ?? activeThemeProxy;
-		// Register the custom header
-		ctx.ui?.setHeader?.((tui, theme) => {
-			return new ArnativeHeader(tui, theme, ctx);
-		});
+		// Register the header for the active preset
+		applyHeaderPreset(ctx);
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
@@ -682,8 +717,9 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("turn_end", async () => {
 		// Usage is re-read at render time (collectUsageSummary caches 5s), so poking a render is enough.
-		if (activeHeaderInstance?.tui) {
-			activeHeaderInstance.tui.requestRender();
+		const hdr = headerInstance();
+		if (hdr?.tui) {
+			hdr.tui.requestRender();
 		}
 	});
 }
@@ -693,6 +729,16 @@ if (isMain(import.meta.url)) {
 
 	assert(sectionNameOf("\x1b[33m[Skills]\x1b[39m\n  a, b") === "Skills", "header [Skills] detected");
 	assert(sectionNameOf("pi v0.87.1") === null, "non-section text is not detected");
+
+	// Header presets: Arnative (Full) is the default; Pi hands the header slot back to pi.
+	assert(DEFAULT_HEADER_PRESET === "Arnative (Full)" && HEADER_PRESETS.length === 2, "Arnative (Full) is the default header preset");
+	assert(markedLabels(HEADER_PRESETS, "Arnative (Full)").join(" | ") === "● Arnative (Full) |   Pi", "preset labels mark the active one");
+	let installed: unknown = "untouched";
+	const presetCtx: any = { ui: { setHeader: (factory: unknown) => { installed = factory; } } };
+	setHeaderPreset("Pi", presetCtx);
+	assert(installed === undefined && activeHeaderPreset() === "Pi", "Pi clears the custom header");
+	setHeaderPreset("Arnative (Full)", presetCtx);
+	assert(typeof installed === "function" && activeHeaderPreset() === "Arnative (Full)", "Arnative (Full) installs the header factory");
 
 	// Parsing & wrapping
 	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody splits 3 comma items");
@@ -739,7 +785,6 @@ if (isMain(import.meta.url)) {
 	tabStore.set("Context", ["AGENTS.md"]);
 	tabStore.set("Skills", ["agents-sdk", "cloudflare"]);
 	tabStore.set("Extensions", ["@bismawy/pi-agentrouter@1.6.1", "footer.ts"]);
-	tabStore.set("Themes", ["arnative", "dark"]);
 
 	let renderRequested = false;
 	const fakeTui: any = {
@@ -760,68 +805,99 @@ if (isMain(import.meta.url)) {
 
 	// Default view: the working directory path, shown on open
 	const linesDefault = hdr.render(100);
-	assert(stripAnsi(linesDefault[6]!).includes("/run/media/bisma/DATA/Pi/pi-arnative"), "directory path shown as soon as the first tab opens");
+	assert(stripAnsi(linesDefault[5]!).includes("/run/media/bisma/DATA/Pi/pi-arnative"), "directory path shown as soon as the first tab opens");
 
 	hdr.activeTab = "Model";
 	const lines100 = hdr.render(100);
-	assert(lines100.length === 8, "render 100 = border + 6 logo lines + border (3 info lines fill 3 logo lines)");
+	assert(lines100.length === 7, "render 100 = border + 5 rows + border (left: mark + gap + pi version; info: brand line + tab box + data)");
 	assert(lines100.every((l) => visibleWidth(l) === 100), "every line at width 100 is exactly 100 columns");
 	assert(lines100[0]!.includes("╭") && lines100[0]!.includes("╮"), "round top border");
-	assert(lines100[7]!.includes("╰") && lines100[7]!.includes("╯"), "round bottom border");
-	const logoPlain = buildLogoLines(null);
-	assert(logoPlain.length === 6 && visibleWidth(logoPlain[0]!) === 13, "real Pi ascii intact (6 lines x 13 columns)");
+	assert(lines100[6]!.includes("╰") && lines100[6]!.includes("╯"), "round bottom border");
+	// The column divider joins the frame: full-height split, no gap at the borders.
+	const jx = stripAnsi(lines100[0]!).indexOf("┬");
+	assert(jx > 0 && stripAnsi(lines100[6]!).indexOf("┴") === jx, "┬/┴ junctions sit on the border at the divider column");
 	assert(
-		lines100.slice(1, 7).every((l, i) => stripAnsi(l).slice(2, 15) === logoPlain[i]),
-		"real Pi ascii in the left column, 6 lines",
+		lines100.slice(1, 6).every((l) => stripAnsi(l)[jx] === "│"),
+		"the divider sits in the same column on every row",
+	);
+	const logoPlain = buildLogoLines(null);
+	assert(logoPlain.length === 4 && visibleWidth(logoPlain[0]!) === 8, "pi block mark intact (4 lines x 8 columns)");
+	// P (columns 0-2) accent, i (the right bar) soft — the old wordmark's two-tone.
+	const logoTagged = buildLogoLines({
+		fg: (c: string, t: string) => (c === "accent" ? `<A>${t}</A>` : c === "accentSoft" ? `<T>${t}</T>` : t),
+	} as any);
+	assert(logoTagged[0] === "<A>██████</A>  ", "mark top row: P in the theme accent");
+	assert(logoTagged[2] === "<A>████</A>  <T>██</T>", "mark lower rows: P accent + i (right bar) soft");
+	assert(
+		lines100.slice(1, 5).every((l, i) => stripAnsi(l).slice(2, 10) === logoPlain[i]),
+		"pi block mark in the left column, 4 lines",
 	);
 	assert(
 		/Welcome back, \S/.test(stripAnsi(lines100[1]!)) && !stripAnsi(lines100[1]!).includes("pi v"),
 		"line 1: greeting uses the device username",
 	);
+	// Left column: the pi version sits directly under the mark (no gap).
+	assert(stripAnsi(lines100[5]!).slice(2, 12).includes("pi v"), "pi version sits under the mark in the left column");
+	// Info column: brand + greeting, then the tab box straight away (no blank line).
+	assert(/Arnative v\d+\.\d+\.\d+ · Welcome back, \S/.test(stripAnsi(lines100[1]!)), "info line 1: Arnative version · Welcome back, user");
+	assert(!stripAnsi(lines100[2]!).includes("Menu"), "tab box border carries no label");
+	// Tab box separators join its borders: ┬ above and ┴ below each "│". Compare by display
+	// column, not string index: the tab icons are astral (2 code units, 1 column).
+	const atColumn = (line: string, col: number): string | undefined => {
+		let c = 0;
+		for (const ch of stripAnsi(line)) {
+			const w = visibleWidth(ch);
+			if (col >= c && col < c + w) return ch;
+			c += w;
+		}
+		return undefined;
+	};
+	const tabSepCols = [...stripAnsi(lines100[2]!).matchAll(/┬/g)].map((m) => visibleWidth(stripAnsi(lines100[2]!).slice(0, m.index)));
+	assert(tabSepCols.length >= 2, "tab box top border has ┬ at each column divider");
 	assert(
-		stripAnsi(lines100[2]!).includes("pi v") && /Arnative v\d+\.\d+\.\d+/.test(stripAnsi(lines100[2]!)),
-		"line 2: pi + Arnative + the Arnative build version",
+		tabSepCols.every((c) => atColumn(lines100[3]!, c) === "│" && atColumn(lines100[4]!, c) === "┴"),
+		"each tab divider is full height (┬ / │ / ┴ in the same column)",
 	);
-	assert(/╭─ Menu ─+╮/.test(stripAnsi(lines100[3]!)), "tab box top border carries the Menu label");
 	assert(!stripAnsi(lines100[1]!).includes("Interrupt"), "shortcut legend no longer on the top line");
 	// Both brand names use the theme accent, not only "pi".
 	const accentTheme = {
 		fg: (c: string, t: string) => (c === "accent" ? `<A>${t}</A>` : c === "dim" ? `<D>${t}</D>` : t),
 	};
 	const accentHeader = new ArnativeHeader(fakeTui, accentTheme as any, fakeCtx);
-	const accentLine = accentHeader.render(100)[2]!;
-	assert(accentLine.includes("<A>\x1b[1mpi"), "the pi name uses the theme accent");
-	assert(accentLine.includes("<A>\x1b[1mArnative"), "the Arnative name uses the same theme accent");
-	const greetLine = accentHeader.render(100)[1]!;
+	// The marker theme returns literal "<A>" text (not ANSI), so the measured width is
+	// inflated — render wide enough that the brand/greeting line is not truncated.
+	const accentLines = accentHeader.render(140);
+	assert(accentLines[5]!.includes("<A>\x1b[1mpi"), "the pi name uses the theme accent");
+	assert(accentLines[1]!.includes("<A>\x1b[1mArnative"), "the Arnative name uses the same theme accent");
+	const greetLine = accentHeader.render(140)[1]!;
 	assert(greetLine.includes("<D>Welcome back,"), "greeting text uses the dim color");
-	assert(greetLine.includes(`<A>\x1b[1m${deviceUser()}`), "device username uses the theme accent");
-	assert(stripAnsi(lines100[4]!).includes("Model [Gemini 3.8 Flash]"), "Model tab in the menu (Model [name])");
+	assert(greetLine.includes(`<A>\x1b[1m${capitalize(deviceUser())}`), "device username uses the theme accent, first letter capitalized");
+	assert(stripAnsi(lines100[3]!).includes("Model [Gemini 3.8 Flash]"), "Model tab in the menu (Model [name])");
 	// Directory tab: name only in the menu, whole path in the content line below
 	hdr.activeTab = "Directory";
 	hdr.render(100);
-	assert(stripAnsi(lines100[4]!).includes("Directory"), "Directory tab shown in the menu");
-	assert(!stripAnsi(lines100[4]!).includes("Directory: /"), "Directory menu entry has no path (detail only on click)");
-	assert(stripAnsi(lines100[4]!).indexOf("Directory") < stripAnsi(lines100[4]!).indexOf("Model ["), "Directory tab is leftmost");
+	assert(stripAnsi(lines100[3]!).includes("Directory"), "Directory tab shown in the menu");
+	assert(!stripAnsi(lines100[3]!).includes("Directory: /"), "Directory menu entry has no path (detail only on click)");
+	assert(stripAnsi(lines100[3]!).indexOf("Directory") < stripAnsi(lines100[3]!).indexOf("Model ["), "Directory tab is leftmost");
 	hdr.activeTab = "Model";
 	hdr.render(100);
-	assert(stripAnsi(lines100[6]!).includes("Gemini 3.8 Flash (Antigravity)"), "active Model tab data on the last info line");
+	assert(stripAnsi(lines100[5]!).includes("Gemini 3.8 Flash (Antigravity)"), "active Model tab data on the last info line");
 	// Directory tab content: full path, wrapped, nothing lost
 	hdr.activeTab = "Directory";
 	const linesDir = hdr.render(100);
-	const dirContent = stripAnsi(linesDir[6]!);
+	const dirContent = stripAnsi(linesDir[5]!);
 	assert(dirContent.includes("/run/media/bisma"), "full Directory tab path (start) shown");
 	assert(dirContent.includes("pi-arnative"), "full Directory tab path (end) shown — no truncation");
 	hdr.activeTab = "Model";
 	hdr.render(100);
-	// Inner box rules: bottom line is one fully dimmed block (the "─" runs are colored too, not
-	// just the corners); the top one is the same except it carries the tinted " Menu " label.
-	assert((lines100[5]!.match(/\x1b\[/g) ?? []).length === 8, 'bottom box line (row 5) = one fully dimmed block');
+	// Tab box borders are a single fully dimmed block (the "─"/"┬"/"┴" runs are colored too).
+	assert((lines100[4]!.match(/\x1b\[/g) ?? []).length === 8, "bottom box line (row 4) = one fully dimmed block");
 	assert(
-		lines100[3]!.includes("\x1b[2m╭─\x1b[22m Menu \x1b[2m─") && lines100[3]!.includes("╮\x1b[22m"),
-		'tab box top border = two dim blocks with the " Menu " label between them',
+		lines100[2]!.includes("\x1b[2m╭─") && lines100[2]!.includes("┬") && lines100[2]!.includes("╮\x1b[22m"),
+		"tab box top border = one dim block carrying the ┬ junctions",
 	);
 
-	// Tab regions: Model, Context, Skills, Extensions, Themes
+	// Tab regions: Model, Context, Skills, Extensions
 	const tabY = (hdr as any).renderedTabLineY;
 	assert(tabY > 0, "tab line Y position recorded");
 	const tabRegions = (hdr as any).renderedTabRegions as Array<{ key: TabKey; startX: number; endX: number }>;
@@ -841,7 +917,7 @@ if (isMain(import.meta.url)) {
 	assert(renderRequested === true, "requestRender called when the tab switches");
 
 	const linesExt = hdr.render(100);
-	assert(stripAnsi(linesExt[6]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "active tab data on the last info line");
+	assert(stripAnsi(linesExt[5]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "active tab data on the last info line");
 
 	// Click the Skills tab (measured at a width where every tab fits)
 	const wide = hdr.render(140);
@@ -860,11 +936,11 @@ if (isMain(import.meta.url)) {
 
 	const linesSkills = hdr.render(140);
 	assert(wide.every((l) => visibleWidth(l) === 140), "lines at 140 columns stay 140");
-	assert(wideRegions.length === 6, "width 140: first 6 tabs shown (rightmost Shortcut dropped too)");
+	assert(wideRegions.length === 6, "width 140: all 6 tabs shown (Shortcut included)");
 	if (skillsRegion.key === "Skills") {
-		assert(linesSkills[6]!.includes("agents-sdk, cloudflare"), "Skills tab data on the last info line");
-		assert(!linesSkills[6]!.includes("Gemini 3.8 Flash (Antigravity)"), "Model data not shown in the Skills tab content");
-		assert(linesSkills[4]!.includes("Model [Gemini 3.8 Flash]"), "tab menu still shown while another tab is active");
+		assert(linesSkills[5]!.includes("agents-sdk, cloudflare"), "Skills tab data on the last info line");
+		assert(!linesSkills[5]!.includes("Gemini 3.8 Flash (Antigravity)"), "Model data not shown in the Skills tab content");
+		assert(linesSkills[3]!.includes("Model [Gemini 3.8 Flash]"), "tab menu still shown while another tab is active");
 	}
 
 	// The Y of a tab must point at the tab menu line, not the line above
@@ -879,13 +955,13 @@ if (isMain(import.meta.url)) {
 		((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),
 		"width 170: Shortcut tab shown (not dropped)",
 	);
-	const scContent = stripAnsi(linesShortcut.slice(6).join(" "));
+	const scContent = stripAnsi(linesShortcut.slice(5).join(" "));
 	assert(scContent.includes("[Esc] Interrupt"), "Shortcut tab: legend moved into the content");
 	assert(
 		scContent.includes(`[${SHORTCUT_RELOAD.label}] Reload`),
 		`Shortcut tab: reload shortcut present in the content (${SHORTCUT_RELOAD.label})`,
 	);
-	assert(stripAnsi(linesShortcut[2]!).includes("Arnative v"), "line 2 keeps the Arnative brand while the Shortcut tab is active");
+	assert(stripAnsi(linesShortcut[1]!).includes("Arnative v"), "the Arnative brand stays on line 1 while the Shortcut tab is active");
 	hdr.activeTab = "Model";
 	hdr.render(140);
 
@@ -893,13 +969,13 @@ if (isMain(import.meta.url)) {
 	const narrow = hdr.render(60);
 	assert(narrow.every((l) => visibleWidth(l) === 60), "lines at 60 columns stay 60");
 	assert(stripAnsi(narrow[1]!).includes("Welcome back,"), "greeting stays intact at 60 columns");
-	assert(stripAnsi(narrow[2]!).includes("Arnative v"), "pi + Arnative brand intact at 60 columns");
-	assert(stripAnsi(narrow[2]!).includes("Interrupt") === false, "legend does not come back to the top line");
+	assert(stripAnsi(narrow[1]!).includes("Arnative v"), "Arnative brand intact at 60 columns");
+	assert(stripAnsi(narrow[1]!).includes("Interrupt") === false, "legend does not come back to the top line");
 	assert(
 		!((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),
 		"rightmost tab dropped at 60 columns",
 	);
-	assert(stripAnsi(narrow[4]!).includes("Model ["), "Model tab still shown at 60 columns");
+	assert(stripAnsi(narrow[3]!).includes("Model ["), "Model tab still shown at 60 columns");
 
 	// Intercept addChild: capture the data and suppress the child
 	const proto = Object.getPrototypeOf(UserMessageComponent.prototype) as { addChild?: unknown };
@@ -917,13 +993,13 @@ if (isMain(import.meta.url)) {
 	// pi 0.99 ExpandableText shape: `build` callback + `state` object, no getters.
 	const modernSection = {
 		state: { expanded: false },
-		build: () => "[Themes]\n  arnative-sun, arnative-dusk",
+		build: () => "[Context]\n  AGENTS.md, MEMORY.md",
 		setText: () => {},
 		render: (_w: number) => ["should be hidden"],
 	};
 	container.addChild(modernSection);
 	assert(modernSection.render(80).length === 0, "pi 0.99 section suppressed (build + state shape)");
-	assert(tabStore.get("Themes")?.includes("arnative-sun") === true, "pi 0.99 section data lands in tabStore");
+	assert(tabStore.get("Context")?.includes("MEMORY.md") === true, "pi 0.99 section data lands in tabStore");
 
 	// Startup help block is not a resource section and must survive untouched.
 	const helpBlock = { build: () => "\u2580\u2580\u2588  v0.99.1\n\u2588\u2580 \u2588 escape interrupt", state: { expanded: false }, render: () => ["help"] };

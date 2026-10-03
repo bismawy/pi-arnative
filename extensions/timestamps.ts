@@ -101,9 +101,8 @@ export function placeTimeAtRight(
 	const leftPart = sliceByColumn(line, 0, targetCol, true);
 	const leftW = visibleWidth(leftPart);
 	const pad = " ".repeat(Math.max(0, targetCol - leftW));
-	const bg = bgOpen ? bgOpen : "";
 	const reset = bgOpen ? "\x1b[49m" : "";
-	return `${leftPart}${bg}${pad}${timeBadge} ${reset}`;
+	return `${leftPart}${bgOpen}${pad}${timeBadge} ${reset}`;
 }
 
 if (!tsState.patched) {
@@ -211,6 +210,9 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
+	// The map is cleared per session (it is refilled from the branch right below),
+	// so it is bounded by the current session instead of growing for the process lifetime.
+	USER_TIMESTAMPS_MAP.clear();
 	// The active theme is re-read per session (ctx.ui.theme); render reads it lazily.
 	// History for old user messages is read HERE, never at render time: the ctx is only
 	// valid inside a handler. A ctx captured in the module throws after session
@@ -285,6 +287,7 @@ if (isMain(import.meta.url)) {
 		},
 	);
 	assert(USER_TIMESTAMPS_MAP.get("after reload") === 4242, "reloaded module prefills the shared map read by the patched render");
+	assert(!USER_TIMESTAMPS_MAP.has("old question"), "session_start clears the map first (bounded growth, current session only)");
 	assert(tsState.theme === theme, "reloaded module shares the theme read by the patched render");
 	console.log("timestamps.ts self-check OK");
 }

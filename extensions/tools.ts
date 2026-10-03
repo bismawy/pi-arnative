@@ -11,7 +11,7 @@
  * Collapsed summary: bash/write `󱞩 first line`; grep/find/read numeric
  * (→ N matches / → N files / N lines); edit `󱞩 +N / -M`. Expanded plain output
  * gets no summary line (no duplicated first line).
- * Colors: tool name accent, paths/links tint, box lines + 󱞩 dim. Execution is a
+ * Colors: tool name accent, paths/links soft, box lines + 󱞩 dim. Execution is a
  * pure delegate (spread of the built-in tools).
  * "has a result" lives in context.state, read at render() -> restore/reload safe,
  * no stale 󰔟 box. Third-party tools with no renderer of their own (memory_write,
@@ -32,14 +32,14 @@ import {
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { renderBoxLines as box } from "../lib/box.ts";
-import { stripAnsi } from "../lib/ansi.ts";
+import { stripAnsi, accentSoftOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { expandKeyName } from "../lib/format.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
 type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown> };
-type Res = (r: TResult, th: Theme, tint: (s: string) => string, isErr: boolean, expanded: boolean) => string;
+type Res = (r: TResult, th: Theme, soft: (s: string) => string, isErr: boolean, expanded: boolean) => string;
 
 const cwd = process.cwd();
 const TIMINGS = new Map<string, number>(); // duration ms per tool call (one run)
@@ -97,19 +97,9 @@ const countLines = (s: string): number => (s ? s.split("\n").filter(Boolean).len
 
 // Tint folder paths / URLs; everything else default.
 export const LINK_RE = /(?:https?:\/\/[^\s"'`)}\]]+|(?:~|\.{1,2})?\/[\w.+@~%/-]+|[\w.+@~-]+(?:\/[\w.+@~%/-]+)+)/g;
-export function paintLinks(text: string, tint: (s: string) => string): string {
-	return text.replace(LINK_RE, (m) => tint(m));
+export function paintLinks(text: string, soft: (s: string) => string): string {
+	return text.replace(LINK_RE, (m) => soft(m));
 }
-
-// "tint" only exists in arnative themes; other themes fall back to accent (probed per render)
-const tintOf = (theme: Theme): ((s: string) => string) => {
-	try {
-		theme.fg("tint", "");
-		return (s) => theme.fg("tint", s);
-	} catch {
-		return (s) => theme.fg("accent", s);
-	}
-};
 
 // Word-limited smart title: `maxWords` words + ellipsis; full text when expanded.
 export function smartTitle(cmd: string, maxWords = 6): string {
@@ -150,17 +140,17 @@ export function titleRow(
 
 // Default summary: collapsed `󱞩 first output line`, empty when expanded (the
 // full output is right below — no duplicate first line).
-export const resText: Res = (r, th, tint, isErr, expanded) => {
+export const resText: Res = (r, th, soft, isErr, expanded) => {
 	if (expanded && !isErr) return "";
 	const f = firstLine(textOf(r));
-	return f ? `${resHead(th)} ${paintLinks(f, tint)}` : resHead(th);
+	return f ? `${resHead(th)} ${paintLinks(f, soft)}` : resHead(th);
 };
 
 // Numeric summary `󱞩 → N matches`; errors fall back to the first line (most important).
 export const numRes =
 	(fmt: (n: number) => string): Res =>
-	(r, th, tint, isErr, expanded) => {
-		if (isErr) return resText(r, th, tint, isErr, false);
+	(r, th, soft, isErr, expanded) => {
+		if (isErr) return resText(r, th, soft, isErr, false);
 		if (expanded) return "";
 		return `${resHead(th)} ${fmt(countLines(textOf(r)))}`;
 	};
@@ -394,7 +384,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 					? safeCall(() => own.call(this, { content: result.content, details: result.details }, opts, th, ctx))
 					: null;
 			return new Lines((width) => {
-				const tint = tintOf(th);
+				const soft = accentSoftOf(th);
 				const inner = Math.max(8, width - 4);
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
@@ -422,7 +412,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				const summary = toolSummary(name, text, ctx.args);
 				const more = countLines(text) > 1;
 				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
-				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, tint)}` : ""}${hint}`);
+				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, soft)}` : ""}${hint}`);
 				if (opts.expanded && more) {
 					// MCP args are gone once the call box is replaced by the result.
 					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
@@ -460,8 +450,8 @@ const formatTodoRows = (lines: string[], th: Theme): string[] => {
 function minimal(
 	pi: ExtensionAPI,
 	tool: { execute: (...a: any[]) => Promise<any> } & Record<string, unknown>,
-	name: (th: Theme, tint: (s: string) => string) => string,
-	call: (a: any, th: Theme, tint: (s: string) => string, expanded: boolean) => string,
+	name: (th: Theme, soft: (s: string) => string) => string,
+	call: (a: any, th: Theme, soft: (s: string) => string, expanded: boolean) => string,
 	res: Res = resText,
 	full: (r: TResult, th: Theme) => string[] = fullText,
 ): void {
@@ -485,13 +475,13 @@ function minimal(
 			return new Lines((width) => {
 				// Read context.state live (never capture): renderResult may create it after renderCall.
 				if (context.state?.hasResult) return [];
-				const tint = tintOf(theme);
+				const soft = accentSoftOf(theme);
 				const inner = Math.max(8, width - 4);
 				const rows = titleRow(
 					theme,
 					theme.fg("warning", spinIcon()),
-					name(theme, tint),
-					call(args, theme, tint, false),
+					name(theme, soft),
+					call(args, theme, soft, false),
 					inner,
 					"",
 					false,
@@ -513,18 +503,18 @@ function minimal(
 			const dur = ms !== undefined ? `${(ms / 1000).toFixed(1)}s` : "";
 			const icon = isErr ? theme.fg("error", "x") : theme.fg("success", "✓");
 			return new Lines((width) => {
-				const tint = tintOf(theme);
+				const soft = accentSoftOf(theme);
 				const inner = Math.max(8, width - 4);
 				const rows = titleRow(
 					theme,
 					icon,
-					name(theme, tint),
-					call(context.args ?? {}, theme, tint, expanded),
+					name(theme, soft),
+					call(context.args ?? {}, theme, soft, expanded),
 					inner,
 					dur,
 					expanded,
 				);
-				const resLine = res(result, theme, tint, isErr, expanded);
+				const resLine = res(result, theme, soft, isErr, expanded);
 				if (resLine) rows.push(resLine);
 				if (expanded) rows.push(...full(result, theme));
 				return box(theme, width, rows);
@@ -559,9 +549,9 @@ function arnativeTools(pi: ExtensionAPI) {
 		pi,
 		createBashTool(cwd),
 		(th) => th.fg("accent", "$"),
-		(a, _th, tint, expanded) => {
+		(a, _th, soft, expanded) => {
 			const cmd = (a.command ?? "").replace(/\r?\n/g, " ").trim();
-			return paintLinks(expanded ? cmd : smartTitle(cmd), tint);
+			return paintLinks(expanded ? cmd : smartTitle(cmd), soft);
 		},
 	);
 
@@ -570,10 +560,10 @@ function arnativeTools(pi: ExtensionAPI) {
 		pi,
 		createReadTool(cwd),
 		(th) => th.fg("accent", "read"),
-		(a, _th, tint) => {
+		(a, _th, soft) => {
 			const range =
 				a.offset || a.limit ? `:${a.offset ?? 1}${a.limit ? `-${(a.offset ?? 1) + a.limit - 1}` : ""}` : "";
-			return `${tint(shortPath(a.path ?? ""))}${range}`;
+			return `${soft(shortPath(a.path ?? ""))}${range}`;
 		},
 		numRes((n) => `${n} lines`),
 	);
@@ -583,8 +573,8 @@ function arnativeTools(pi: ExtensionAPI) {
 		pi,
 		createGrepTool(cwd),
 		(th) => th.fg("accent", "grep"),
-		(a, _th, tint) =>
-			`/${a.pattern ?? ""}/ in ${tint(shortPath(a.path ?? "."))}${a.glob ? ` (${a.glob})` : ""}`,
+		(a, _th, soft) =>
+			`/${a.pattern ?? ""}/ in ${soft(shortPath(a.path ?? "."))}${a.glob ? ` (${a.glob})` : ""}`,
 		numRes((n) => `→ ${n} matches`),
 	);
 
@@ -593,7 +583,7 @@ function arnativeTools(pi: ExtensionAPI) {
 		pi,
 		createFindTool(cwd),
 		(th) => th.fg("accent", "find"),
-		(a, _th, tint) => `${a.pattern ?? ""} in ${tint(shortPath(a.path ?? "."))}`,
+		(a, _th, soft) => `${a.pattern ?? ""} in ${soft(shortPath(a.path ?? "."))}`,
 		numRes((n) => `→ ${n} files`),
 	);
 
@@ -602,7 +592,7 @@ function arnativeTools(pi: ExtensionAPI) {
 		pi,
 		createWriteTool(cwd),
 		(th) => th.fg("accent", "write"),
-		(a, _th, tint) => tint(shortPath(a.path ?? "")),
+		(a, _th, soft) => soft(shortPath(a.path ?? "")),
 	);
 
 	// edit: `edit path`, `󱞩 +N / -M`, expand = diff toolDiff*
@@ -610,8 +600,8 @@ function arnativeTools(pi: ExtensionAPI) {
 		pi,
 		createEditTool(cwd),
 		(th) => th.fg("accent", "edit"),
-		(a, _th, tint) => tint(shortPath(a.path ?? "")),
-		(r, th, _tint, isErr, expanded) => {
+		(a, _th, soft) => soft(shortPath(a.path ?? "")),
+		(r, th, _soft, isErr, expanded) => {
 			if (isErr) return resText(r, th, (s) => s, isErr, false);
 			const diff: string = r.details?.diff ?? "";
 			let add = 0;
