@@ -298,9 +298,10 @@ export const tabStore: Map<TabKey, string[]> =
 (globalThis as Record<symbol, Map<TabKey, string[]>>)[STORE_KEY] = tabStore;
 
 // Header preset chosen through `/arnative headers`. "Arnative (Full)" = this extension's
-// header; "Pi" = pi's built-in header. The picker lives in arnative.ts, so the choice is
-// shared through globalThis like the other cross-module state.
-export const HEADER_PRESETS = ["Arnative (Full)", "Pi"] as const;
+// header; "Pi (system)" = pi's built-in header. The picker lives in arnative.ts, so the
+// choice is shared through globalThis like the other cross-module state.
+// Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
+export const HEADER_PRESETS = ["Pi (system)", "Arnative (Full)"] as const;
 export type HeaderPreset = (typeof HEADER_PRESETS)[number];
 export const DEFAULT_HEADER_PRESET: HeaderPreset = "Arnative (Full)";
 const HEADER_PRESET_KEY = Symbol.for("pi-arnative.headerPreset");
@@ -310,9 +311,9 @@ export function activeHeaderPreset(): HeaderPreset {
 	return HEADER_PRESETS.includes(stored as HeaderPreset) ? (stored as HeaderPreset) : DEFAULT_HEADER_PRESET;
 }
 
-/** Hand the header slot to the active preset: arnative's box, or pi's built-in ("Pi"). */
+/** Hand the header slot to the active preset: arnative's box, or pi's built-in ("Pi (system)"). */
 export function applyHeaderPreset(ctx: ExtensionContext): void {
-	if (activeHeaderPreset() === "Pi") {
+	if (activeHeaderPreset() === "Pi (system)") {
 		ctx.ui?.setHeader?.(undefined);
 	} else {
 		ctx.ui?.setHeader?.((tui, theme) => new ArnativeHeader(tui, theme, ctx));
@@ -642,8 +643,8 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 	if (typeof containerProto?.addChild === "function") {
 		const origAddChild = containerProto.addChild;
 		containerProto.addChild = function (child: any): unknown {
-			// "Pi" preset = pi's own header, so leave pi's startup list untouched.
-			if (activeHeaderPreset() === "Pi") return origAddChild.call(this, child);
+			// "Pi (system)" preset = pi's own header, so leave pi's startup list untouched.
+			if (activeHeaderPreset() === "Pi (system)") return origAddChild.call(this, child);
 			try {
 				const body = sectionBodyOf(child);
 				const sectionName = body === null ? null : sectionNameOf(body);
@@ -730,13 +731,14 @@ if (isMain(import.meta.url)) {
 	assert(sectionNameOf("\x1b[33m[Skills]\x1b[39m\n  a, b") === "Skills", "header [Skills] detected");
 	assert(sectionNameOf("pi v0.87.1") === null, "non-section text is not detected");
 
-	// Header presets: Arnative (Full) is the default; Pi hands the header slot back to pi.
+	// Header presets: Arnative (Full) is the default; Pi (system) hands the header slot back to pi.
 	assert(DEFAULT_HEADER_PRESET === "Arnative (Full)" && HEADER_PRESETS.length === 2, "Arnative (Full) is the default header preset");
-	assert(markedLabels(HEADER_PRESETS, "Arnative (Full)").join(" | ") === "● Arnative (Full) |   Pi", "preset labels mark the active one");
+	assert(HEADER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full)", "built-in preset is listed first");
+	assert(markedLabels(HEADER_PRESETS, "Arnative (Full)").join(" | ") === "  Pi (system) | ● Arnative (Full)", "preset labels mark the active one");
 	let installed: unknown = "untouched";
 	const presetCtx: any = { ui: { setHeader: (factory: unknown) => { installed = factory; } } };
-	setHeaderPreset("Pi", presetCtx);
-	assert(installed === undefined && activeHeaderPreset() === "Pi", "Pi clears the custom header");
+	setHeaderPreset("Pi (system)", presetCtx);
+	assert(installed === undefined && activeHeaderPreset() === "Pi (system)", "Pi (system) clears the custom header");
 	setHeaderPreset("Arnative (Full)", presetCtx);
 	assert(typeof installed === "function" && activeHeaderPreset() === "Arnative (Full)", "Arnative (Full) installs the header factory");
 
