@@ -4,6 +4,9 @@
  * shared with the Model tab.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { boxEdge, boxRow } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
@@ -12,7 +15,11 @@ import { collectUsageSummary, formatTokens, getModelAllTimeUsage, type UsageSumm
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
 	if (n < 0.01) return "<$0.01";
-	if (n < 1000) return `$${n.toFixed(2)}`;
+	if (n < 1000) {
+		// Rounding at the boundary used to print "$1000.00" instead of "$1.0k".
+		const s = n.toFixed(2);
+		return s === "1000.00" ? "$1.0k" : `$${s}`;
+	}
 	return `$${(n / 1000).toFixed(1)}k`;
 }
 
@@ -147,9 +154,9 @@ export class UsageModalComponent implements Component {
 		// arnative chat-column box wraps title + table + hint, full width.
 		// Round ends (╭─╮ / ╰─╯); sides + divider from lib/box.ts (single definition).
 		const boxW = width;
-		const tint = (s: string) => th.fg("tint", s);
-		const hline = (l: string, r: string) => boxEdge(l, r, boxW, tint);
-		const row = (text: string) => boxRow(text, boxW, tint);
+		const soft = (s: string) => th.fg("accentSoft", s);
+		const hline = (l: string, r: string) => boxEdge(l, r, boxW, soft);
+		const row = (text: string) => boxRow(text, boxW, soft);
 		const rule = () => hline("├", "┤");
 
 		const rows = this.buildFlatRows();
@@ -208,7 +215,7 @@ export class UsageModalComponent implements Component {
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			const nameColor = isSelected ? "accent" : item.type === "provider" ? "tint" : "text";
+			const nameColor = isSelected ? "accent" : item.type === "provider" ? "accentSoft" : "text";
 			const valColor = isSelected ? "accent" : "dim";
 
 			const cName = formatCol(th.fg(nameColor, isSelected ? bold(item.label) : item.label), colW.name, false);
@@ -228,14 +235,14 @@ export class UsageModalComponent implements Component {
 
 		// Total row
 		const t = this.summary.totals;
-		const totalName = formatCol(th.fg("tint", bold("Total")), colW.name, false);
-		const totalSess = formatCol(th.fg("tint", bold(formatCount(t.sessions))), colW.sessions);
-		const totalMsgs = formatCol(th.fg("tint", bold(formatCount(t.msgs))), colW.msgs);
-		const totalToks = formatCol(th.fg("tint", bold(formatTokens(t.totalTokens))), colW.tokens);
-		const totalInp = formatCol(th.fg("tint", bold(formatTokens(t.input))), colW.inp);
-		const totalOut = formatCol(th.fg("tint", bold(formatTokens(t.output))), colW.out);
-		const totalCache = formatCol(th.fg("tint", bold(formatTokens(t.cacheRead))), colW.cache);
-		const totalCost = formatCol(th.fg("tint", bold(formatCost(t.cost))), colW.cost);
+		const totalName = formatCol(th.fg("accentSoft", bold("Total")), colW.name, false);
+		const totalSess = formatCol(th.fg("accentSoft", bold(formatCount(t.sessions))), colW.sessions);
+		const totalMsgs = formatCol(th.fg("accentSoft", bold(formatCount(t.msgs))), colW.msgs);
+		const totalToks = formatCol(th.fg("accentSoft", bold(formatTokens(t.totalTokens))), colW.tokens);
+		const totalInp = formatCol(th.fg("accentSoft", bold(formatTokens(t.input))), colW.inp);
+		const totalOut = formatCol(th.fg("accentSoft", bold(formatTokens(t.output))), colW.out);
+		const totalCache = formatCol(th.fg("accentSoft", bold(formatTokens(t.cacheRead))), colW.cache);
+		const totalCost = formatCol(th.fg("accentSoft", bold(formatCost(t.cost))), colW.cost);
 
 		out.push(row("  " + totalName + totalSess + totalMsgs + totalToks + totalInp + totalOut + totalCache + totalCost));
 
@@ -271,6 +278,12 @@ if (isMain(import.meta.url)) {
 	assert(formatCost(0.004) === "<$0.01", "formatCost 0.004 = <$0.01");
 	assert(formatCost(12.345) === "$12.35", "formatCost 12.345 = $12.35");
 	assert(formatCost(1234.5) === "$1.2k", "formatCost 1234.5 = $1.2k");
+	// Boundary regressions: rounding used to print "1000k" / "$1000.00".
+	assert(formatTokens(999_500) === "999.5k", "formatTokens stays k below 1M");
+	assert(formatTokens(999_999) === "1M", "formatTokens promotes a k value that rounds to 1000");
+	assert(formatTokens(999_999_999) === "1B", "formatTokens promotes an M value that rounds to 1000");
+	assert(formatTokens(9_999) === "10k", "formatTokens strips a .0 k tail");
+	assert(formatCost(999.996) === "$1.0k", "formatCost rolls over at $1000");
 
 	const summary = collectUsageSummary();
 	assert(summary.providers.length > 0, "collectUsageSummary detects providers");
@@ -280,6 +293,17 @@ if (isMain(import.meta.url)) {
 
 	const modelUsage = getModelAllTimeUsage("gemini-3.8-flash");
 	assert(modelUsage.input > 0, "getModelAllTimeUsage reads input tokens for gemini-3.8-flash");
+	assert(
+		getModelAllTimeUsage(undefined).input === 0 && getModelAllTimeUsage(undefined).output === 0,
+		"getModelAllTimeUsage without a model id matches nothing (no grand total)",
+	);
+
+	// Disk cache pruning: no cache key may point at a session file that is gone.
+	const cacheFile = join(getAgentDir(), "arnative-usage-cache.json");
+	if (existsSync(cacheFile)) {
+		const raw = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, unknown>;
+		assert(Object.keys(raw).every((k) => existsSync(k)), "usage disk cache prunes deleted session files");
+	}
 
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m`,

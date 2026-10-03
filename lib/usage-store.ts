@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export interface UsageEntry {
+interface UsageEntry {
 	provider: string;
 	model: string;
 	input: number;
@@ -19,14 +19,14 @@ export interface UsageEntry {
 	cost: number;
 }
 
-export interface FileCacheItem {
+interface FileCacheItem {
 	mtimeMs: number;
 	size: number;
 	v?: number;
 	entries: UsageEntry[];
 }
 
-export interface UsageModelStats {
+interface UsageModelStats {
 	name: string;
 	sessions: number;
 	msgs: number;
@@ -37,7 +37,7 @@ export interface UsageModelStats {
 	cost: number;
 }
 
-export interface UsageProviderStats {
+interface UsageProviderStats {
 	name: string;
 	sessions: number;
 	msgs: number;
@@ -62,20 +62,19 @@ export interface UsageSummary {
 	};
 }
 
+/** Scaled value with 1 decimal ("2.5k"); a value that rounds up to the next unit is promoted (999,999 -> "1M", not "1000k"). */
+const fmtUnit = (v: number, unit: string, next: string): string => {
+	const s = v.toFixed(1).replace(/\.0$/, "");
+	return s === "1000" ? `1${next}` : `${s}${unit}`;
+};
+
 /** Token count with k/M/B units; 0 or negative = "-". */
 export function formatTokens(n: number): string {
 	if (!n || n <= 0) return "-";
 	if (n < 1000) return String(n);
-	if (n < 1_000_000) {
-		const k = n / 1000;
-		return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-	}
-	if (n < 1_000_000_000) {
-		const m = n / 1_000_000;
-		return `${m.toFixed(1).replace(/\.0$/, "")}M`;
-	}
-	const b = n / 1_000_000_000;
-	return `${b.toFixed(1).replace(/\.0$/, "")}B`;
+	if (n < 1_000_000) return fmtUnit(n / 1000, "k", "M");
+	if (n < 1_000_000_000) return fmtUnit(n / 1_000_000, "M", "B");
+	return fmtUnit(n / 1_000_000_000, "B", "T");
 }
 
 const CACHE_FILE_PATH = join(getAgentDir(), "arnative-usage-cache.json");
@@ -258,6 +257,15 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		}
 	}
 
+	// Session files deleted on disk must leave the cache, or the file grows forever.
+	const known = new Set(files);
+	for (const k of diskCache.keys()) {
+		if (!known.has(k)) {
+			diskCache.delete(k);
+			cacheDirty = true;
+		}
+	}
+
 	if (cacheDirty) {
 		saveDiskCache(diskCache);
 	}
@@ -328,7 +336,6 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 
 // Match model names across id shapes ("gemini-3.8-flash", "vendor/gemini-…").
 const modelMatches = (mNameLower: string, targetLower: string): boolean =>
-	!targetLower ||
 	mNameLower === targetLower ||
 	mNameLower.endsWith("/" + targetLower) ||
 	mNameLower.split(":")[0] === targetLower ||
@@ -336,12 +343,14 @@ const modelMatches = (mNameLower: string, targetLower: string): boolean =>
 
 /** All-time usage for one model (same numbers as /usage; the active session is already in its own file). */
 export function getModelAllTimeUsage(modelId?: string): { input: number; output: number; cacheRead: number } {
+	// An empty target used to match EVERY model -> the Model tab showed the grand total under "No Model".
+	if (!modelId) return { input: 0, output: 0, cacheRead: 0 };
 	const summary = collectUsageSummary();
 	let inp = 0;
 	let out = 0;
 	let read = 0;
 
-	const target = (modelId || "").toLowerCase();
+	const target = modelId.toLowerCase();
 	for (const p of summary.providers) {
 		for (const m of p.models) {
 			if (modelMatches(m.name.toLowerCase(), target)) {
