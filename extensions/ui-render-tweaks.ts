@@ -11,10 +11,13 @@
  *    box; our renderer shows the content as-is.
  * 5. `↓ Jump to latest message` pill (fullscreen): bg selectedBg (grey) -> accent,
  *    text darkened (theme canvas) so contrast stays high (9.6:1).
+ * 6. `ctx.ui.select` rows: pi paints the whole selected row accent -> keep accent on
+ *    the `→` marker and `·` separators, selected text in soft.
  */
 import {
 	CompactionSummaryMessageComponent,
 	CustomMessageComponent,
+	ExtensionSelectorComponent,
 	getMarkdownTheme,
 	initTheme,
 	InteractiveMode,
@@ -37,8 +40,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
-import { ansiBgOpen, stripAnsi, themeOf } from "../lib/ansi.ts";
+import { ansiBgOpen, stripAnsi, themeOf, accentSoftOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
+import { contrast, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
@@ -153,6 +157,43 @@ if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[PILL_KEY
 			return withAccentPill(this, () => origComposite.call(this, screen, layout, width), activeThemeProxy);
 		};
 	}
+}
+
+// 6. Select menus (ctx.ui.select -> ExtensionSelectorComponent.updateList): pi colors the
+// whole selected row accent. Arnative keeps accent on the `→` marker and `·` separators
+// and moves the selected text to soft (accent on themes without the token).
+const SELECT_ROW_KEY = Symbol.for("pi-arnative.selectRowColors");
+
+/** Selected row body: `·` separators accent, the text around them soft. */
+export function selectRowText(row: string, th: { fg(c: string, t: string): string }): string {
+	const soft = accentSoftOf(th);
+	return row
+		.split("·")
+		.map((part) => soft(part))
+		.join(th.fg("accent", "·"));
+}
+
+if (ExtensionSelectorComponent?.prototype && !(globalThis as Record<symbol, boolean>)[SELECT_ROW_KEY]) {
+	(globalThis as Record<symbol, boolean>)[SELECT_ROW_KEY] = true;
+	const proto = ExtensionSelectorComponent.prototype as unknown as {
+		options: string[];
+		selectedIndex: number;
+		listContainer: { clear(): void; addChild(c: unknown): void };
+		updateList(): void;
+	};
+	const origUpdateList = proto.updateList;
+	proto.updateList = function (this: typeof proto) {
+		const th = activeThemeProxy;
+		if (!th) return origUpdateList.call(this); // no theme yet -> pi's default
+		this.listContainer.clear();
+		for (let i = 0; i < this.options.length; i++) {
+			const text =
+				i === this.selectedIndex
+					? th.fg("accent", "→ ") + selectRowText(this.options[i]!, th)
+					: `  ${th.fg("text", this.options[i]!)}`;
+			this.listContainer.addChild(new Text(text, 1, 0));
+		}
+	};
 }
 
 export default function uiRenderTweaks(pi: ExtensionAPI) {
@@ -339,10 +380,13 @@ if (isMain(import.meta.url)) {
 		vars: Record<string, string>;
 		colors: Record<string, string>;
 	};
-	const hex = (tok: string) => themeJson.vars[themeJson.colors[tok] ?? tok];
+	// Themes store OKLCH; the Theme class shipped in node_modules (0.87.1) only parses
+	// hex, so resolve every token through lib/color before constructing it.
+	const resolve = (value: string) => toHex(themeJson.vars[value] ?? value);
+	const hex = (tok: string) => resolve(themeJson.colors[tok] ?? tok);
 	// The built-in theme adds fallbacks (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
 	// so the fg map must be complete; take the whole palette like pi's loader does.
-	const fgPalette = Object.fromEntries(Object.entries(themeJson.colors).map(([k, v]) => [k, themeJson.vars[v] ?? v]));
+	const fgPalette = Object.fromEntries(Object.entries(themeJson.colors).map(([k, v]) => [k, resolve(v)]));
 	const thPill = new Theme(fgPalette, { toolPendingBg: hex("toolPendingBg"), selectedBg: hex("selectedBg") }, "truecolor");
 	const pillOriginal = thPill.bg("selectedBg", thPill.fg("text", " ↓ Jump to latest message · End "));
 	const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(";");
@@ -360,6 +404,14 @@ if (isMain(import.meta.url)) {
 	assert(rejected, "pi really rejects bg('accent') -> the SGR direction must be swapped");
 	assert(accentPill("other text", thPill) === "other text", "pill: non-pill text untouched");
 	assert(accentPill(pillOriginal, null) === pillOriginal, "pill: no theme -> passed through");
+
+	// select rows: `→` + `·` stay accent, selected text moves to accentSoft
+	const tagFg = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
+	assert(
+		selectRowText("Routing  ·  off", tagFg) === "<accentSoft>Routing  </accentSoft><accent>·</accent><accentSoft>  off</accentSoft>",
+		"select row: separators accent, text accentSoft",
+	);
+	assert(selectRowText("plain", tagFg) === "<accentSoft>plain</accentSoft>", "select row without separators: all accentSoft");
 
 	// Theme variants: every themes/*.json must be valid — name = file name, all
 	// required colors present, valid hex, and contrast measured against that theme's
@@ -380,16 +432,7 @@ if (isMain(import.meta.url)) {
 		thinkingOff: 1.3, thinkingMinimal: 1.3, thinkingLow: 2.0,
 		thinkingMedium: 2.7, thinkingHigh: 3.6, thinkingXhigh: 4.0,
 	};
-	const luminance = (h: string) => {
-		const ch = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) =>
-			c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
-		);
-		return 0.2126 * ch[0]! + 0.7152 * ch[1]! + 0.0722 * ch[2]!;
-	};
-	const contrast = (a: string, b: string) => {
-		const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m);
-		return (x! + 0.05) / (y! + 0.05);
-	};
+	const isColor = (v: string) => /^#[0-9a-f]{6}$/i.test(v) || parseOklch(v) !== null;
 	for (const f of readdirSync(themesDir).filter((n) => n.endsWith(".json")).sort()) {
 		const d = JSON.parse(readFileSync(new URL(f, themesDir), "utf8")) as {
 			name: string;
@@ -399,28 +442,44 @@ if (isMain(import.meta.url)) {
 		assert(d.name === f.replace(/\.json$/, ""), `theme ${f}: name = file name`);
 		const missing = required.filter((k) => !(k in d.colors));
 		assert(missing.length === 0, `theme ${f}: required colors complete (missing ${missing.join(",")})`);
-		// colors values may only be: hex, 256-index, empty, or a REAL variable name —
+		// colors values may only be: hex, oklch, 256-index, empty, or a REAL variable name —
 		// a bare color name (e.g. "muted") makes pi reject the theme with no clear reason.
 		for (const [tok, value] of Object.entries(d.colors)) {
 			if (typeof value !== "string") continue;
-			if (value === "" || /^#[0-9a-f]{6}$/i.test(value) || value in d.vars) continue;
-			assert(false, `theme ${f}: colors.${tok} = "${value}" is not hex/var`);
+			if (value === "" || isColor(value) || value in d.vars) continue;
+			assert(false, `theme ${f}: colors.${tok} = "${value}" is not hex/oklch/var`);
 		}
-		const hex = (tok: string) => d.vars[d.colors[tok] ?? tok] ?? d.colors[tok];
+		// Every var must itself be a real color, and no two vars may resolve to the
+		// same value — near-identical hand-written hex was the original problem.
+		for (const [name, value] of Object.entries(d.vars)) {
+			assert(isColor(value), `theme ${f}: vars.${name} is a color (${value})`);
+		}
+		const seenVar = new Map<string, string>();
+		for (const [name, value] of Object.entries(d.vars)) {
+			const h = toHex(value);
+			assert(!seenVar.has(h), `theme ${f}: vars.${name} duplicates vars.${seenVar.get(h)} (${h})`);
+			seenVar.set(h, name);
+		}
+		const hex = (tok: string) => toHex(d.vars[d.colors[tok] ?? tok] ?? d.colors[tok]!);
 		for (const tok of ["accent", "text", "selectedBg", "toolPendingBg"]) {
-			assert(/^#[0-9a-f]{6}$/i.test(hex(tok)), `theme ${f}: ${tok} is hex (${hex(tok)})`);
+			assert(isColor(d.vars[d.colors[tok] ?? tok] ?? d.colors[tok]!), `theme ${f}: ${tok} is a color (${hex(tok)})`);
 		}
 		// Accent pill: accent bg + toolPendingBg colored text.
 		assert(contrast(hex("accent"), hex("toolPendingBg")) >= 4.5, `theme ${f}: accent vs toolPendingBg contrast >= 4.5`);
-		assert(/^#[0-9a-f]{6}$/i.test(d.vars.softCyan ?? ""), `theme ${f}: vars.softCyan (tint) is hex`);
+		assert(isColor(d.vars.accentSoft ?? ""), `theme ${f}: vars.accentSoft is a color`);
 		const canvas = hex("userMessageBg");
 		for (const tok of Object.keys(d.colors)) {
 			if (nonText.has(tok) || tok === "thinkingMax") continue;
 			const color = hex(tok);
-			if (!/^#[0-9a-f]{6}$/i.test(color)) continue; // 256-color index: let pi judge it
 			const limit = ramp[tok] ?? (secondary.has(tok) ? 2.0 : 3.0);
 			const c = contrast(color, canvas);
 			assert(c >= limit, `theme ${f}: ${tok} vs canvas contrast ${c.toFixed(2)} < ${limit}`);
+		}
+		// Thinking ramp must rise monotonically (Off < Minimal < … < Xhigh).
+		const rampKeys = ["thinkingOff", "thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh"];
+		for (let i = 1; i < rampKeys.length; i++) {
+			const [lo, hi] = [hex(rampKeys[i - 1]!), hex(rampKeys[i]!)];
+			assert(contrast(lo, canvas) < contrast(hi, canvas), `theme ${f}: ${rampKeys[i]} is brighter than ${rampKeys[i - 1]}`);
 		}
 		// Tool box text must be readable on the success background AND in errors, and
 		// the error text in the error box — three pairs that used to pass (3.48-4.46)
@@ -433,8 +492,13 @@ if (isMain(import.meta.url)) {
 			assert(c >= 4.5, `theme ${f}: ${fg} on ${bg} contrast ${c.toFixed(2)} < 4.5`);
 		}
 		// The error box must not be heavier than the success box (matching background luminance).
-		const [lErr, lOk] = [luminance(hex("toolErrorBg")), luminance(hex("toolSuccessBg"))];
-		assert(Math.abs(lErr - lOk) / Math.max(lErr, lOk) <= 0.25, `theme ${f}: toolErrorBg vs toolSuccessBg weight (${lErr.toFixed(3)} vs ${lOk.toFixed(3)})`);
+		const [lErr, lOk] = [hex("toolErrorBg"), hex("toolSuccessBg")].map((h) => {
+			const ch = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) =>
+				c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
+			);
+			return 0.2126 * ch[0]! + 0.7152 * ch[1]! + 0.0722 * ch[2]!;
+		});
+		assert(Math.abs(lErr! - lOk!) / Math.max(lErr!, lOk!) <= 0.25, `theme ${f}: toolErrorBg vs toolSuccessBg weight (${lErr!.toFixed(3)} vs ${lOk!.toFixed(3)})`);
 		// Scrollbar thumb & highlight must be distinguishable from track/selection (they used to be identical).
 		assert(hex("scrollbarThumb") !== hex("scrollbarTrack"), `theme ${f}: scrollbarThumb still equals scrollbarTrack`);
 		assert(hex("searchMatchBg") !== hex("selectedBg"), `theme ${f}: searchMatchBg still equals selectedBg`);
@@ -447,7 +511,7 @@ if (isMain(import.meta.url)) {
 	assert(accentPill(pillOriginal, thEmpty) === pillOriginal, "pill: token absent -> passed through");
 	const hostPil: { scrollToEndIndicator?: () => string } = { scrollToEndIndicator: () => pillOriginal };
 	const inPill = withAccentPill(hostPil, () => hostPil.scrollToEndIndicator?.(), thPill);
-	assert(inPill.includes("\x1b[48;2;0;215;255m"), "pill: instance callback injected with accent bg");
+	assert(inPill.includes(`\x1b[48;2;${rgb(hex("accent"))}m`), "pill: instance callback injected with accent bg");
 	assert(hostPil.scrollToEndIndicator?.() === pillOriginal, "pill: original callback restored after render");
 
 	// compaction: pi's three lines -> one

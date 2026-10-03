@@ -25,6 +25,18 @@ export function themeOf<T>(ctx: unknown): T | null {
 	return (ctx as { ui?: { theme?: T } } | null | undefined)?.ui?.theme ?? null;
 }
 
+/** Painter for the `accentSoft` token, which only arnative themes define; other themes fall back to accent (probed once). */
+export function accentSoftOf(th: { fg?(c: string, t: string): string } | null): (s: string) => string {
+	const fg = th?.fg?.bind(th);
+	if (!fg) return (s) => s;
+	try {
+		fg("accentSoft", "");
+		return (s) => fg("accentSoft", s);
+	} catch {
+		return (s) => fg("accent", s);
+	}
+}
+
 // Self-check: `node lib/ansi.ts`
 if (isMain(import.meta.url)) {
 	assert(ansiBgOpen(null, "selectedBg") === "", "no theme: empty");
@@ -33,5 +45,16 @@ if (isMain(import.meta.url)) {
 	assert(stripAnsi("x\x1b[K") === "x", "stripAnsi removes non-SGR CSI too");
 	assert(themeOf({ ui: { theme: "T" } }) === "T", "themeOf reads ctx.ui.theme");
 	assert(themeOf(null) === null, "themeOf tolerates a missing ctx");
+
+	const tag = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
+	assert(accentSoftOf(tag)("x") === "<accentSoft>x</accentSoft>", "accentSoftOf uses accentSoft when the theme defines it");
+	const noSoft = {
+		fg: (c: string, t: string) => {
+			if (c === "accentSoft") throw new Error("Unknown theme color: accentSoft");
+			return `<${c}>${t}</${c}>`;
+		},
+	};
+	assert(accentSoftOf(noSoft)("x") === "<accent>x</accent>", "accentSoftOf falls back to accent without the token");
+	assert(accentSoftOf(null)("x") === "x", "accentSoftOf without a theme is identity");
 	console.log("lib/ansi.ts OK");
 }
