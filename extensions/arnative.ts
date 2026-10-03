@@ -112,9 +112,13 @@ export class ListPicker implements Component {
 			const name = this.names[i]!;
 			const isSelected = i === this.selected;
 			const mark = name === this.applied ? "● " : "  ";
-			const body = truncateToWidth(`${isSelected ? "▸" : " "} ${mark}${name}`, width - 4);
+			const plain = truncateToWidth(`${isSelected ? "▸" : " "} ${mark}${name}`, width - 4);
+			// Preset rows end in a parenthetical (`Pi (system)`, `Arnative (Full)`): the suffix reads softer than the name.
+			const suffix = /(\(.*\))$/.exec(plain)?.[1] ?? "";
+			const head = plain.slice(0, plain.length - suffix.length);
+			const tail = suffix ? th.fg("dim", suffix) : "";
 			// Same rule as the select dialogs: marker accent, name soft.
-			out.push(row(isSelected ? th.fg("accent", body.slice(0, 2 + mark.length)) + soft(body.slice(2 + mark.length)) : th.fg("text", body)));
+			out.push(row(isSelected ? th.fg("accent", head.slice(0, 2 + mark.length)) + soft(head.slice(2 + mark.length)) + tail : th.fg("text", head) + tail));
 		}
 		out.push(row(""));
 		out.push(row(th.fg("dim", this.text.footer)));
@@ -168,7 +172,7 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<void> => {
 
 const FOOTERS_PICKER_TEXT: ListPickerText = {
 	title: "Arnative · Footers",
-	subtitle: "Selection applies live — Arnative (Full) or Pi's built-in footer.",
+	subtitle: "Selection applies live — custom footer or built-in.",
 	footer: "[↑↓] Preview live  [Enter] Keep  [Esc] Revert",
 };
 
@@ -204,7 +208,7 @@ const openFooters = async (ctx: ExtensionCommandContext): Promise<void> => {
 
 const HEADERS_PICKER_TEXT: ListPickerText = {
 	title: "Arnative · Headers",
-	subtitle: "Selection applies live — Arnative (Full) or Pi's built-in header.",
+	subtitle: "Selection applies live — custom header or built-in.",
 	footer: "[↑↓] Preview live  [Enter] Keep  [Esc] Revert",
 };
 
@@ -341,19 +345,19 @@ if (isMain(import.meta.url)) {
 	assert(reverted === 1 && done === 2, "Esc reverts after preview");
 
 	// Headers reuses the same picker with its own copy and presets.
-	assert(HEADER_PRESETS[0] === "Arnative (Full)", "first preset is Arnative (Full)");
+	assert(HEADER_PRESETS[0] === "Pi (system)", "built-in header preset is listed first");
 	const headerPicker = new ListPicker(fakeTheme, [...HEADER_PRESETS], "Arnative (Full)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, HEADERS_PICKER_TEXT);
 	const headerLines = headerPicker.render(50);
 	assert(headerLines.some((l) => l.includes("Arnative · Headers")), "headers picker title");
 	assert(headerLines.some((l) => l.includes("● Arnative (Full)")), "headers picker marks the active preset");
-	assert(headerLines.some((l) => l.includes("  Pi")), "headers picker lists Pi");
+	assert(headerLines.some((l) => l.includes("  Pi (system)")), "headers picker lists the built-in preset");
 
 	// Footers reuses the same picker too.
-	assert(FOOTER_PRESETS[0] === "Arnative (Full)", "first footer preset is Arnative (Full)");
-	const footerPicker = new ListPicker(fakeTheme, [...FOOTER_PRESETS], "Pi", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, FOOTERS_PICKER_TEXT);
+	assert(FOOTER_PRESETS[0] === "Pi (system)", "built-in footer preset is listed first");
+	const footerPicker = new ListPicker(fakeTheme, [...FOOTER_PRESETS], "Pi (system)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, FOOTERS_PICKER_TEXT);
 	const footerLines = footerPicker.render(50);
 	assert(footerLines.some((l) => l.includes("Arnative · Footers")), "footers picker title");
-	assert(footerLines.some((l) => l.includes("● Pi")), "footers picker marks the active preset");
+	assert(footerLines.some((l) => l.includes("● Pi (system)")), "footers picker marks the active preset");
 
 	console.log("arnative.ts self-check OK");
 }

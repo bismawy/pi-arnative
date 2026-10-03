@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Changed
+- `/arnative headers` and `/arnative footers` picker rows are reordered built-in first (`Pi (system)`, `Arnative (Full)`) and the parenthetical suffix now renders in the theme's `dim` token, so the preset name carries the row and the qualifier reads as a footnote (`extensions/arnative.ts`).
+- Preset ids renamed: `Pi` → `Pi (system)`. `Arnative (Full)` is still the default and the header/footer slot logic is unchanged.
+- Picker subtitles no longer repeat the preset names: "Selection applies live — custom header or built-in."
 - README shows only `assets/pi-arnative.webp` as the hero image; the full-width `assets/banner.webp` stays reserved for the pi.dev package page via `pi.image`.
 - `package.json` `description` now leads with the README tagline ("Refined aesthetics. Cohesive tools. Built for Pi.") followed by the capability summary, per the `/arnative-pi` manifest standard — pi.dev/packages renders this field verbatim as the package card description.
 

@@ -4,7 +4,7 @@
  * Rows 2-3: extension status (mcp first) ......... tok/s · cache · token,
  * each side wrapped inside its half of the width and paired row by row.
  *
- * Preset (`/arnative footers`): "Arnative (Full)" (default) or "Pi" (built-in footer), live.
+ * Preset (`/arnative footers`): "Arnative (Full)" (default) or "Pi (system)" (built-in footer), live.
  * Transcript clock & bubble bg: extensions/timestamps.ts
  * /new header: extensions/section-headers.ts
  * Selection + box reload: extensions/ui-render-tweaks.ts
@@ -27,10 +27,11 @@ import { formatTokens } from "../lib/usage-store.ts";
 // fire this twice even when the terminal reports event types (Kitty flag 2).
 
 // Footer preset chosen through `/arnative footers`. "Arnative (Full)" = this extension's
-// 3-row grid footer; "Pi" = pi's built-in footer (the boxed editor stays arnative in both —
-// pi's `setEditorComponent()` would close the picker mid-preview). The picker lives in
-// arnative.ts, so the choice is shared through globalThis like the header preset.
-export const FOOTER_PRESETS = ["Arnative (Full)", "Pi"] as const;
+// 3-row grid footer; "Pi (system)" = pi's built-in footer (the boxed editor stays arnative
+// in both — pi's `setEditorComponent()` would close the picker mid-preview). The picker
+// lives in arnative.ts, so the choice is shared through globalThis like the header preset.
+// Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
+export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
@@ -47,7 +48,7 @@ export function activeFooterPreset(): FooterPreset {
  * `disposeActiveSelector()`, which would close the `/arnative` picker mid-preview.
  */
 export function applyFooterPreset(ctx: ExtensionContext): void {
-	if (activeFooterPreset() === "Pi") {
+	if (activeFooterPreset() === "Pi (system)") {
 		ctx.ui?.setFooter?.(undefined);
 		return;
 	}
@@ -67,8 +68,8 @@ if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean
 	(globalThis as Record<symbol, boolean>)[PATCHED_KEY] = true;
 	const origRender = FooterComponent.prototype.render;
 	FooterComponent.prototype.render = function (width: number): string[] {
-		// "Pi" preset = pi's own footer, so keep its stock line count.
-		if (activeFooterPreset() === "Pi") return origRender.call(this, width);
+		// "Pi (system)" preset = pi's own footer, so keep its stock line count.
+		if (activeFooterPreset() === "Pi (system)") return origRender.call(this, width);
 		const lines = origRender.call(this, width);
 		return lines.length > 2 ? lines.slice(0, 2) : lines;
 	};
@@ -893,9 +894,10 @@ if (isMain(import.meta.url)) {
 	assert(git !== null && git.branch.length > 0, "queued git refresh re-ran on the newest cwd (not dropped)");
 	rmSync(noGit, { recursive: true, force: true });
 
-	// Footer presets: Arnative (Full) is the default; Pi hands the footer slot back to pi (the editor stays arnative).
+	// Footer presets: Arnative (Full) is the default; Pi (system) hands the footer slot back to pi (the editor stays arnative).
 	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 2, "Arnative (Full) is the default footer preset");
-	assert(markedLabels(FOOTER_PRESETS, "Pi").join(" | ") === "  Arnative (Full) | ● Pi", "footer preset labels mark the active one");
+	assert(FOOTER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full)", "built-in preset is listed first");
+	assert(markedLabels(FOOTER_PRESETS, "Pi (system)").join(" | ") === "● Pi (system) |   Arnative (Full)", "footer preset labels mark the active one");
 	let footerCleared = 0;
 	let editorTouched = 0;
 	const presetCtx: any = {
@@ -904,8 +906,8 @@ if (isMain(import.meta.url)) {
 			setEditorComponent: () => { editorTouched++; },
 		},
 	};
-	setFooterPreset("Pi", presetCtx);
-	assert(footerCleared === 1 && editorTouched === 0 && activeFooterPreset() === "Pi", "Pi clears the footer only (an editor swap would close the picker)");
+	setFooterPreset("Pi (system)", presetCtx);
+	assert(footerCleared === 1 && editorTouched === 0 && activeFooterPreset() === "Pi (system)", "Pi (system) clears the footer only (an editor swap would close the picker)");
 	let registered = 0;
 	(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = () => { registered++; };
 	setFooterPreset("Arnative (Full)", presetCtx);
