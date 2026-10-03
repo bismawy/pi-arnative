@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- README shows only `assets/pi-arnative.webp` as the hero image; the full-width `assets/banner.webp` stays reserved for the pi.dev package page via `pi.image`.
+- `package.json` `description` now leads with the README tagline ("Refined aesthetics. Cohesive tools. Built for Pi.") followed by the capability summary, per the `/arnative-pi` manifest standard — pi.dev/packages renders this field verbatim as the package card description.
+
 ## [0.3.0] - 2026-10-03
 
 ### Fixed
