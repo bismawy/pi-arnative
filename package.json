@@ -1,6 +1,6 @@
 {
   "name": "@bismawy/pi-arnative",
-  "version": "0.2.12",
+  "version": "0.3.0",
   "description": "Arnative look for Pi: warm-neutral themes, rounded tool boxes, tabbed header, compact footer, transcript clock, and a /usage dashboard.",
   "keywords": [
     "pi-package",
@@ -22,6 +22,7 @@
     "lib",
     "themes",
     "CHANGELOG.md",
+    "LICENSE",
     "README.md"
   ],
   "pi": {
@@ -39,8 +40,8 @@
     "@earendil-works/pi-tui": "*"
   },
   "scripts": {
-    "dev": "pi --extension ./extensions/tools.ts --extension ./extensions/section-headers.ts --extension ./extensions/footer.ts --extension ./extensions/timestamps.ts --extension ./extensions/ui-render-tweaks.ts --extension ./extensions/usage.ts",
-    "test": "node lib/box.ts && node lib/ansi.ts && node lib/shortcuts.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts",
+    "dev": "pi --extension ./extensions/tools.ts --extension ./extensions/section-headers.ts --extension ./extensions/footer.ts --extension ./extensions/timestamps.ts --extension ./extensions/ui-render-tweaks.ts --extension ./extensions/usage.ts --extension ./extensions/arnative.ts",
+    "test": "node lib/box.ts && node lib/ansi.ts && node lib/shortcuts.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/section-headers.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts && node extensions/arnative.ts",
     "themes": "node themes/gen-themes.mjs"
   }
 }

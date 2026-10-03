@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.3.0] - 2026-10-03
+
+### Fixed
+- `package.json` `files` now ships `LICENSE`; README hero banner uses the standard full-width `assets/banner.webp`.
+- Unit-boundary display bugs in the usage numbers (`lib/usage-store.ts` `formatTokens`, `extensions/usage.ts` `formatCost`): a value that rounds up to the next unit printed `"1000k"` / `"$1000.00"` instead of `"1M"` / `"$1.0k"`; every unit now promotes through `fmtUnit()` (also strips a `.0` tail below 10k, so `9,999` is `"10k"` not `"10.0k"`).
+- `getModelAllTimeUsage()` without a model id matched **every** model, so the header's Model tab showed the grand total under "No Model"; it now matches nothing (zeros).
+- The usage disk cache never dropped session files deleted from disk, so `~/.pi/agent/arnative-usage-cache.json` only ever grew; `collectUsageSummary()` now prunes missing files while scanning.
+- A git refresh arriving while one was in flight was dropped (early return in `refreshGit()`), so the footer's git state stayed stale until the next trigger; it is now queued (last requested cwd wins) and re-run after the in-flight one (`extensions/footer.ts`).
+- `USER_TIMESTAMPS_MAP` grew for the whole process lifetime (it survives `/reload`); `session_start` now clears it first — it is refilled from the branch right after, so it is bounded by the current session (`extensions/timestamps.ts`).
+- The footer's token usage could show numbers up to 2s stale while a reply streamed: the cache only refreshed when the branch length changed, but a stream tick mutates the last message in place. The delta of that message is now applied on top of the cached sums — O(1) per frame, always fresh, still no O(N) rescan (`getUsage()` in `extensions/footer.ts`).
+
+### Changed (breaking — theme contents)
+- All 12 `themes/*.json` are now generated from `themes/gen-themes.mjs` and store **OKLCH** values (`oklch(L% C H)`) instead of hand-written hex. `vars` was renamed to a role-based scheme (`text`→`fg`, `gray`→`fgMuted`, `dimGray`→`fgDim`, `darkGray`→`fgFaint`, `cyan`→`accentBorder`, `softCyan`→`accentSoft`, `blue`→`border`, `green/red/yellow`→`success/error/warning`, `searchBg`→`surfaceSearch`, `selectedBg`→`surfaceSelected`, `userMsgBg`→`surfaceMsg`, `toolPendingBg`→`surfaceRaised`, `toolSuccessBg`→`surfaceToolOk`, `toolErrorBg`→`surfaceToolErr`, `customMsgBg`→`surfaceCustom`); the custom `colors.tint` token was renamed to `colors.accentSoft`. Any theme copied from the old 0.2.x files must be updated by hand — there is no compatibility shim.
+- Colour sets are now derived from a shared ramp, so every theme has consistent lightness/saturation per type and no two `vars` resolve to the same value (the old base had `accent` = `cyan`, `syntaxOperator` = `syntaxPunctuation` = `text`, and variants that copied 12+ identical hex values).
+- `lib/color.ts` (new) holds the OKLCH↔sRGB math, WCAG contrast and `toHex`, shared by the generator and the theme self-check.
+
+### Changed
+- The header's `Themes` tab is gone: pi 1.0 no longer emits a startup `[Themes]` section (only Context, Skills, Prompts, Extensions), so the tab could only ever read `Themes [0]`. The theme list stays reachable through `/settings` → Theme and `/arnative themes` (`extensions/section-headers.ts`).
+- Select menus (`ctx.ui.select`, e.g. `/arnative` and `/jev-eye`): the selected row no longer turns fully accent — only the `→` marker and `·` separators keep accent, the selected text uses `accentSoft` (fallback accent on themes without the token). Live-preview theme picker follows the same rule (`extensions/ui-render-tweaks.ts`, `extensions/arnative.ts`).
+- `accentSoftOf` (accentSoft token with accent fallback) moved to `lib/ansi.ts`, shared by `tools.ts`, `usage.ts` and the new select-row patch; the theme picker no longer crashes when a built-in theme without `accentSoft` is previewed.
+- Theme self-check (`extensions/ui-render-tweaks.ts`) now accepts hex **or** validated OKLCH, converts through `lib/color.ts` before building pi's `Theme` (the bundled 0.87.1 parser only understands hex), asserts every `vars` value is unique per theme, and asserts the thinking ramp rises monotonically.
+
+### Added
+- `/arnative footers` picks the footer preset with the same live-preview picker as headers: `Arnative (Full)` (default, the 3-row grid footer) or `Pi` (pi's built-in footer, stock line count). Moving the selection swaps the footer on the spot, Enter keeps it, Esc restores the preset the picker opened with. The boxed editor is registered once per session and stays arnative in both presets — pi's `setEditorComponent()` calls `disposeActiveSelector()`, which would close the picker mid-preview (`extensions/footer.ts`, `extensions/arnative.ts`).
+- `/arnative headers` picks the header preset: `Arnative (Full)` (default, this extension's header) or `Pi` (pi's built-in header). It uses the same live-preview picker as themes — moving the selection swaps the header on the spot via `ctx.ui.setHeader()`, Enter keeps it, Esc restores the preset the picker opened with. The choice lasts for the process (a new pi launch starts at `Arnative (Full)` again) (`extensions/section-headers.ts`, `extensions/arnative.ts`).
+- `/arnative <menu>` settings command, shaped like `/jev-eye`: no argument opens the menu picker with autocomplete; first menu `themes` is a live-preview picker over the `/settings` → Theme list — moving the selection applies the theme instantly via `ctx.ui.setTheme()`, Enter keeps it, Esc reverts to the theme opened with (`extensions/arnative.ts`). The picker component (`ListPicker`) is shared by the themes, headers and footers menus, and the three identical picker-label helpers were consolidated into `markedLabels()` in `lib/format.ts`.
+
+### Changed
+- Header layout reworked (`extensions/section-headers.ts`): the left column is the pi block mark with `pi vX` directly under it (10 columns wide). The info column starts with `Arnative vY · Welcome back, <User>` (username's first letter capitalized via `capitalize()`), then the tab box and the tab data — no blank lines, so no row is left half empty. The box is 7 lines.
+- The mark is the pi logo's grid rendered at terminal aspect (8 columns x 4 lines) instead of the 6-line "Pi" wordmark, and keeps the old wordmark's two-tone: P (the salmon/blue structure, columns 0-2) in the theme accent, i (the yellow bar, column 3) in the theme tint.
+- The column divider joins the frame with `┬`/`┴` (`render()`, `border()`), so the left/right split runs the full height with no gap at the top or bottom border.
+- The tab box lost its ` Menu ` label, and its tab dividers now join its own borders with `┬`/`┴` (`tabRule()`, `tabSeps`), so each divider is full height instead of a lone `│` on the middle row.
+
 ## [0.2.12] - 2026-10-02
 
 ### Changed
