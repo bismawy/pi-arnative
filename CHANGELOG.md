@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.4] - 2026-10-04
 
 ### Added
 - `scripts/release-check.mjs`, a read-only release preflight with one stage per step of the release (`pre-tag`, `pre-publish`, `post-publish`): it verifies a clean tree on `main` in sync with `origin/main`, no open pull requests, the `CHANGELOG.md` entry, whether the tag exists **and is pushed**, and whether the registry already serves the version. It never writes, tags, pushes or publishes.
