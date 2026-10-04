@@ -13,7 +13,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hexToOklch, oklchToRgb } from "../lib/color.ts";
+import { parseOklch, oklchToRgb } from "../lib/color.ts";
 import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -44,13 +44,14 @@ const ACCENT_OFFSET = { heading: 0, link: 0, label: 60 };
 // --- theme parameters ------------------------------------------------------
 
 /**
- * `accent` seeds only the hue; `chroma` is the normalized accent chroma.
+ * `accent` is the seed color (OKLCH, hue + reference lightness/chroma) — a short
+ * vector, not a styling value; `chroma` is the normalized accent chroma.
  * `hues` overrides the derived hue per role (keyword/func/… /heading/link/label)
  * to keep the strong palettes recognisable.
  */
 const THEMES = {
 	arnative: {
-		accent: "#00d7ff",
+		accent: "oklch(81.1% 0.1455 217.709375)",
 		chroma: 0.13,
 		canvasL: 0.27,
 		neutralHue: 232,
@@ -58,7 +59,7 @@ const THEMES = {
 		hues: { heading: 75, label: 282 },
 	},
 	"arnative-sun": {
-		accent: "#ffb454",
+		accent: "oklch(82.4% 0.1408 70.170730)",
 		chroma: 0.14,
 		canvasL: 0.27,
 		neutralHue: 70,
@@ -66,7 +67,7 @@ const THEMES = {
 		hues: { heading: 60, label: 330 },
 	},
 	"arnative-zinc": {
-		accent: "#a1a1aa",
+		accent: "oklch(71.2% 0.0129 286.066504)",
 		chroma: 0.02,
 		canvasL: 0.26,
 		neutralHue: 285,
@@ -74,7 +75,7 @@ const THEMES = {
 		hues: { heading: 285, label: 285 },
 	},
 	"arnative-violet": {
-		accent: "#a78bfa",
+		accent: "oklch(70.9% 0.1592 293.541199)",
 		chroma: 0.14,
 		canvasL: 0.27,
 		neutralHue: 295,
@@ -82,7 +83,7 @@ const THEMES = {
 		hues: { heading: 295, label: 330 },
 	},
 	"arnative-emerald": {
-		accent: "#6ee7b7",
+		accent: "oklch(84.5% 0.1299 164.978166)",
 		chroma: 0.12,
 		canvasL: 0.27,
 		neutralHue: 165,
@@ -90,7 +91,7 @@ const THEMES = {
 		hues: { heading: 165, label: 200 },
 	},
 	"arnative-matrix": {
-		accent: "#00ff41",
+		accent: "oklch(86.9% 0.2776 144.466116)",
 		chroma: 0.22,
 		canvasL: 0.15,
 		neutralHue: 145,
@@ -101,7 +102,7 @@ const THEMES = {
 		},
 	},
 	"arnative-cyberpunk": {
-		accent: "#ff2e97",
+		accent: "oklch(66.7% 0.2492 356.749230)",
 		chroma: 0.2,
 		canvasL: 0.16,
 		neutralHue: 275,
@@ -112,7 +113,7 @@ const THEMES = {
 		},
 	},
 	"arnative-synthwave": {
-		accent: "#ff7edb",
+		accent: "oklch(76.9% 0.1889 339.113944)",
 		chroma: 0.17,
 		canvasL: 0.22,
 		neutralHue: 300,
@@ -123,7 +124,7 @@ const THEMES = {
 		},
 	},
 	"arnative-gruvbox": {
-		accent: "#fabd2f",
+		accent: "oklch(83.3% 0.1595 82.986608)",
 		chroma: 0.14,
 		canvasL: 0.24,
 		neutralHue: 70,
@@ -134,7 +135,7 @@ const THEMES = {
 		},
 	},
 	"arnative-nord": {
-		accent: "#88c0d0",
+		accent: "oklch(77.5% 0.0622 217.469017)",
 		chroma: 0.07,
 		canvasL: 0.3,
 		neutralHue: 240,
@@ -145,7 +146,7 @@ const THEMES = {
 		},
 	},
 	"arnative-dracula": {
-		accent: "#bd93f9",
+		accent: "oklch(74.2% 0.1485 301.883095)",
 		chroma: 0.14,
 		canvasL: 0.29,
 		neutralHue: 285,
@@ -177,7 +178,9 @@ const ROLE_ORDER = [
 // --- derivation ------------------------------------------------------------
 
 function derive(spec) {
-	const h = hexToOklch(spec.accent).H;
+	const seed = parseOklch(spec.accent);
+	assert(seed !== null, `theme accent must be an oklch color: ${spec.accent}`);
+	const h = seed.H;
 	const c = spec.chroma;
 	const nh = spec.neutralHue;
 	const nc = spec.neutralChroma;
@@ -285,18 +288,15 @@ function derive(spec) {
 	// Distinct vars must stay visually distinct (roles may alias on purpose).
 	const seen = new Map();
 	for (const [name, value] of Object.entries(vars)) {
-		const { r, g, b } = oklchToRgb(...parseOklch(value));
+		const v = parseOklch(value);
+		assert(v !== null, `var ${name} is not an oklch color: ${value}`);
+		const { r, g, b } = oklchToRgb(v.L, v.C, v.H);
 		const rgb = `${r},${g},${b}`;
 		if (seen.has(rgb)) throw new Error(`vars ${seen.get(rgb)} and ${name} resolve to the same color`);
 		seen.set(rgb, name);
 	}
 
 	return { vars, roles, exp };
-}
-
-function parseOklch(value) {
-	const m = /\(([\d.]+)% ([\d.]+) ([\d.]+)\)/.exec(value);
-	return [Number(m[1]) / 100, Number(m[2]), Number(m[3])];
 }
 
 // --- rendering -------------------------------------------------------------

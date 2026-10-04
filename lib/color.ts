@@ -101,18 +101,26 @@ export function hexToOklch(hex: string): Oklch {
 }
 
 if (isMain(import.meta.url)) {
+	// Test vectors, not styling: the hex parser is under test, so these must stay hex.
+	const FIXTURE = {
+		white: "#ffffff",
+		black: "#000000",
+		short: "#0af",
+		shortExpanded: "#00aaff",
+		cyan: "#00d7ff",
+	};
 	const o = parseOklch("oklch(62% 0.1 200)");
 	assert(o !== null && Math.abs(o.L - 0.62) < 1e-9 && o.C === 0.1 && o.H === 200, "parseOklch reads percent L");
 	assert(parseOklch("oklch(0.62 0.1 200)")?.L === 0.62, "parseOklch reads fractional L");
-	assert(parseOklch("#fff") === null, "parseOklch rejects hex");
-	assert(toHex("#0AF") === "#00aaff", "toHex expands #rgb");
-	assert(toHex("oklch(100% 0 0)") === "#ffffff", "toHex converts oklch to hex");
-	assert(oklchToHex(1, 0, 0) === "#ffffff", "oklch L=1 is white");
-	assert(oklchToHex(0, 0, 0) === "#000000", "oklch L=0 is black");
-	assert(contrast("#ffffff", "#000000") === 21, "white on black = 21:1");
-	assert(Math.abs(contrast("#000000", "#ffffff") - 21) < 1e-9, "contrast is order-independent");
-	const back = hexToOklch("#00d7ff");
-	assert(Math.abs(back.H - 218) < 6, `hexToOklch hue of #00d7ff ~218 (got ${back.H.toFixed(1)})`);
+	assert(parseOklch(FIXTURE.short) === null, "parseOklch rejects hex");
+	assert(toHex(FIXTURE.short) === FIXTURE.shortExpanded, "toHex expands #rgb");
+	assert(toHex("oklch(100% 0 0)") === FIXTURE.white, "toHex converts oklch to hex");
+	assert(oklchToHex(1, 0, 0) === FIXTURE.white, "oklch L=1 is white");
+	assert(oklchToHex(0, 0, 0) === FIXTURE.black, "oklch L=0 is black");
+	assert(contrast(FIXTURE.white, FIXTURE.black) === 21, "white on black = 21:1");
+	assert(Math.abs(contrast(FIXTURE.black, FIXTURE.white) - 21) < 1e-9, "contrast is order-independent");
+	const back = hexToOklch(FIXTURE.cyan);
+	assert(Math.abs(back.H - 218) < 6, `hexToOklch hue of ${FIXTURE.cyan} ~218 (got ${back.H.toFixed(1)})`);
 	assert(oklchToRgb(0.7, 0.4, 145).chroma < 0.4, "out-of-gamut chroma is reduced");
 	console.log("lib/color.ts OK");
 }

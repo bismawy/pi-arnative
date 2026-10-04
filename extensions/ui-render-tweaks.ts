@@ -503,12 +503,16 @@ if (isMain(import.meta.url)) {
 		assert(hex("scrollbarThumb") !== hex("scrollbarTrack"), `theme ${f}: scrollbarThumb still equals scrollbarTrack`);
 		assert(hex("searchMatchBg") !== hex("selectedBg"), `theme ${f}: searchMatchBg still equals selectedBg`);
 	}
-	const thEmpty = new Theme(
+	// Only `muted`, `text` and `selectedBg` exist. pi's Theme constructor maps whatever
+	// it gets — including the thinkingMax <- thinkingXhigh fallback — so these probe
+	// values must already be hex: the bundled parser (0.87.1) rejects OKLCH, which is
+	// exactly why the real theme self-check resolves through lib/color first.
+	const tokenGapTheme = new Theme(
 		{ muted: "#808080", text: "#d4d4d4", thinkingXhigh: "#20caee" },
 		{ selectedBg: "#3a3a4a" },
 		"truecolor",
 	);
-	assert(accentPill(pillOriginal, thEmpty) === pillOriginal, "pill: token absent -> passed through");
+	assert(accentPill(pillOriginal, tokenGapTheme) === pillOriginal, "pill: token absent -> passed through");
 	const hostPil: { scrollToEndIndicator?: () => string } = { scrollToEndIndicator: () => pillOriginal };
 	const inPill = withAccentPill(hostPil, () => hostPil.scrollToEndIndicator?.(), thPill);
 	assert(inPill.includes(`\x1b[48;2;${rgb(hex("accent"))}m`), "pill: instance callback injected with accent bg");
