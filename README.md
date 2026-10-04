@@ -6,8 +6,6 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 [![badge](https://shieldcn.dev/npm/@bismawy/pi-arnative.svg?variant=outline&size=xs)](https://www.npmjs.com/package/@bismawy/pi-arnative)
 [![license](https://shieldcn.dev/github/bismawy/pi-arnative/license.svg?variant=outline&size=xs)](https://github.com/bismawy/pi-arnative)
 
-<img src="https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/banner.webp" alt="Arnative" width="100%">
-
 ![Arnative: tabbed header, rounded tool boxes, transcript clock and /usage dashboard](https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/pi-arnative.webp)
 
 ## Overview
