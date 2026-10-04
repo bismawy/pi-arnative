@@ -1,23 +1,31 @@
 #!/usr/bin/env node
 // READ-ONLY release preflight. Never writes, tags, pushes or publishes.
 //
-// Run this before `git tag` and again before `npm publish`:
-//   node scripts/release-check.mjs
+// Three stages, matching the order of the release itself:
+//   node scripts/release-check.mjs pre-tag        # before `git tag` — tag free, version unpublished
+//   node scripts/release-check.mjs pre-publish    # before `npm publish` — tag pushed, version unpublished
+//   node scripts/release-check.mjs post-publish   # after `npm publish` — tag pushed, version live
 //
-// Exit 0 only when every check passes. Exit 1 on the first failing check,
-// so a stale tree, an unmerged PR, or a version/tag/registry mismatch blocks
-// the release instead of relying on a human remembering a numbered list.
+// `pre-publish` is wired to npm's `prepublishOnly`, so a missing or unpushed
+// tag aborts the publish instead of relying on a human remembering a numbered
+// list. Exit 0 only when every check passes; exit 1 on the first failing run.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+const STAGES = ["pre-tag", "pre-publish", "post-publish"];
+const stage = process.argv[2] ?? "pre-publish";
+if (!STAGES.includes(stage)) {
+	console.error(`usage: release-check.mjs <${STAGES.join("|")}>`);
+	process.exit(2);
+}
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const git = (...a) => execFileSync("git", a, { cwd: root, encoding: "utf8" }).trim();
+const git = (...a) => execFileSync("git", a, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const version = pkg.version;
 const tag = `v${version}`;
-const isTagMode = process.argv.includes("--tag");
 
 const fails = [];
 const ok = (label, detail) => console.log(`  ok   ${label.padEnd(22)} ${detail}`);
@@ -43,7 +51,7 @@ try {
 
 // --- open pull requests --------------------------------------------------
 try {
-	const prs = execFileSync("gh", ["pr", "list", "--state", "open", "--json", "number"], { cwd: root, encoding: "utf8" });
+	const prs = execFileSync("gh", ["pr", "list", "--state", "open", "--json", "number"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 	const n = JSON.parse(prs || "[]").length;
 	n === 0 ? ok("no open PRs", "gh pr list --state open is empty") : bad("no open PRs", `${n} still open`);
 } catch {
@@ -65,33 +73,30 @@ const tagPushed = (() => {
 	}
 })();
 
-if (isTagMode) {
-	// stage 2: tag must exist locally and on the remote, pointing at the release commit
-	tagExists ? ok("tag exists", `${tag} -> ${git("rev-parse", `${tag}^{commit}`).slice(0, 7)}`) : bad("tag exists", `${tag} not created yet`);
-	tagPushed ? ok("tag pushed", `origin has ${tag}`) : bad("tag pushed", `${tag} missing on origin`);
-} else {
-	// stage 1: tag must NOT exist yet, otherwise the version was already released
+if (stage === "pre-tag") {
 	tagExists ? bad("tag unused", `${tag} already exists — bump package.json`) : ok("tag unused", `${tag} is free`);
+} else {
+	tagExists ? ok("tag exists", `${tag} -> ${git("rev-parse", `${tag}^{commit}`).slice(0, 7)}`) : bad("tag exists", `${tag} not created yet`);
+	tagPushed ? ok("tag pushed", `origin has ${tag}`) : bad("tag pushed", `${tag} missing on origin — run git push origin ${tag}`);
 }
 
-// --- registry: is this version already published? ------------------------
+// --- registry: is this version published? --------------------------------
 const meta = await fetch(`https://registry.npmjs.org/${pkg.name.replace("/", "%2F")}?ts=${Date.now()}`).then((r) => r.json()).catch(() => null);
 if (!meta) {
 	bad("registry reachable", "cannot read packument from registry.npmjs.org");
-} else if (meta.versions?.[version]) {
-	// already published: only acceptable in --tag mode (verifying an existing release)
-	isTagMode
+} else if (stage === "post-publish") {
+	meta.versions?.[version]
 		? ok("registry", `${pkg.name}@${version} is published (immutable)`)
-		: bad("registry", `${pkg.name}@${version} already published — bump package.json`);
-} else if (!isTagMode) {
-	ok("registry", `${pkg.name}@${version} is not published yet`);
+		: bad("registry", `${pkg.name}@${version} missing — run npm publish`);
 } else {
-	bad("registry", `${pkg.name}@${version} missing after publish — run npm publish`);
+	meta.versions?.[version]
+		? bad("registry", `${pkg.name}@${version} already published — bump package.json`)
+		: ok("registry", `${pkg.name}@${version} is not published yet`);
 }
 
 console.log();
 if (fails.length) {
-	console.log(`release-check FAILED (${fails.length}): ${fails.join(", ")}`);
+	console.log(`release-check FAILED [${stage}] (${fails.length}): ${fails.join(", ")}`);
 	process.exit(1);
 }
-console.log(`release-check OK — ${pkg.name}@${version} ${isTagMode ? "verified" : "ready to tag"}`);
+console.log(`release-check OK [${stage}] — ${pkg.name}@${version}`);

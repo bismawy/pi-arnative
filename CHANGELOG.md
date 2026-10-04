@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `scripts/release-check.mjs`, a read-only release preflight with one stage per step of the release (`pre-tag`, `pre-publish`, `post-publish`): it verifies a clean tree on `main` in sync with `origin/main`, no open pull requests, the `CHANGELOG.md` entry, whether the tag exists **and is pushed**, and whether the registry already serves the version. It never writes, tags, pushes or publishes.
+- `npm run release:check` (the `pre-tag` stage) and a `prepublishOnly` hook wired to the `pre-publish` stage. A missing or unpushed tag now aborts `npm publish` with `npm error code 1`, so a forgotten `git tag` can no longer ship a release.
+
+### Changed
+- README documents the release stages and their exit codes (`0` pass, `1` check failed, `2` bad usage).
+
 ## [0.3.3] - 2026-10-04
 
 ### Changed
