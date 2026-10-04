@@ -266,7 +266,26 @@ const BOXED_TOOLS = new Map([
 	["get_search_content", "get_content"],
 	["todo", "todo"],
 ]);
-const displayName = (name: string): string => BOXED_TOOLS.get(name) ?? name;
+
+// @narumitw/pi-chrome-devtools ships bare-text renderers ("Chrome DevTools: navigate",
+// collapsed output is empty) so they are ignored and these tools take our default box
+// path. CDP_ICON marks them in the call box (no hook for the generic tool icon).
+const CDP_ICON = "\uf268";
+const CDP_TOOLS: [string, string][] = [
+	["chrome_devtools_load", "load"],
+	["chrome_devtools_list_pages", "list pages"],
+	["chrome_devtools_select_page", "select page"],
+	["chrome_devtools_navigate", "navigate"],
+	["chrome_devtools_evaluate", "evaluate"],
+	["chrome_devtools_screenshot", "screenshot"],
+	["chrome_devtools_webmcp_list_tools", "list WebMCP tools"],
+	["chrome_devtools_webmcp_call_tool", "call WebMCP tool"],
+];
+const CDP_NAME = new Map(CDP_TOOLS);
+for (const [n] of CDP_TOOLS) BOXED_TOOLS.set(n, n);
+
+const displayName = (name: string): string =>
+	CDP_NAME.has(name) ? `Chrome DevTools: ${CDP_NAME.get(name)}` : (BOXED_TOOLS.get(name) ?? name);
 for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
 
 const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
@@ -355,11 +374,12 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 		const name: string = this.toolName;
 		const mine = usesTheirCallRenderer(this);
 		const own = origCall.call(this);
-		if (own && !mine) return own;
+		// Chrome DevTools' own renderCall is a bare line; ours replaces it (icon + name).
+		if (own && !mine && !CDP_NAME.has(name)) return own;
 		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
-				const icon = th.fg("warning", spinIcon());
+				const icon = CDP_NAME.has(name) ? th.fg("accent", CDP_ICON) : th.fg("warning", spinIcon());
 				const theirs = own ? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6) : [];
 				if (name === "todo" && theirs.length)
 					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
@@ -378,6 +398,9 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).
 		if (own && !usesTheirCallRenderer(this)) return own;
 		const boxed = BOXED_TOOLS.has(name);
+		// Chrome DevTools are in BOXED_TOOLS for the title/icon only: their renderResult
+		// (raw text, empty when collapsed) would drop our title row, so it is ignored.
+		const cdp = CDP_NAME.has(name);
 		return (result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) => {
 			if (opts.isPartial) return EMPTY;
 			((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
@@ -388,7 +411,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 			// Errors use our own path: pi-web-access' own error box is a box inside a
 			// box. Their renderer content is only used on success.
 			const theirs =
-				(boxed || fff) && !isErr
+				(boxed || fff) && !isErr && !cdp
 					? safeCall(() => own.call(this, { content: result.content, details: result.details }, opts, th, ctx))
 					: null;
 			return new Lines((width) => {
@@ -407,7 +430,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 					const bgType = isErr ? "toolErrorBg" : "toolSuccessBg";
 					return box(th, width, formatTodoRows(combined, th), bgType);
 				}
-				if (boxed2.length) return box(th, width, boxedRows(icon, boxed2));
+				if (boxed2.length && !cdp) return box(th, width, boxedRows(icon, boxed2));
 				const rows = titleRow(
 					th,
 					icon,
@@ -1159,5 +1182,45 @@ if (isMain(import.meta.url)) {
 	assert(fmtMs(2) === "2ms" && fmtMs(1400) === "1.4s" && fmtMs(undefined) === "", "duration wording: ms under a second, s above");
 	assert(codemodeOutput(cmRes.content) === "alpha: ok", "codemode: Script completed header dropped (own block)");
 	assert(codemodeOutput([{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n2" }]) === "2", "codemode: header dropped when joined with the output");
+	// Chrome DevTools: their bare renderers are replaced by our box (title + summary).
+	const textComp = (text: string, color?: string) => ({
+		render: (w: number) => (text ? text.split("\n").map((l) => (color ? th.fg(color, l) : l).slice(0, Math.max(0, w))) : []),
+		invalidate() {},
+	});
+	const cdpRes = {
+		toolName: "chrome_devtools_navigate",
+		toolDefinition: {
+			renderCall: () => textComp("Chrome DevTools: navigate"),
+			renderResult: () => textComp(""),
+		},
+	};
+	// The call renderer is not theirs (their bare line would swallow our icon/title).
+	assert(
+		ToolExecutionComponent.prototype.getCallRenderer.call(cdpRes) !== (cdpRes.toolDefinition.renderCall as any)(),
+		"chrome-devtools: their bare call renderer is replaced by our box",
+	);
+	const cdpResult = { content: [{ type: "text", text: 'navigated\n{\n  "pageId": "p1",\n  "url": "https://example.com"\n}' }], details: {} };
+	const cdpComp = (result: any, expanded = false) => {
+		const c: any = new ToolExecutionComponent("chrome_devtools_navigate", "1", { url: "https://example.com" }, {}, cdpRes.toolDefinition as any, { requestRender() {} }, cwd);
+		if (result) c.updateResult(result, false);
+		c.setExpanded(expanded);
+		return (c.render(74) as string[]).map(stripAnsi).filter((l) => l !== "");
+	};
+	const cdpCollapsed = cdpComp(cdpResult);
+	assert(
+		cdpCollapsed[0]!.startsWith("╭") && cdpCollapsed[cdpCollapsed.length - 1]!.startsWith("╰") && cdpCollapsed.some((l) => l.includes("navigate")),
+		"chrome-devtools: result renders in our box with the tool name",
+	);
+	const cdpCall = ToolExecutionComponent.prototype.getCallRenderer.call(cdpRes) as any;
+	const cdpCallOut: string[] = cdpCall({ url: "https://example.com" }, th, { args: {}, state: {} }).render(74);
+	assert(
+		cdpCallOut[0]!.startsWith("╭") && cdpCallOut.some((l) => stripAnsi(l).includes("Chrome DevTools: navigate")),
+		"chrome-devtools: call box keeps the tool title and the CDP glyph",
+	);
+	assert(stripAnsi(cdpCallOut[1]!).includes(CDP_ICON), "chrome-devtools: call box uses the Chrome glyph, not the spinner");
+	const cdpExpanded = cdpComp(cdpResult, true);
+	assert(cdpExpanded.some((l) => l.includes('"pageId": "p1"')), "chrome-devtools: expanded shows the full tool output");
+	assert(cdpCollapsed.some((l) => l.includes("navigated") && l.includes("to expand")), "chrome-devtools: collapsed shows the first line + hint");
+	assert([...cdpCollapsed, ...cdpExpanded].every((l) => visibleWidth(l) === 74), "chrome-devtools: box fills the given width");
 	console.log("OK");
 }

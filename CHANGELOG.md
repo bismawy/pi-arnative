@@ -7,6 +7,7 @@
 - Collapsed `codemode` is now two rows, the same footprint as `bash`/`grep`/`read`: title + the script's first line. Nested calls and output wait behind the standard `[ctrl+o to expand]` hint. A failing run still shows its output.
 - pi's `Script completed / Wall time / Output:` header no longer shows in the box.
 - Shared duration wording (`2ms` under a second, `1.4s` above) and one error glyph (`x`) across every tool; a failing `codemode` run shows its whole output and never a `[ctrl+o to expand]` hint.
+- The `chrome_devtools_*` tools (from `@narumitw/pi-chrome-devtools`) now render in the same box instead of their bare "Chrome DevTools: …" lines. Their own `renderCall`/`renderResult` are bypassed: the call box uses the Chrome glyph and the result box the usual summary + `[ctrl+o to expand]` (`extensions/tools.ts`).
 
 ## [0.3.2] - 2026-10-04
 
