@@ -27,6 +27,7 @@ import {
 	createReadTool,
 	createWriteTool,
 	getMarkdownTheme,
+	highlightCode,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -441,6 +442,115 @@ const formatTodoRows = (lines: string[], th: Theme): string[] => {
 	return out;
 };
 
+// codemode: one box for call + result, bg toolSuccessBg like every other tool.
+//   \u{f489} codemode
+//   󱞩 const l = await tools.todo({action:"list"});
+//     console.log(l);
+//
+//     ✓ todo {"action":"list"} 2ms [click to expand]
+//   󱞩 <script output>
+// `calls`/`content` follow pi's own codemode renderer shape (CodemodeToolDetails).
+const CODEMODE_HINT = "[click to expand]";
+const CODEMODE_SCRIPT_LINES = 8;
+const CODEMODE_CALL_ROWS = 8;
+const CODEMODE_OUTPUT_LINES = 5;
+
+/** pi's renderer prepares the code the same way before highlighting (tabs -> 3 spaces). */
+export function codeLines(code: string): string[] {
+	const js = code.replace(/\r/g, "").trimEnd().replace(/\t/g, "   ");
+	if (!js) return [];
+	try {
+		return highlightCode(js, "javascript");
+	} catch {
+		return js.split("\n");
+	}
+}
+
+/** `✓ todo {"action":"list"} 2ms` — status icon, tool title, muted args, dim duration. */
+export function formatCodemodeCall(call: any, th: Theme): string {
+	const c = call && typeof call === "object" ? (call as any) : {};
+	const status = String(c.status ?? "ok");
+	const icon =
+		status === "running"
+			? th.fg("warning", "…")
+			: status === "ok"
+				? th.fg("success", "✓")
+				: status === "cancelled"
+					? th.fg("muted", "⊘")
+					: th.fg("error", "✗");
+	const ms = Number(c.durationMs);
+	const dur = Number.isFinite(ms) ? (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`) : "";
+	let line = ` ${icon} ${th.fg("accent", String(c.name ?? ""))}`;
+	if (c.args) line += ` ${th.fg("muted", String(c.args))}`;
+	if (dur) line += ` ${th.fg("dim", dur)}`;
+	return line;
+}
+
+/** Nested call rows, latest shown last, capped to CODEMODE_CALL_ROWS. */
+export function codemodeRows(calls: any[], th: Theme, expanded: boolean): { lines: string[]; hidden: number } {
+	if (!Array.isArray(calls) || calls.length === 0) return { lines: [], hidden: 0 };
+	const shown = expanded ? calls : calls.slice(-CODEMODE_CALL_ROWS);
+	return { lines: shown.map((call) => formatCodemodeCall(call, th)), hidden: calls.length - shown.length };
+}
+
+/** Drop pi's "Script completed\nWall time …\nOutput:" header (rejected input has none). */
+export function codemodeOutput(content: unknown): string {
+	const blocks = (Array.isArray(content) ? content : []).filter((c: any) => c?.type === "text") as Array<{ text?: string }>;
+	// pi writes the header as its own block, but joined output arrives in one block too,
+	// so strip the prefix from the first text block instead of requiring a separate one.
+	const header = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n/;
+	const text = blocks
+		.map((c, i) => (i === 0 ? String(c.text ?? "").replace(header, "") : String(c.text ?? "")))
+		.join("\n")
+		.trim();
+	return text;
+}
+
+/** Script lines; collapsed keeps the first block and reports the hidden count. */
+export function codemodeScript(code: string, th: Theme, expanded: boolean): { lines: string[]; hidden: number } {
+	const lines = codeLines(code);
+	if (expanded || lines.length <= CODEMODE_SCRIPT_LINES) return { lines, hidden: 0 };
+	return { lines: lines.slice(0, CODEMODE_SCRIPT_LINES), hidden: lines.length - CODEMODE_SCRIPT_LINES };
+}
+
+/** Script output; collapsed keeps a short head, counted in logical lines (JSON is one long line). */
+export function codemodeOutputRows(text: string, th: Theme, expanded: boolean): { rows: string[]; hidden: number } {
+	if (!text) return { rows: [], hidden: 0 };
+	const lines = text.split("\n");
+	const shown = expanded ? lines : lines.slice(0, CODEMODE_OUTPUT_LINES);
+	return { rows: shown.map((l) => ` ${th.fg("toolOutput", l)}`), hidden: lines.length - shown.length };
+}
+
+/** Every box row: title, script, nested calls, output. `result` = the agent tool result
+ *  (`content` + `details`). Collapsed keeps one `[click to expand]` hint at the end. */
+export function codemodeBoxRows(
+	args: any,
+	result: { content?: unknown; details?: any } | undefined,
+	th: Theme,
+	expanded: boolean,
+	isErr = false,
+): string[] {
+	const rows = [`${th.fg("success", "\uf489")} ${th.fg("accent", "codemode")}`];
+	const script = codemodeScript(typeof args?.code === "string" ? args.code : "", th, expanded);
+	script.lines.forEach((line, i) => rows.push(i === 0 ? `${resHead(th)} ${line}` : ` ${line}`));
+	const calls = codemodeRows(result?.details?.calls, th, expanded);
+	const output = codemodeOutputRows(codemodeOutput(result?.content), th, expanded);
+	// Collapsed with nested calls: the calls already say what ran, so the output drops out
+	// entirely (the hint below covers it). Errors and call-less runs keep the output —
+	// a hidden failure is worse than a long box.
+	const showOutput = expanded || isErr || calls.lines.length === 0;
+	const outputRows = showOutput ? output.rows : [];
+	const outputHidden = showOutput ? output.hidden : 0;
+	if (!expanded && script.hidden) rows.push(th.fg("dim", ` ... (${script.hidden} more lines)`));
+	if (calls.lines.length || outputRows.length) rows.push("");
+	if (!expanded && calls.hidden) rows.push(th.fg("dim", ` ... (${calls.hidden} earlier calls)`));
+	rows.push(...calls.lines, ...outputRows);
+	if (!expanded && outputHidden) rows.push(th.fg("dim", ` ... (${outputHidden} more lines)`));
+	const more = !expanded && (script.hidden > 0 || calls.hidden > 0 || outputHidden > 0 || !showOutput);
+	if (more && rows.length > 1) rows[rows.length - 1] += ` ${th.fg("dim", CODEMODE_HINT)}`;
+	return rows;
+}
+
 
 // One render path for all tools (no per-tool duplication).
 // renderCall = running box (󰔟); renderResult = final box (✓/x + right-aligned
@@ -524,6 +634,12 @@ function minimal(
 }
 
 function arnativeTools(pi: ExtensionAPI) {
+	// codemode keeps pi's own data (script + nested calls + output) wrapped in the arnative
+	// box, bg like every other tool. A resolver runs first and returns our renderers for
+	// that name; `next()` would give pi's unboxed ones.
+	OWN_BOX.add("codemode");
+	pi.registerToolRenderer((toolName, next) => (toolName === "codemode" ? codemodeRenderers : next()));
+
 	// Re-render source for the spinner + ticker cleanup when the session closes
 	pi.on("session_start", async (_event, ctx) => {
 		requestRenderFn = () => {
@@ -625,6 +741,25 @@ function arnativeTools(pi: ExtensionAPI) {
 		},
 	);
 }
+
+// codemode: pi's renderer wrapped in our box. renderShell "self" keeps the
+// execution defaults; renderCall/renderResult draw the box. state.hasResult
+// guarantees one box per call, also after reload/restore.
+export const codemodeRenderers = {
+	renderShell: "self" as const,
+	renderCall(args: any, th: Theme, ctx: TCtx) {
+		return new Lines((width) => {
+			if (ctx.state?.hasResult) return [];
+			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded)));
+		});
+	},
+	renderResult(result: TResult & { details?: any }, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) {
+		if (opts.isPartial) return EMPTY;
+		((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
+		const isErr = Boolean(ctx.isError || result.isError || (result.details as { error?: unknown } | undefined)?.error);
+		return new Lines((width) => box(th, width, codemodeBoxRows(ctx.args, result, th, Boolean(opts.expanded), isErr)));
+	},
+};
 
 export default arnativeTools;
 
@@ -914,6 +1049,7 @@ if (isMain(import.meta.url)) {
 	// The default export registers the tools (filling OWN_BOX); a pi stub suffices.
 	arnativeTools({
 		registerTool: () => {},
+		registerToolRenderer: () => {},
 		on: () => {},
 		registerShortcut: () => {},
 		registerMessageRenderer: () => {},
@@ -1011,5 +1147,63 @@ if (isMain(import.meta.url)) {
 		fullText({ content: [{ type: "text", text: "a\nb" }] }, th, 0).join("|") === th.fg("dim", "a") + "|" + th.fg("dim", "b"),
 		"no width (self-check) still dumps dim",
 	);
+
+	// codemode: box rows = title \uf489 + script, nested calls and output (data shape
+	// from pi's own codemode details; script lines arrive pre-highlighted).
+	const cmDetails = {
+		content: [
+			{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n" },
+			{ type: "text", text: "[completed] #1 Add .megaignore self-heal" },
+		],
+		calls: [{ status: "ok", name: "todo", args: '{"action":"list"}', durationMs: 2 }],
+	};
+	const cmResult = { content: cmDetails.content, details: cmDetails };
+	const cmArgs = { code: "const l = await tools.todo({action:\"list\"});\nconsole.log(l);" };
+	const cmRows = codemodeBoxRows(cmArgs, cmResult, th, false);
+	assert(cmRows[0] === `${th.fg("success", "\uf489")} ${th.fg("accent", "codemode")}`, "codemode: title icon + accent name");
+	assert(cmRows.some((l) => stripAnsi(l).includes("const l = await tools.todo")), "codemode: script shown");
+	const callRow = cmRows.find((l) => stripAnsi(l).includes("✓ todo"));
+	assert(Boolean(callRow) && stripAnsi(callRow!).includes('{"action":"list"} 2ms'), "codemode: nested call status + args + duration");
+	assert(stripAnsi(callRow!).trimEnd().endsWith("[click to expand]"), "codemode: [click to expand] on the last visible row");
+	assert(!cmRows.some((l) => stripAnsi(l).includes("[completed] #1")), "codemode: collapsed hides the output once a call row exists");
+	assert(
+		codemodeBoxRows(cmArgs, { ...cmResult, isError: true }, th, false, true).some((l) => stripAnsi(l).includes("[completed] #1")),
+		"codemode: error keeps the output visible",
+	);
+	assert(
+		codemodeBoxRows(cmArgs, cmResult, th, true).some((l) => stripAnsi(l).includes("[completed] #1")),
+		"codemode: expanded shows the output",
+	);
+	assert(codemodeOutput(cmDetails.content).split("\n")[0] === "[completed] #1 Add .megaignore self-heal", "codemode: Script completed header dropped");
+	assert(
+		codemodeOutput([{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n2" }]) === "2",
+		"codemode: header dropped when it shares a block with the output",
+	);
+	const cmOutput = codemodeOutputRows("a\nb\nc\nd\ne\nf", th, false);
+	assert(cmOutput.rows.length === 5 && cmOutput.hidden === 1, "codemode: 5 output lines + 1 hidden");
+	assert(stripAnsi(cmOutput.rows[0]!).startsWith(" "), "codemode: output rows indented under the script");
+	const cmScript = codemodeScript(cmArgs.code, th, false);
+	assert(cmScript.lines.length === 2 && cmScript.hidden === 0, "codemode: two-line script kept intact");
+	assert(codemodeScript("a\n".repeat(20), th, false).hidden === 12, "codemode: long script capped and counted");
+	assert(codemodeScript("a\n".repeat(20), th, true).lines.length === 20, "codemode: expanded script uncapped");
+	const cmBox = box(th, 60, cmRows);
+	assert(cmBox[0]!.startsWith("╭") && cmBox[cmBox.length - 1]!.startsWith("╰"), "codemode: bordered box");
+	assert(cmBox.every((l) => visibleWidth(l) === 60), "codemode: every row exactly 60 wide");
+	// suppression: while the call is running (no result yet) the storage box shows
+	const cmCall = codemodeRenderers.renderCall(cmArgs, th, { state: {} }).render(60);
+	assert(cmCall.length > 0 && cmCall[0]!.startsWith("╭"), "codemode renderCall: box while running");
+	assert(codemodeRenderers.renderCall(cmArgs, th, { state: { hasResult: true } }).render(60).length === 0, "codemode renderCall: suppressed once the result exists");
+	// renderResult reads the payload from `result.details` (that is what the execution
+	// component passes), so the calls/output rows must actually appear.
+	const cmRendered = codemodeRenderers
+		.renderResult(cmResult, { expanded: false, isPartial: true }, th, { args: cmArgs, state: {} })
+		.render(60);
+	assert(cmRendered.length === 0, "codemode renderResult: partial phase stays empty");
+	const cmDone = codemodeRenderers
+		.renderResult(cmResult, { expanded: false, isPartial: false }, th, { args: cmArgs, state: {} })
+		.render(60)
+		.map(stripAnsi);
+	assert(cmDone.some((l) => l.includes("✓ todo")), "codemode renderResult: nested call row from result.details");
+	assert(cmDone.every((l) => visibleWidth(l) === 60), "codemode renderResult: box stays 60 wide");
 	console.log("OK");
 }

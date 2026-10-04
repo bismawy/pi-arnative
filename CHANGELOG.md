@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `codemode` now renders in the arnative box like every other tool call: side borders, green background (`toolSuccessBg`), title icon `\uf489`, script lines prefixed with the `󱞩` summary glyph (`extensions/tools.ts`).
+- Collapsed `codemode` keeps the script and the nested-call lines (`✓ todo {"action":"list"} 2ms`) and closes with one `[click to expand]` hint; the script output is hidden behind it and returns on expand. Errors and call-less runs always keep their output.
+- pi's `Script completed / Wall time / Output:` header no longer shows in the box.
+
 ## [0.3.2] - 2026-10-04
 
 ### Changed

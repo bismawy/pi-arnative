@@ -14,7 +14,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 
 - Warm Themes: Cohesive, contrast-checked color palettes generated without drift.
 - Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, and Shortcut.
-- Rounded Tool Boxes: Clear status, spinner, and duration for every tool call.
+- Rounded Tool Boxes: Clear status, spinner, and duration for every tool call. Built-in `codemode` is boxed too, collapsed to its script and nested calls behind a `[click to expand]` hint.
 - Enhanced Footer: fixed 3-row grid — directory/git line, then extension status paired with token metrics.
 - Transcript Clock: Timestamps for messages with clean bubble backgrounds.
 - Usage Dashboard: /usage command to track tokens and session costs.
