@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- The header and footer preset chosen in `/arnative` now survives a restart. The choice was only kept on `globalThis`, so every new pi process fell back to the default Arnative (Full) header and footer. It is now written to `arnative-config.json` in the agent dir and read back at startup (`lib/preset-store.ts`, `extensions/section-headers.ts`, `extensions/footer.ts`).
 - The reload-box patch no longer blanks a whole chat: it only drops a container that holds nothing but the box itself (border rows, blank spacers and the message copy). Any other container whose content merely mentioned "Reloading keybindings" — a `read`/`grep` result, this repo's own source — was rendered as zero lines (`extensions/ui-render-tweaks.ts`).
 - Row-1 git info works from a subfolder of a repo: `.git` is looked up by walking up the directory tree like git itself does, so the branch no longer vanishes when the session runs in `extensions/` or `src/` (`extensions/footer.ts`).
 - A tool result whose text merely starts with `Error` is no longer painted as a failed call (red `x`); only `ctx.isError`/`result.isError` decide. Reading a file that opens with "Error handling…" used to show an error box (`extensions/tools.ts`).
@@ -11,6 +12,8 @@
 - `isMain()` compares canonical file URLs, so a checkout path containing a space or another character that `import.meta.url` percent-encodes no longer makes a self-check exit 0 without running (`lib/check.ts`).
 
 ### Changed
+- An active session that grows is no longer walked in full on every usage refresh. The cache keeps a per-file rollup (providers and provider+model totals) plus the byte offset of the last complete line, so a refresh reads only the appended tail and folds it in. On a 2.3MB / 11,000-message session, a refresh after one new record went from ~76ms (full re-parse **and** re-aggregation of every cached entry) to ~12ms, flat as the chat grows; the cache file went from megabytes to ~0.4KB. A half-written trailing record is retried instead of counted or dropped (`lib/usage-store.ts`).
+- The usage cache format is version 4 (per-file rollup, was raw entries in v3); an older cache is rebuilt once.
 - `npm test` also runs `lib/color.ts`; `prepublishOnly` runs the full test suite before the pre-publish preflight, so a publish cannot ship a red build (`package.json`).
 - `release-check.mjs` verifies the tag points at `HEAD`, and `post-publish` also checks the `latest` dist-tag and the tarball URL are live, not just that the version exists (`scripts/release-check.mjs`).
 - The open-PR check falls back to the public GitHub API when `gh` is unavailable, instead of failing the whole preflight (`scripts/release-check.mjs`).

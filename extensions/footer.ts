@@ -21,6 +21,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 import { formatTokens } from "../lib/usage-store.ts";
+import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
 
 // ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
 // The TUI drops key-release events before handleInput, so press+release cannot
@@ -38,7 +39,7 @@ const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
 
 export function activeFooterPreset(): FooterPreset {
-	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY];
+	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] ?? loadChoice(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS);
 	return FOOTER_PRESETS.includes(stored as FooterPreset) ? (stored as FooterPreset) : DEFAULT_FOOTER_PRESET;
 }
 
@@ -59,6 +60,7 @@ export function applyFooterPreset(ctx: ExtensionContext): void {
 /** Select a preset and apply it immediately (the footer swaps on the spot). */
 export function setFooterPreset(name: FooterPreset, ctx: ExtensionContext): void {
 	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = name;
+	saveChoice(FOOTER_PRESET_CONFIG_KEY, name);
 	applyFooterPreset(ctx);
 }
 
@@ -985,6 +987,11 @@ if (isMain(import.meta.url)) {
 			setEditorComponent: () => { editorTouched++; },
 		},
 	};
+	// Persisting a preset writes a config file: point it at a fixture so the real agent dir stays clean.
+	const presetFixture = mkdtempSync(join(tmpdir(), "arnative-ftr-"));
+	const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = presetFixture;
+	resetPresetCache();
 	setFooterPreset("Pi (system)", presetCtx);
 	assert(footerCleared === 1 && editorTouched === 0 && activeFooterPreset() === "Pi (system)", "Pi (system) clears the footer only (an editor swap would close the picker)");
 	let registered = 0;
@@ -992,6 +999,16 @@ if (isMain(import.meta.url)) {
 	setFooterPreset("Arnative (Full)", presetCtx);
 	assert(registered === 1 && activeFooterPreset() === "Arnative (Full)", "Arnative (Full) re-runs the arnative registrar");
 	delete (globalThis as Record<symbol, unknown>)[FOOTER_REGISTRAR_KEY];
+	// Persist a NON-default value: asserting the default survives proves nothing.
+	setFooterPreset("Pi (system)", presetCtx);
+	assert(loadChoice(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS) === "Pi (system)", "the footer preset is persisted to disk");
+	delete (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY];
+	resetPresetCache();
+	assert(activeFooterPreset() === "Pi (system)", "a restart reads the non-default footer preset back from disk");
+	rmSync(presetFixture, { recursive: true, force: true });
+	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+	resetPresetCache();
 
 	console.log("footer.ts self-check OK");
 }
