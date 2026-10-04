@@ -96,6 +96,15 @@ npm test        # Run self-checks & theme generator check
 npm run themes  # Rebuild all theme variants
 ```
 
+**Releasing:** `scripts/release-check.mjs` is a read-only preflight (never writes, tags, pushes or publishes) with one stage per step of the release:
+
+| Stage | Run before | Checks |
+| :--- | :--- | :--- |
+| `pre-tag` | `git tag` | clean tree on `main`, in sync, no open PRs, `CHANGELOG.md` entry, tag free, version unpublished |
+| `pre-publish` | `npm publish` | the above, plus the tag exists **and is pushed** |
+| `post-publish` | done | the above, plus the version is live on the registry |
+
+`pre-publish` runs automatically through npm's `prepublishOnly`, so a missing or unpushed tag aborts the publish (`npm error code 1`) instead of shipping a version whose tag was forgotten. `npm run release:check` is the `pre-tag` shorthand. Exit codes: `0` pass, `1` a check failed, `2` bad usage.
 </details>
 
 ## License
