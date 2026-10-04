@@ -4,8 +4,8 @@
  * shared with the Model tab.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { boxEdge, boxRow } from "../lib/box.ts";
@@ -285,25 +285,35 @@ if (isMain(import.meta.url)) {
 	assert(formatTokens(9_999) === "10k", "formatTokens strips a .0 k tail");
 	assert(formatCost(999.996) === "$1.0k", "formatCost rolls over at $1000");
 
-	const summary = collectUsageSummary();
-	assert(summary.providers.length > 0, "collectUsageSummary detects providers");
-	assert(summary.totals.sessions > 0, "collectUsageSummary detects total sessions");
-	assert(summary.totals.msgs > 0, "collectUsageSummary detects total msgs");
-	assert(summary.totals.cost >= 0, "collectUsageSummary counts cost");
+	// Fixture agent dir: the real history (and cache) must not decide pass/fail.
+	const fixture = mkdtempSync(join(tmpdir(), "arnative-usage-"));
+	process.env.PI_CODING_AGENT_DIR = fixture;
+	mkdirSync(join(fixture, "sessions", "proj"), { recursive: true });
+	const asst = (model: string, input: number) => JSON.stringify({ message: { role: "assistant", provider: "google", model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0.02 } } } });
+	writeFileSync(
+		join(fixture, "sessions", "proj", "a.jsonl"),
+		[JSON.stringify({ message: { role: "user", content: "hi" } }), asst("gemini-3.8-flash", 100), asst("gemini-3.8-flash", 50), asst("other-model", 7)].join(String.fromCharCode(10)),
+	);
+
+	const summary = collectUsageSummary(true);
+	assert(summary.providers.length === 1, "collectUsageSummary detects providers");
+	assert(summary.totals.sessions === 1, "collectUsageSummary detects total sessions");
+	assert(summary.totals.msgs === 3, "collectUsageSummary counts assistant messages only");
+	assert(Math.abs(summary.totals.cost - 0.06) < 1e-9, "collectUsageSummary counts cost");
 
 	const modelUsage = getModelAllTimeUsage("gemini-3.8-flash");
-	assert(modelUsage.input > 0, "getModelAllTimeUsage reads input tokens for gemini-3.8-flash");
+	assert(modelUsage.input === 150 && modelUsage.output === 10 && modelUsage.cacheRead === 2, "getModelAllTimeUsage sums one model across messages");
 	assert(
 		getModelAllTimeUsage(undefined).input === 0 && getModelAllTimeUsage(undefined).output === 0,
 		"getModelAllTimeUsage without a model id matches nothing (no grand total)",
 	);
 
 	// Disk cache pruning: no cache key may point at a session file that is gone.
-	const cacheFile = join(getAgentDir(), "arnative-usage-cache.json");
-	if (existsSync(cacheFile)) {
-		const raw = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, unknown>;
-		assert(Object.keys(raw).every((k) => existsSync(k)), "usage disk cache prunes deleted session files");
-	}
+	rmSync(join(fixture, "sessions", "proj", "a.jsonl"));
+	collectUsageSummary(true);
+	const raw = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, unknown>;
+	assert(Object.keys(raw).length === 0, "usage disk cache prunes deleted session files");
+	rmSync(fixture, { recursive: true, force: true });
 
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m`,

@@ -50,12 +50,28 @@ try {
 }
 
 // --- open pull requests --------------------------------------------------
+// `gh` is the fast path; without it (or without a login) fall back to the public API so
+// the check still runs on a machine that never installed the CLI.
+const openPrs = async () => {
+	try {
+		const prs = execFileSync("gh", ["pr", "list", "--state", "open", "--json", "number"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+		return { n: JSON.parse(prs || "[]").length, via: "gh" };
+	} catch {
+		// fall through to the API
+	}
+	const url = git("config", "--get", "remote.origin.url");
+	const m = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url);
+	if (!m) throw new Error(`cannot map origin to github: ${url}`);
+	const api = `https://api.github.com/repos/${m[1]}/${m[2]}/pulls?state=open&per_page=100`;
+	const res = await fetch(api, { headers: { accept: "application/vnd.github+json", "user-agent": "pi-arnative-release-check" } });
+	if (!res.ok) throw new Error(`github api ${res.status}`);
+	return { n: (await res.json()).length, via: "api.github.com" };
+};
 try {
-	const prs = execFileSync("gh", ["pr", "list", "--state", "open", "--json", "number"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-	const n = JSON.parse(prs || "[]").length;
-	n === 0 ? ok("no open PRs", "gh pr list --state open is empty") : bad("no open PRs", `${n} still open`);
-} catch {
-	bad("no open PRs", "gh unavailable (run `gh auth status`)");
+	const { n, via } = await openPrs();
+	n === 0 ? ok("no open PRs", `${via}: no open PRs`) : bad("no open PRs", `${n} still open`);
+} catch (e) {
+	bad("no open PRs", `cannot list PRs (${e.message})`);
 }
 
 // --- version surfaces must agree ----------------------------------------
@@ -75,8 +91,16 @@ const tagPushed = (() => {
 
 if (stage === "pre-tag") {
 	tagExists ? bad("tag unused", `${tag} already exists — bump package.json`) : ok("tag unused", `${tag} is free`);
+} else if (!tagExists) {
+	bad("tag exists", `${tag} not created yet`);
 } else {
-	tagExists ? ok("tag exists", `${tag} -> ${git("rev-parse", `${tag}^{commit}`).slice(0, 7)}`) : bad("tag exists", `${tag} not created yet`);
+	const tagCommit = git("rev-parse", `${tag}^{commit}`);
+	const head = git("rev-parse", "HEAD");
+	ok("tag exists", `${tag} -> ${tagCommit.slice(0, 7)}`);
+	// A tag on the wrong commit ships the wrong tree; the tag must be the release commit.
+	tagCommit === head
+		? ok("tag is HEAD", `${tag} == HEAD (${head.slice(0, 7)})`)
+		: bad("tag is HEAD", `${tag} is ${tagCommit.slice(0, 7)}, HEAD is ${head.slice(0, 7)} — re-tag`);
 	tagPushed ? ok("tag pushed", `origin has ${tag}`) : bad("tag pushed", `${tag} missing on origin — run git push origin ${tag}`);
 }
 
@@ -88,6 +112,23 @@ if (!meta) {
 	meta.versions?.[version]
 		? ok("registry", `${pkg.name}@${version} is published (immutable)`)
 		: bad("registry", `${pkg.name}@${version} missing — run npm publish`);
+	// The version existing is not enough: `latest` may still serve the previous release,
+	// which is what `npm install <pkg>` resolves. The tarball proves the artifact is live.
+	const distLatest = meta["dist-tags"]?.latest;
+	distLatest === version
+		? ok("dist-tag latest", `latest == ${version}`)
+		: bad("dist-tag latest", `latest is ${distLatest ?? "(none)"}, expected ${version}`);
+	const tarball = meta.versions?.[version]?.dist?.tarball;
+	if (tarball) {
+		try {
+			const head = await fetch(tarball, { method: "HEAD" });
+			head.ok ? ok("tarball", `${tarball} (${head.status})`) : bad("tarball", `${tarball} -> ${head.status}`);
+		} catch (e) {
+			bad("tarball", `cannot fetch ${tarball} (${e.message})`);
+		}
+	} else {
+		bad("tarball", `no tarball url for ${version}`);
+	}
 } else {
 	meta.versions?.[version]
 		? bad("registry", `${pkg.name}@${version} already published — bump package.json`)

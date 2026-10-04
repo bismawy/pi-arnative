@@ -103,10 +103,10 @@ npm run themes  # Rebuild all theme variants
 | Stage | Run before | Checks |
 | :--- | :--- | :--- |
 | `pre-tag` | `git tag` | clean tree on `main`, in sync, no open PRs, `CHANGELOG.md` entry, tag free, version unpublished |
-| `pre-publish` | `npm publish` | the above, plus the tag exists **and is pushed** |
-| `post-publish` | done | the above, plus the version is live on the registry |
+| `pre-publish` | `npm publish` | the above, plus the tag exists **and is pushed**, and points at `HEAD` |
+| `post-publish` | done | the above, plus the version is live on the registry, `latest` points at it and its tarball URL answers |
 
-`pre-publish` runs automatically through npm's `prepublishOnly`, so a missing or unpushed tag aborts the publish (`npm error code 1`) instead of shipping a version whose tag was forgotten. `npm run release:check` is the `pre-tag` shorthand. Exit codes: `0` pass, `1` a check failed, `2` bad usage.
+`pre-publish` runs automatically through npm's `prepublishOnly` (after `npm test`), so a red build or a missing/unpushed tag aborts the publish (`npm error code 1`) instead of shipping a version whose tag was forgotten. The open-PR check uses `gh` when present and falls back to the public GitHub API otherwise. `npm run release:check` is the `pre-tag` shorthand. Exit codes: `0` pass, `1` a check failed, `2` bad usage.
 </details>
 
 ## License

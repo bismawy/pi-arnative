@@ -7,7 +7,7 @@ import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { assert, isMain } from "./check.ts";
 
 export type BoxTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
-export type Dim = (s: string) => string;
+type Dim = (s: string) => string;
 
 export const boxEdge = (l: string, r: string, width: number, dim: Dim): string =>
 	dim(`${l}${"─".repeat(Math.max(0, width - 2))}${r}`);

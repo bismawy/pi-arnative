@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The reload-box patch no longer blanks a whole chat: it only drops a container that holds nothing but the box itself (border rows, blank spacers and the message copy). Any other container whose content merely mentioned "Reloading keybindings" — a `read`/`grep` result, this repo's own source — was rendered as zero lines (`extensions/ui-render-tweaks.ts`).
+- Row-1 git info works from a subfolder of a repo: `.git` is looked up by walking up the directory tree like git itself does, so the branch no longer vanishes when the session runs in `extensions/` or `src/` (`extensions/footer.ts`).
+- A tool result whose text merely starts with `Error` is no longer painted as a failed call (red `x`); only `ctx.isError`/`result.isError` decide. Reading a file that opens with "Error handling…" used to show an error box (`extensions/tools.ts`).
+- The stale git state is cleared when the working directory leaves a repo, so a `/reload` cannot re-show the previous directory's branch (`extensions/footer.ts`).
+- The `usage.ts` self-check builds a fixture session directory (and its own cache) instead of reading the real `~/.pi/agent/sessions`. A machine without `gemini-3.8-flash` in its history failed `npm test` (`extensions/usage.ts`, `lib/usage-store.ts`).
+- `isMain()` compares canonical file URLs, so a checkout path containing a space or another character that `import.meta.url` percent-encodes no longer makes a self-check exit 0 without running (`lib/check.ts`).
+
+### Changed
+- `npm test` also runs `lib/color.ts`; `prepublishOnly` runs the full test suite before the pre-publish preflight, so a publish cannot ship a red build (`package.json`).
+- `release-check.mjs` verifies the tag points at `HEAD`, and `post-publish` also checks the `latest` dist-tag and the tarball URL are live, not just that the version exists (`scripts/release-check.mjs`).
+- The open-PR check falls back to the public GitHub API when `gh` is unavailable, instead of failing the whole preflight (`scripts/release-check.mjs`).
+- `.gitattributes` pins every text file to LF in the repository, so a Windows checkout stops reintroducing CRLF into diffs.
+
+### Removed
+- `ASCII_LOGO_LINES` (computed at module load, never read) and the unused `Dim` export (`extensions/section-headers.ts`, `lib/box.ts`).
+
 ## [0.3.4] - 2026-10-04
 
 ### Added
