@@ -16,6 +16,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 - Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, and Shortcut.
 - Rounded Tool Boxes: Clear status, spinner, and duration for every tool call. Built-in `codemode` is boxed and collapsed to two rows (title + first script line) like `bash`/`grep`/`read`; nested calls and output sit behind `[ctrl+o to expand]` (shown whenever the collapsed summary hides more, including `edit` diffs); a failed run always shows its full output. The `chrome_devtools_*` tools box too, replacing their bare "Chrome DevTools: …" lines.
 - Enhanced Footer: fixed 3-row grid — directory/git line, then extension status paired with token metrics.
+  > The branch is read straight from `.git/HEAD`, so it shows up without a git install. Tag, dirty count, and ahead/behind need the `git` binary — when it is missing (or the repo is owned by another user, which git refuses to touch) that half is left out rather than shown wrong. Run `git config --global --add safe.directory <repo>` (a local, non-synced setting) to make `git` cooperate with such a repo.
 - Transcript Clock: Timestamps for messages with clean bubble backgrounds.
 - Usage Dashboard: /usage command to track tokens and session costs.
 
