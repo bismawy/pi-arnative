@@ -443,14 +443,12 @@ const formatTodoRows = (lines: string[], th: Theme): string[] => {
 };
 
 // codemode: one box for call + result, bg toolSuccessBg like every other tool.
+// Collapsed it is 2 rows, the same footprint as bash/grep/read:
 //   \u{f489} codemode
-//   󱞩 const l = await tools.todo({action:"list"});
-//     console.log(l);
-//
-//     ✓ todo {"action":"list"} 2ms
-// A truncated script/call list closes with the standard [ctrl+o to expand].
-// `calls`/`content` follow pi's own codemode renderer shape (CodemodeToolDetails).
-const CODEMODE_SCRIPT_LINES = 8;
+//   󱞩 const names = ["alpha", "beta", "gamma"];
+// Everything the script produced waits behind [ctrl+o to expand]. A failure keeps its
+// output — a hidden error would be a lie. `calls`/`content` follow pi's own
+// codemode renderer shape (CodemodeToolDetails).
 const CODEMODE_CALL_ROWS = 8;
 const CODEMODE_OUTPUT_LINES = 5;
 
@@ -505,11 +503,11 @@ export function codemodeOutput(content: unknown): string {
 	return text;
 }
 
-/** Script lines; collapsed keeps the first block and reports the hidden count. */
-export function codemodeScript(code: string, th: Theme, expanded: boolean): { lines: string[]; hidden: number } {
+/** Script lines; collapsed keeps only the first, exactly like the other tools' one-line call. */
+export function codemodeScript(code: string, expanded: boolean): { lines: string[]; hidden: number } {
 	const lines = codeLines(code);
-	if (expanded || lines.length <= CODEMODE_SCRIPT_LINES) return { lines, hidden: 0 };
-	return { lines: lines.slice(0, CODEMODE_SCRIPT_LINES), hidden: lines.length - CODEMODE_SCRIPT_LINES };
+	if (expanded || lines.length <= 1) return { lines, hidden: 0 };
+	return { lines: lines.slice(0, 1), hidden: lines.length - 1 };
 }
 
 /** Script output; collapsed keeps a short head, counted in logical lines (JSON is one long line). */
@@ -521,22 +519,27 @@ export function codemodeOutputRows(text: string, th: Theme, expanded: boolean): 
 }
 
 /** Every box row: title, script, nested calls, output. `result` = the agent tool result
- *  (`content` + `details`). Collapsed keeps a short head of each section; the standard
- *  expand hint appears only when something was actually truncated. */
+ *  (`content` + `details`). Collapsed is title + first script line, nothing else; the
+ *  standard expand hint appears because the rest is behind it. Errors show their output. */
 export function codemodeBoxRows(
 	args: any,
 	result: { content?: unknown; details?: any } | undefined,
 	th: Theme,
 	expanded: boolean,
+	isErr = false,
 ): string[] {
 	const rows = [`${th.fg("success", "\uf489")} ${th.fg("accent", "codemode")}`];
-	const script = codemodeScript(typeof args?.code === "string" ? args.code : "", th, expanded);
+	const script = codemodeScript(typeof args?.code === "string" ? args.code : "", expanded);
 	script.lines.forEach((line, i) => rows.push(i === 0 ? `${resHead(th)} ${line}` : ` ${line}`));
 	const calls = codemodeRows(result?.details?.calls, th, expanded);
 	const output = codemodeOutputRows(codemodeOutput(result?.content), th, expanded);
-	if (calls.lines.length || output.rows.length) rows.push("");
-	rows.push(...calls.lines, ...output.rows);
-	if (!expanded && script.hidden + calls.hidden + output.hidden > 0 && rows.length > 1) rows[rows.length - 1] += ` ${expandHint(th)}`;
+	const hidden =
+		script.hidden + (expanded || isErr ? 0 : calls.lines.length + calls.hidden + output.rows.length + output.hidden);
+	if (expanded || isErr) {
+		if (calls.lines.length || output.rows.length) rows.push("");
+		rows.push(...calls.lines, ...output.rows);
+	}
+	if (!expanded && hidden > 0 && rows.length > 1) rows[rows.length - 1] += ` ${expandHint(th)}`;
 	return rows;
 }
 
@@ -739,13 +742,16 @@ export const codemodeRenderers = {
 	renderCall(args: any, th: Theme, ctx: TCtx) {
 		return new Lines((width) => {
 			if (ctx.state?.hasResult) return [];
-			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded)));
+			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded)), "toolPendingBg");
 		});
 	},
 	renderResult(result: TResult & { details?: any }, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) {
 		if (opts.isPartial) return EMPTY;
 		((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
-		return new Lines((width) => box(th, width, codemodeBoxRows(ctx.args, result, th, Boolean(opts.expanded))));
+		const isErr = Boolean(ctx.isError || result.isError);
+		return new Lines((width) =>
+			box(th, width, codemodeBoxRows(ctx.args, result, th, Boolean(opts.expanded), isErr), isErr ? "toolErrorBg" : "toolSuccessBg"),
+		);
 	},
 };
 
@@ -1149,22 +1155,23 @@ if (isMain(import.meta.url)) {
 	const cmArgs = { code: "const l = await tools.todo({action:\"list\"});\nconsole.log(l);" };
 	const cmRows = codemodeBoxRows(cmArgs, cmResult, th, false);
 	assert(cmRows[0] === `${th.fg("success", "\uf489")} ${th.fg("accent", "codemode")}`, "codemode: title icon + accent name");
-	assert(cmRows.some((l) => stripAnsi(l).includes("const l = await tools.todo")), "codemode: script shown");
-	const callRow = cmRows.find((l) => stripAnsi(l).includes("✓ todo"));
-	assert(Boolean(callRow) && stripAnsi(callRow!).includes('{"action":"list"} 2ms'), "codemode: nested call status + args + duration");
-	// Collapsed with a nested call: output is behind the hint, nothing truncated here, so
-	// the box stays minimal — no hint, exactly like the other tools' untruncated boxes.
-	assert(!cmRows.some((l) => stripAnsi(l).includes("to expand")), "codemode: no hint when nothing is truncated");
-	assert(cmRows.some((l) => stripAnsi(l).includes("[completed] #1")), "codemode: collapsed keeps the output head");
+	assert(stripAnsi(cmRows[1]!).includes("const l = await tools.todo"), "codemode: collapsed shows the script first line");
+	const cmOpen = codemodeBoxRows(cmArgs, cmResult, th, true);
+	const callRow = cmOpen.find((l) => stripAnsi(l).includes("✓ todo"));
+	assert(Boolean(callRow) && stripAnsi(callRow!).includes('{"action":"list"} 2ms'), "codemode: expanded nested call status + args + duration");
+	assert(!cmRows.some((l) => stripAnsi(l).includes("✓ todo")), "codemode: collapsed hides the nested calls");
+	// Collapsed mirrors the other tools' one-line call: title + first script line, nothing else.
+	assert(cmRows.length === 2, "codemode: collapsed is title + one script line");
+	assert(stripAnsi(cmRows[1]!).trimEnd().endsWith("[ctrl+o to expand]"), "codemode: collapsed ends with the standard hint");
 	assert(
-		codemodeBoxRows(cmArgs, cmResult, th, true).some((l) => stripAnsi(l).includes("[completed] #1")),
+		cmOpen.some((l) => stripAnsi(l).includes("[completed] #1")),
 		"codemode: expanded shows the output",
 	);
-	const cmErr = codemodeBoxRows({ code: "throw new Error('x')" }, { content: [{ type: "text", text: "Script error:\nError: x" }], isError: true }, th, false);
+	const cmErr = codemodeBoxRows({ code: "throw new Error('x')" }, { content: [{ type: "text", text: "Script error:\nError: x" }], isError: true }, th, false, true);
 	assert(cmErr.some((l) => stripAnsi(l).includes("Script error")), "codemode: error output stays visible");
 	const cmLong = codemodeBoxRows({ code: "a\n".repeat(20) }, cmResult, th, false);
-	assert(cmLong.filter((l) => stripAnsi(l).trimEnd().endsWith("a")).length === CODEMODE_SCRIPT_LINES, "codemode: long script capped");
-	assert(stripAnsi(cmLong[cmLong.length - 1]!).trimEnd().endsWith("[ctrl+o to expand]"), "codemode: capped script ends with the standard hint");
+	assert(cmLong.length === 2, "codemode: long script collapsed to one line");
+	assert(stripAnsi(cmLong[1]!).trimEnd().endsWith("[ctrl+o to expand]"), "codemode: collapsed long script ends with the standard hint");
 	assert(codemodeOutput(cmDetails.content).split("\n")[0] === "[completed] #1 Add .megaignore self-heal", "codemode: Script completed header dropped");
 	assert(
 		codemodeOutput([{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n2" }]) === "2",
@@ -1173,10 +1180,10 @@ if (isMain(import.meta.url)) {
 	const cmOutput = codemodeOutputRows("a\nb\nc\nd\ne\nf", th, false);
 	assert(cmOutput.rows.length === 5 && cmOutput.hidden === 1, "codemode: 5 output lines + 1 hidden");
 	assert(stripAnsi(cmOutput.rows[0]!).startsWith(" "), "codemode: output rows indented under the script");
-	const cmScript = codemodeScript(cmArgs.code, th, false);
-	assert(cmScript.lines.length === 2 && cmScript.hidden === 0, "codemode: two-line script kept intact");
-	assert(codemodeScript("a\n".repeat(20), th, false).hidden === 12, "codemode: long script capped and counted");
-	assert(codemodeScript("a\n".repeat(20), th, true).lines.length === 20, "codemode: expanded script uncapped");
+	const cmScript = codemodeScript(cmArgs.code, false);
+	assert(cmScript.lines.length === 1 && cmScript.hidden === 1, "codemode: collapsed script keeps one line");
+	assert(codemodeScript("a\n".repeat(20), false).hidden === 19, "codemode: long script fully hidden behind the hint");
+	assert(codemodeScript("a\n".repeat(20), true).lines.length === 20, "codemode: expanded script uncapped");
 	const cmBox = box(th, 60, cmRows);
 	assert(cmBox[0]!.startsWith("╭") && cmBox[cmBox.length - 1]!.startsWith("╰"), "codemode: bordered box");
 	assert(cmBox.every((l) => visibleWidth(l) === 60), "codemode: every row exactly 60 wide");
@@ -1194,7 +1201,7 @@ if (isMain(import.meta.url)) {
 		.renderResult(cmResult, { expanded: false, isPartial: false }, th, { args: cmArgs, state: {} })
 		.render(60)
 		.map(stripAnsi);
-	assert(cmDone.some((l) => l.includes("✓ todo")), "codemode renderResult: nested call row from result.details");
+	assert(cmDone.some((l) => l.includes("to expand")), "codemode renderResult: collapsed box keeps the hint");
 	assert(cmDone.every((l) => visibleWidth(l) === 60), "codemode renderResult: box stays 60 wide");
 	console.log("OK");
 }

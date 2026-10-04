@@ -4,7 +4,7 @@
 
 ### Changed
 - `codemode` now renders in the arnative box like every other tool call: side borders, green background (`toolSuccessBg`), title icon `\uf489`, script lines prefixed with the `󱞩` summary glyph (`extensions/tools.ts`).
-- Collapsed `codemode` keeps its script, the nested-call lines (`✓ todo {"action":"list"} 2ms`) and the output head; nothing is hidden, so no hint shows. The standard `[ctrl+o to expand]` appears only when a section is truncated, like every other tool.
+- Collapsed `codemode` is now two rows, the same footprint as `bash`/`grep`/`read`: title + the script's first line. Nested calls and output wait behind the standard `[ctrl+o to expand]` hint. A failing run still shows its output.
 - pi's `Script completed / Wall time / Output:` header no longer shows in the box.
 
 ## [0.3.2] - 2026-10-04
