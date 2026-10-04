@@ -6,7 +6,7 @@
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -23,7 +23,59 @@ interface FileCacheItem {
 	mtimeMs: number;
 	size: number;
 	v?: number;
-	entries: UsageEntry[];
+	/** Byte offset of the last complete line parsed. Session files are append-only, so a
+	 *  grown file only needs its tail read — re-parsing the whole 1MB+ active session on the
+	 *  5s render path cost ~15ms and grew with chat length. */
+	consumed?: number;
+	/** Per-file rollup, not the raw entries: the summary is rebuilt from these every scan, and
+	 *  a long session holds tens of thousands of entries. Storing the rolled-up numbers keeps
+	 *  the cache small and makes a refresh cost the size of the *growth*, not the session. */
+	rollup: FileRollup;
+}
+
+/** Usage totals for one session file, per provider and per provider+model. */
+interface FileRollup {
+	providers: Record<string, Rollup>;
+}
+
+interface Rollup {
+	sessions: number;
+	msgs: number;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cost: number;
+}
+
+const emptyRollup = (): Rollup => ({ sessions: 0, msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
+
+function addToRollup(r: Rollup, e: UsageEntry): void {
+	r.msgs++;
+	r.input += e.input;
+	r.output += e.output;
+	r.cacheRead += e.cacheRead;
+	r.cost += e.cost;
+}
+
+/** Fold entries into an existing file rollup, updating provider and provider+model keys together. */
+function foldInto(rollup: FileRollup, entries: UsageEntry[]): void {
+	if (entries.length === 0) return;
+	for (const e of entries) {
+		const key = `${e.provider}\u0000${e.model}`;
+		(rollup.providers[e.provider] ??= emptyRollup());
+		addToRollup(rollup.providers[e.provider]!, e);
+		(rollup.providers[key] ??= emptyRollup());
+		addToRollup(rollup.providers[key]!, e);
+	}
+	// `sessions` counts the file, not the messages, so it is 1 once the file has any use.
+	for (const key of Object.keys(rollup.providers)) rollup.providers[key]!.sessions = 1;
+}
+
+/** The rollup of a freshly parsed file (a foldInto that starts from nothing). */
+function rollupOfFile(entries: UsageEntry[]): FileRollup {
+	const rollup: FileRollup = { providers: {} };
+	foldInto(rollup, entries);
+	return rollup;
 }
 
 interface UsageModelStats {
@@ -79,7 +131,7 @@ export function formatTokens(n: number): string {
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
 const cacheFilePath = (): string => join(getAgentDir(), "arnative-usage-cache.json");
-const CACHE_VERSION = 2; // v2: per-entry cost
+const CACHE_VERSION = 4; // v4: per-file rollup (was raw entries in v3)
 
 // Disk cache is memoized; save writes memory + disk together.
 let diskMemo: Map<string, FileCacheItem> | null = null;
@@ -133,39 +185,88 @@ function scanSessionFiles(dir: string): string[] {
 	return files;
 }
 
-function parseSessionFile(filePath: string): UsageEntry[] {
-	const entries: UsageEntry[] = [];
+/** Extract a usage entry from one line, or null when it is not an assistant message. */
+function entryOfLine(line: string): UsageEntry | null {
+	// Loose prefilter (fast path only): exact key would break on JSON formatting changes
+	// and silently drop usage. The role is re-checked on the parsed object below.
+	if (!line || !line.includes('"role"')) return null;
 	try {
-		const content = readFileSync(filePath, "utf8");
-		const lines = content.split("\n");
-		for (const line of lines) {
-			// Loose prefilter (fast path only): exact key would break on JSON formatting changes
-			// and silently drop usage. The role is re-checked on the parsed object below.
-			if (!line || !line.includes('"role"')) continue;
-			try {
-				const obj = JSON.parse(line);
-				const m = obj?.message;
-				if (m?.role === "assistant") {
-					const provider = String(m.provider || "unknown");
-					const model = String(m.model || "unknown");
-					const u = m.usage || {};
-					entries.push({
-						provider,
-						model,
-						input: Number(u.input) || 0,
-						output: Number(u.output) || 0,
-						cacheRead: Number(u.cacheRead) || 0,
-						cost: Number(u.cost?.total) || 0,
-					});
-				}
-			} catch {
-				// unparsable line
-			}
+		const m = JSON.parse(line)?.message;
+		if (m?.role !== "assistant") return null;
+		const u = m.usage || {};
+		return {
+			provider: String(m.provider || "unknown"),
+			model: String(m.model || "unknown"),
+			input: Number(u.input) || 0,
+			output: Number(u.output) || 0,
+			cacheRead: Number(u.cacheRead) || 0,
+			cost: Number(u.cost?.total) || 0,
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Parse newline-terminated lines from a buffer. Byte granularity, so the returned offset can be
+ * fed back to `readSync`. A trailing segment with no newline is parsed (the last record of a file
+ * not ending in `\n`) but only consumed when it is valid JSON — a write caught mid-flight is left
+ * for the next scan instead of being dropped or truncated into a bad entry.
+ */
+function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number } {
+	const entries: UsageEntry[] = [];
+	let start = 0;
+	let consumed = 0;
+	for (;;) {
+		const nl = buf.indexOf(10, start);
+		if (nl === -1) break;
+		const entry = entryOfLine(buf.toString("utf8", start, nl));
+		if (entry) entries.push(entry);
+		start = nl + 1;
+		consumed = start;
+	}
+	if (start < buf.length) {
+		const tail = buf.toString("utf8", start);
+		const entry = entryOfLine(tail);
+		if (entry) {
+			entries.push(entry);
+			consumed = buf.length;
+		} else if (isJsonParseable(tail)) {
+			// A complete record that is not an assistant message: consume it and move on.
+			consumed = buf.length;
+		}
+		// Anything else is a half-written record; leave it for the next scan.
+	}
+	return { entries, consumed };
+}
+
+/** True when the text parses as JSON. Used to tell a whole record from a half-written one. */
+function isJsonParseable(text: string): boolean {
+	try {
+		JSON.parse(text);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Read the bytes written since `fromByte`. Null when the file cannot be opened (deleted mid-scan). */
+function readTail(filePath: string, fromByte: number): Buffer | null {
+	try {
+		const fd = openSync(filePath, "r");
+		try {
+			const size = fstatSync(fd).size;
+			if (size <= fromByte) return Buffer.alloc(0);
+			const len = size - fromByte;
+			const buf = Buffer.allocUnsafe(len);
+			const read = readSync(fd, buf, 0, len, fromByte);
+			return buf.subarray(0, read);
+		} finally {
+			closeSync(fd);
 		}
 	} catch {
-		// unreadable file
+		return null;
 	}
-	return entries;
 }
 
 let cachedSummary: UsageSummary | null = null;
@@ -203,58 +304,66 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			continue;
 		}
 
-		let fileEntries: UsageEntry[];
-		const cached = diskCache.get(file);
-		if (cached && cached.v === CACHE_VERSION && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-			fileEntries = cached.entries;
+		let cached = diskCache.get(file);
+		if (!(cached && cached.v === CACHE_VERSION && cached.rollup)) cached = undefined;
+
+		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+			// Unchanged since the last scan: its rollup already holds everything.
+		} else if (cached && (cached.consumed ?? 0) > 0 && stat.size > (cached.consumed ?? 0)) {
+			// Grew, and a prefix was already parsed: read only the appended tail and fold it into
+			// the existing rollup. (A shrunk file, or one whose size is below the offset,
+			// re-parses whole — see the final branch.)
+			const tail = readTail(file, cached.consumed!);
+			const parsed = tail ? parseBuffer(tail) : null;
+			if (parsed) {
+				foldInto(cached.rollup, parsed.entries);
+				cached.consumed = cached.consumed! + parsed.consumed;
+				cached.mtimeMs = stat.mtimeMs;
+				cached.size = stat.size;
+			} else {
+				// Unreadable: fall back to whole-file.
+				const full = parseBuffer(readFileSync(file));
+				cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+				diskCache.set(file, cached);
+			}
+			cacheDirty = true;
 		} else {
-			fileEntries = parseSessionFile(file);
-			diskCache.set(file, {
-				mtimeMs: stat.mtimeMs,
-				size: stat.size,
-				v: CACHE_VERSION,
-				entries: fileEntries,
-			});
+			const full = parseBuffer(readFileSync(file));
+			cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+			diskCache.set(file, cached);
 			cacheDirty = true;
 		}
 
-		for (const ent of fileEntries) {
-			if (!providerMap.has(ent.provider)) {
-				providerMap.set(ent.provider, {
-					sessions: new Set(),
-					msgs: 0,
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cost: 0,
-					models: new Map(),
-				});
+		for (const [key, r] of Object.entries(cached.rollup.providers)) {
+			const sep = key.indexOf("\u0000");
+			const pname = sep === -1 ? key : key.slice(0, sep);
+			if (!providerMap.has(pname)) {
+				providerMap.set(pname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0, models: new Map() });
 			}
-			const p = providerMap.get(ent.provider)!;
+			const p = providerMap.get(pname)!;
 			p.sessions.add(file);
-			p.msgs++;
-			p.input += ent.input;
-			p.output += ent.output;
-			p.cacheRead += ent.cacheRead;
-			p.cost += ent.cost;
 
-			if (!p.models.has(ent.model)) {
-				p.models.set(ent.model, {
-					sessions: new Set(),
-					msgs: 0,
-					input: 0,
-					output: 0,
-					cacheRead: 0,
-					cost: 0,
-				});
+			if (sep === -1) {
+				// Provider-level key: the message totals belong here only.
+				p.msgs += r.msgs;
+				p.input += r.input;
+				p.output += r.output;
+				p.cacheRead += r.cacheRead;
+				p.cost += r.cost;
+				continue;
 			}
-			const m = p.models.get(ent.model)!;
+
+			const mname = key.slice(sep + 1);
+			if (!p.models.has(mname)) {
+				p.models.set(mname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
+			}
+			const m = p.models.get(mname)!;
 			m.sessions.add(file);
-			m.msgs++;
-			m.input += ent.input;
-			m.output += ent.output;
-			m.cacheRead += ent.cacheRead;
-			m.cost += ent.cost;
+			m.msgs += r.msgs;
+			m.input += r.input;
+			m.output += r.output;
+			m.cacheRead += r.cacheRead;
+			m.cost += r.cost;
 		}
 	}
 

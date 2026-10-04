@@ -35,6 +35,7 @@ import { stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
+import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Shortcut";
@@ -306,7 +307,7 @@ export const DEFAULT_HEADER_PRESET: HeaderPreset = "Arnative (Full)";
 const HEADER_PRESET_KEY = Symbol.for("pi-arnative.headerPreset");
 
 export function activeHeaderPreset(): HeaderPreset {
-	const stored = (globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY];
+	const stored = (globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY] ?? loadChoice(HEADER_PRESET_CONFIG_KEY, HEADER_PRESETS);
 	return HEADER_PRESETS.includes(stored as HeaderPreset) ? (stored as HeaderPreset) : DEFAULT_HEADER_PRESET;
 }
 
@@ -322,6 +323,7 @@ export function applyHeaderPreset(ctx: ExtensionContext): void {
 /** Select a preset and apply it immediately (real-time: the header swaps on the spot). */
 export function setHeaderPreset(name: HeaderPreset, ctx: ExtensionContext): void {
 	(globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY] = name;
+	saveChoice(HEADER_PRESET_CONFIG_KEY, name);
 	applyHeaderPreset(ctx);
 }
 
@@ -757,12 +759,27 @@ if (isMain(import.meta.url)) {
 	assert(DEFAULT_HEADER_PRESET === "Arnative (Full)" && HEADER_PRESETS.length === 2, "Arnative (Full) is the default header preset");
 	assert(HEADER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full)", "built-in preset is listed first");
 	assert(markedLabels(HEADER_PRESETS, "Arnative (Full)").join(" | ") === "  Pi (system) | ● Arnative (Full)", "preset labels mark the active one");
+	// Persisting a preset writes a config file: point it at a fixture so the real agent dir stays clean.
+	const presetFixture = mkdtempSync(join(tmpdir(), "arnative-hdr-"));
+	const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = presetFixture;
+	resetPresetCache();
 	let installed: unknown = "untouched";
 	const presetCtx: any = { ui: { setHeader: (factory: unknown) => { installed = factory; } } };
 	setHeaderPreset("Pi (system)", presetCtx);
 	assert(installed === undefined && activeHeaderPreset() === "Pi (system)", "Pi (system) clears the custom header");
 	setHeaderPreset("Arnative (Full)", presetCtx);
 	assert(typeof installed === "function" && activeHeaderPreset() === "Arnative (Full)", "Arnative (Full) installs the header factory");
+	// Persist a NON-default value: asserting the default survives proves nothing.
+	setHeaderPreset("Pi (system)", presetCtx);
+	assert(loadChoice(HEADER_PRESET_CONFIG_KEY, HEADER_PRESETS) === "Pi (system)", "the header preset is persisted to disk");
+	delete (globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY];
+	resetPresetCache();
+	assert(activeHeaderPreset() === "Pi (system)", "a restart reads the non-default preset back from disk");
+	rmSync(presetFixture, { recursive: true, force: true });
+	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+	resetPresetCache();
 
 	// Parsing & wrapping
 	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody splits 3 comma items");

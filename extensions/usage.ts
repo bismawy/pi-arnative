@@ -308,6 +308,38 @@ if (isMain(import.meta.url)) {
 		"getModelAllTimeUsage without a model id matches nothing (no grand total)",
 	);
 
+	// A session file that grows is parsed from the tail only (byte offset in the cache), not re-read.
+	const file = join(fixture, "sessions", "proj", "a.jsonl");
+	const cachedBefore = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, { consumed: number; size: number }>;
+	assert(cachedBefore[file]!.consumed === cachedBefore[file]!.size, "cache records the full parsed offset");
+	writeFileSync(file, asst("gemini-3.8-flash", 1000) + String.fromCharCode(10), { flag: "a" });
+	const grown = collectUsageSummary(true);
+	assert(grown.totals.msgs === 4, "an appended record is picked up from the tail");
+	assert(
+		getModelAllTimeUsage("gemini-3.8-flash").input === 1150,
+		"the appended record adds to the existing totals (no duplicate, no drop)",
+	);
+
+	// The per-file rollup is what makes a refresh cheap: folding a tail must reproduce the same
+	// totals as parsing the whole file from scratch. Compare the incremental answer to a cold one.
+	const incremental = JSON.stringify(getModelAllTimeUsage("gemini-3.8-flash"));
+	const cacheRaw = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, unknown>;
+	// Drop the cache (as a fresh machine, or a version bump, would) and rescan the whole file.
+	writeFileSync(join(fixture, "arnative-usage-cache.json"), "{}", "utf8");
+	collectUsageSummary(true);
+	assert(
+		JSON.stringify(getModelAllTimeUsage("gemini-3.8-flash")) === incremental,
+		"an incremental tail fold equals a full cold parse of the same file",
+	);
+	assert(Object.keys(cacheRaw).length === 1, "one session file produces exactly one cache entry");
+
+	// A half-written trailing record must not be counted, then must appear once completed in place.
+	const pending = asst("other-model", 5);
+	writeFileSync(file, pending.slice(0, 40), { flag: "a" });
+	assert(collectUsageSummary(true).totals.msgs === 4, "a half-written trailing record is not counted");
+	writeFileSync(file, pending.slice(40) + String.fromCharCode(10), { flag: "a" });
+	assert(collectUsageSummary(true).totals.msgs === 5, "the record is counted once the write completes");
+
 	// Disk cache pruning: no cache key may point at a session file that is gone.
 	rmSync(join(fixture, "sessions", "proj", "a.jsonl"));
 	collectUsageSummary(true);
