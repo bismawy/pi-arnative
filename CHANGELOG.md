@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.1] - 2026-10-04
 
 ### Changed
 - `/arnative headers` and `/arnative footers` picker rows are reordered built-in first (`Pi (system)`, `Arnative (Full)`) and the parenthetical suffix now renders in the theme's `dim` token, so the preset name carries the row and the qualifier reads as a footnote (`extensions/arnative.ts`).
