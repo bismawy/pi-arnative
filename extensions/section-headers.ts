@@ -326,6 +326,16 @@ export function setHeaderPreset(name: HeaderPreset, ctx: ExtensionContext): void
 	applyHeaderPreset(ctx);
 }
 
+// Counts are captured from pi's loaded-resource listing, which pi skips entirely under
+// `quietStartup: true | "header"` (docs/settings.md). Without the listing, [Context]/
+// [Skills]/[Extensions] are never built, so the store can only answer "unknown" — not 0.
+// That state is tracked globally because the header renders long after `session_start`.
+let countsKnown = true;
+export function resourcesListingShown(current?: boolean): boolean {
+	if (current !== undefined) countsKnown = current;
+	return countsKnown;
+}
+
 // The installed header instance. globalThis-backed because `/reload` re-imports the
 // extension modules and arnative.ts imports this file, so two copies can coexist.
 const HEADER_INSTANCE_KEY = Symbol.for("pi-arnative.headerInstance");
@@ -402,21 +412,21 @@ export class ArnativeHeader implements Component {
 				name: "Context",
 				icon: SECTION_ICONS.Context,
 				count: tabStore.get("Context")?.length ?? 0,
-				label: `Context [${tabStore.get("Context")?.length ?? 0}]`,
+				label: countsKnown ? `Context [${tabStore.get("Context")?.length ?? 0}]` : "Context [—]",
 			},
 			{
 				key: "Skills",
 				name: "Skills",
 				icon: SECTION_ICONS.Skills,
 				count: tabStore.get("Skills")?.length ?? 0,
-				label: `Skills [${tabStore.get("Skills")?.length ?? 0}]`,
+				label: countsKnown ? `Skills [${tabStore.get("Skills")?.length ?? 0}]` : "Skills [—]",
 			},
 			{
 				key: "Extensions",
 				name: "Extensions",
 				icon: SECTION_ICONS.Extensions,
 				count: tabStore.get("Extensions")?.length ?? 0,
-				label: `Extensions [${tabStore.get("Extensions")?.length ?? 0}]`,
+				label: countsKnown ? `Extensions [${tabStore.get("Extensions")?.length ?? 0}]` : "Extensions [—]",
 			},
 			{
 				key: "Shortcut",
@@ -608,7 +618,9 @@ export class ArnativeHeader implements Component {
 				infoLines.push(fgFirst(th, ["accentSoft", "text"], line));
 			}
 		} else if (activeItems.length === 0) {
-			infoLines.push(fgFirst(th, ["accentSoft"], "(empty)"));
+			infoLines.push(
+				fgFirst(th, ["dim"], countsKnown ? "(empty)" : "(not tracked — quietStartup hides the listing)"),
+			);
 		} else if (this.activeTab === "Model") {
 			// The Model tab already carries soft styling + a dim separator
 			infoLines.push(...activeItems);
@@ -658,6 +670,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 					// Mark this container as the loadedResourcesContainer
 					(this as Record<string, unknown>)._isLoadedResourcesContainer = true;
 
+					countsKnown = true;
 					const rawBody = body.split("\n").slice(1).join("\n");
 					const items = extractItemsFromBody(rawBody, sectionName === "Extensions");
 					tabStore.set(sectionName, items);
@@ -704,7 +717,17 @@ export default function (pi: ExtensionAPI) {
 		pi.registerShortcut(key, { description: "Next header tab", handler: nextTab });
 	}
 
+	// pi renders the resource listing after this event, so a session that starts
+	// with it disabled leaves the store empty. That is "not tracked", not "none".
 	pi.on("session_start", async (_event, ctx) => {
+		let quiet: boolean | "header" = false;
+		try {
+			quiet = pi.getSettings().quietStartup ?? false;
+		} catch {
+			/* older pi without getSettings: keep pi's default (listing shown) */
+		}
+		resourcesListingShown(quiet === false);
+		for (const key of ["Context", "Skills", "Extensions"] as const) tabStore.set(key, []);
 		activeThemeProxy = themeOf<Themeish>(ctx) ?? activeThemeProxy;
 		// Register the header for the active preset
 		applyHeaderPreset(ctx);
@@ -802,6 +825,25 @@ if (isMain(import.meta.url)) {
 
 	// Only "dim" is colored, so the box line colors can be asserted.
 	const ansiTheme = { fg: (c: string, t: string) => (c === "dim" ? `\x1b[2m${t}\x1b[22m` : t) };
+
+	// Counts come from pi's loaded-resource listing. With `quietStartup: true | "header"`
+	// pi skips that listing, so the counts are unknown — shown as "—", never a misleading 0.
+	resourcesListingShown(false);
+	tabStore.set("Context", []);
+	tabStore.set("Skills", []);
+	tabStore.set("Extensions", []);
+	const hdrQuiet = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
+	assert(hdrQuiet.getTabsData(120).map((t) => t.label).join("|").includes("Skills [—]"), "hidden listing: counts render as —, not 0");
+	hdrQuiet.activeTab = "Skills";
+	assert(
+		hdrQuiet.render(120).some((l) => stripAnsi(l).includes("(not tracked")),
+		"hidden listing: empty tab explains itself instead of a bare (empty)",
+	);
+	resourcesListingShown(true);
+	assert(new ArnativeHeader(fakeTui, ansiTheme, fakeCtx).getTabsData(120).some((t) => t.label === "Skills [0]"), "shown listing: 0 is a real count again");
+	tabStore.set("Context", ["AGENTS.md"]);
+	tabStore.set("Skills", ["agents-sdk", "cloudflare"]);
+	tabStore.set("Extensions", ["@bismawy/pi-agentrouter@1.6.1", "footer.ts"]);
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
 	assert(hdr.activeTab === "Directory", "default tab is Directory");
 
