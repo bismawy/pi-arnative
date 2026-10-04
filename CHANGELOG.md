@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- `codemode` now renders in the arnative box like every other tool call: side borders, green background (`toolSuccessBg`), and the script's first line prefixed with the `󱞩` summary glyph. While the tool runs the box shows the shared spinner; the `\uf489` glyph appears with the result (`extensions/tools.ts`).
+- Collapsed `codemode` is now two rows, the same footprint as `bash`/`grep`/`read`: title + the script's first line. Nested calls and output wait behind the standard `[ctrl+o to expand]` hint. A failing run still shows its output.
+- pi's `Script completed / Wall time / Output:` header no longer shows in the box.
+- Shared duration wording (`2ms` under a second, `1.4s` above) and one error glyph (`x`) across every tool; a failing `codemode` run shows its whole output and never a `[ctrl+o to expand]` hint.
+
 ## [0.3.2] - 2026-10-04
 
 ### Changed

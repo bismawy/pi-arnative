@@ -27,6 +27,8 @@ import {
 	createReadTool,
 	createWriteTool,
 	getMarkdownTheme,
+	highlightCode,
+	initTheme,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -62,6 +64,12 @@ function syncTicker(): void {
 
 export function spinIcon(): string {
 	return FRAMES[Math.floor(Date.now() / 500) % FRAMES.length];
+}
+
+/** Tool duration: `2ms` under a second, `1.4s` above — the wording pi itself uses. */
+function fmtMs(ms: number | undefined): string {
+	if (ms === undefined || !Number.isFinite(ms)) return "";
+	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 export class Lines {
@@ -441,6 +449,78 @@ const formatTodoRows = (lines: string[], th: Theme): string[] => {
 	return out;
 };
 
+// codemode: the script is highlighted, the calls and output come from pi's own details.
+function codeLines(code: string): string[] {
+	const js = code.replace(/\r/g, "").trimEnd().replace(/\t/g, "   ");
+	if (!js) return [];
+	try {
+		return highlightCode(js, "javascript");
+	} catch {
+		return js.split("\n");
+	}
+}
+
+/** `✓ todo {"action":"list"} 2ms` — status icon, tool name, muted args, dim duration. */
+function formatCodemodeCall(call: any, th: Theme): string {
+	const [color, glyph] = STATUS_ICON[String(call?.status ?? "ok")] ?? ["error", "x"];
+	const dur = fmtMs(Number(call?.durationMs));
+	let line = ` ${th.fg(color, glyph)} ${th.fg("accent", String(call?.name ?? ""))}`;
+	if (call?.args) line += ` ${th.fg("muted", String(call.args))}`;
+	if (dur) line += ` ${th.fg("dim", dur)}`;
+	return line;
+}
+
+// codemode call status -> [theme colour, glyph], same mapping pi's own renderer uses.
+const STATUS_ICON: Record<string, [string, string]> = {
+	running: ["warning", "…"],
+	ok: ["success", "✓"],
+	cancelled: ["muted", "⊘"],
+	error: ["error", "x"],
+};
+
+/** Drop pi's "Script completed\nWall time …\nOutput:" header (a rejected input has none). */
+function codemodeOutput(content: unknown): string {
+	const blocks = (Array.isArray(content) ? content : []).filter((c: any) => c?.type === "text") as Array<{ text?: string }>;
+	const header = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n/;
+	return blocks
+		.map((c, i) => (i === 0 ? String(c.text ?? "").replace(header, "") : String(c.text ?? "")))
+		.join("\n")
+		.trim();
+}
+
+/** Script lines; collapsed keeps only the first, like the other tools' one-line call. */
+function codemodeScript(code: string, expanded: boolean): { lines: string[]; hidden: number } {
+	const lines = codeLines(code);
+	if (expanded || lines.length <= 1) return { lines, hidden: 0 };
+	return { lines: lines.slice(0, 1), hidden: lines.length - 1 };
+}
+
+/** Every box row: title, script, nested calls, output. Collapsed is the title plus the
+ *  script's first line, with the rest behind the expand hint. Expanding — or failing —
+ *  shows everything: a truncated error would read as a short, successful run. */
+function codemodeBoxRows(
+	args: any,
+	result: { content?: unknown; details?: any } | undefined,
+	th: Theme,
+	expanded: boolean,
+	isErr: boolean,
+	icon: string,
+): string[] {
+	const rows = [`${icon} ${th.fg("accent", "codemode")}`];
+	const script = codemodeScript(typeof args?.code === "string" ? args.code : "", expanded);
+	script.lines.forEach((line, i) => rows.push(i === 0 ? `${resHead(th)} ${line}` : ` ${line}`));
+	const calls = (result?.details?.calls as any[] | undefined) ?? [];
+	const output = codemodeOutput(result?.content);
+	const outLines = output ? output.split("\n") : [];
+	const shown = expanded || isErr;
+	if (shown) {
+		if (calls.length || outLines.length) rows.push("");
+		rows.push(...calls.map((c) => formatCodemodeCall(c, th)), ...outLines.map((l) => th.fg("toolOutput", ` ${l}`)));
+	}
+	const hidden = script.hidden + (shown ? 0 : calls.length + outLines.length);
+	if (!expanded && hidden > 0) rows[rows.length - 1] += ` ${expandHint(th)}`;
+	return rows;
+}
 
 // One render path for all tools (no per-tool duplication).
 // renderCall = running box (󰔟); renderResult = final box (✓/x + right-aligned
@@ -499,8 +579,7 @@ function minimal(
 			((context.state ??= {}) as Record<string, unknown>).hasResult = true;
 			const text = textOf(result);
 			const isErr = Boolean(context.isError || result.isError || text.startsWith("Error"));
-			const ms = context.toolCallId ? TIMINGS.get(context.toolCallId) : undefined;
-			const dur = ms !== undefined ? `${(ms / 1000).toFixed(1)}s` : "";
+			const dur = fmtMs(context.toolCallId ? TIMINGS.get(context.toolCallId) : undefined);
 			const icon = isErr ? theme.fg("error", "x") : theme.fg("success", "✓");
 			return new Lines((width) => {
 				const soft = accentSoftOf(theme);
@@ -524,6 +603,12 @@ function minimal(
 }
 
 function arnativeTools(pi: ExtensionAPI) {
+	// codemode keeps pi's own data (script + nested calls + output) wrapped in the arnative
+	// box, bg like every other tool. A resolver runs first and returns our renderers for
+	// that name; `next()` would give pi's unboxed ones.
+	OWN_BOX.add("codemode");
+	pi.registerToolRenderer((toolName, next) => (toolName === "codemode" ? codemodeRenderers : next()));
+
 	// Re-render source for the spinner + ticker cleanup when the session closes
 	pi.on("session_start", async (_event, ctx) => {
 		requestRenderFn = () => {
@@ -625,6 +710,33 @@ function arnativeTools(pi: ExtensionAPI) {
 		},
 	);
 }
+
+// codemode: pi's renderer wrapped in our box. renderShell "self" keeps the
+// execution defaults; renderCall/renderResult draw the box. state.hasResult
+// guarantees one box per call, also after reload/restore.
+const codemodeRenderers = {
+	renderShell: "self" as const,
+	renderCall(args: any, th: Theme, ctx: TCtx) {
+		return new Lines((width) => {
+			if (ctx.state?.hasResult) return [];
+			const isErr = Boolean(ctx.isError);
+			const bg = isErr ? "toolErrorBg" : "toolPendingBg";
+			// Same spinner as every other box while the tool runs; the codemode glyph
+			// only appears once the result is in (renderResult).
+			const icon = th.fg("warning", spinIcon());
+			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded), isErr, icon), bg);
+		});
+	},
+	renderResult(result: TResult & { details?: any }, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) {
+		if (opts.isPartial) return EMPTY;
+		((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
+		const isErr = Boolean(ctx.isError || result.isError);
+		const icon = isErr ? th.fg("error", "x") : th.fg("success", "\uf489");
+		return new Lines((width) =>
+			box(th, width, codemodeBoxRows(ctx.args, result, th, Boolean(opts.expanded), isErr, icon), isErr ? "toolErrorBg" : "toolSuccessBg"),
+		);
+	},
+};
 
 export default arnativeTools;
 
@@ -914,6 +1026,7 @@ if (isMain(import.meta.url)) {
 	// The default export registers the tools (filling OWN_BOX); a pi stub suffices.
 	arnativeTools({
 		registerTool: () => {},
+		registerToolRenderer: () => {},
 		on: () => {},
 		registerShortcut: () => {},
 		registerMessageRenderer: () => {},
@@ -1011,5 +1124,40 @@ if (isMain(import.meta.url)) {
 		fullText({ content: [{ type: "text", text: "a\nb" }] }, th, 0).join("|") === th.fg("dim", "a") + "|" + th.fg("dim", "b"),
 		"no width (self-check) still dumps dim",
 	);
+
+	// codemode: one box per call, driven through the real component (what pi uses).
+	const cmArgs = { code: 'const l = await tools.todo({ action: "list" });\nconsole.log(l);' };
+	const cmRes = {
+		content: [
+			{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n" },
+			{ type: "text", text: "alpha: ok" },
+		],
+		details: { calls: [{ status: "ok", name: "todo", args: '{"action":"list"}', durationMs: 2 }] },
+	};
+	initTheme(); // ToolExecutionComponent resolves a real theme, not the fg-passthrough stub
+	const cmRender = (args: any, result: any, expanded = false) => {
+		const c: any = new ToolExecutionComponent("codemode", "1", args, {}, codemodeRenderers as any, { requestRender() {} }, cwd);
+		if (result) c.updateResult(result, false);
+		c.setExpanded(expanded);
+		// pi prefixes the box with a spacer blank line; drop blanks so the rows are predictable.
+		return (c.render(100) as string[]).map(stripAnsi).filter((l) => l !== "");
+	};
+	const cmCollapsed = cmRender(cmArgs, cmRes);
+	assert(cmCollapsed.length === 4 && cmCollapsed[0]!.startsWith("╭") && cmCollapsed[3]!.startsWith("╰"), "codemode: collapsed box is title + one script line inside the border");
+	assert(cmCollapsed[2]!.includes("const l = await tools.todo") && cmCollapsed[2]!.includes("[ctrl+o to expand]"), "codemode: collapsed shows the first script line + hint");
+	const cmExpanded = cmRender(cmArgs, cmRes, true);
+	assert(cmExpanded.some((l) => l.includes("✓ todo") && l.includes("2ms")) && cmExpanded.some((l) => l.includes("alpha: ok")), "codemode: expanded shows the nested calls and the output");
+	// A failing run is never truncated: the whole output is shown without a hint.
+	const longErr = { content: [{ type: "text", text: "Script failed\nWall time 0.1 seconds\nOutput:\n" + Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n") }], isError: true };
+	const cmErr = cmRender({ code: "boom()" }, longErr);
+	assert(cmErr.some((l) => l.includes("line 12")) && !cmErr.some((l) => l.includes("to expand")), "codemode: a failed run shows all its output, no hint");
+	// Running: the shared spinner, not the codemode glyph, and no hint while nothing is hidden.
+	const cmRunning = cmRender({ code: "console.log(1);" }, undefined);
+	assert(FRAMES.some((f) => cmRunning.join("\n").includes(f)) && !cmRunning.join("\n").includes("\uf489"), "codemode: running box uses the shared spinner, not the codemode glyph");
+	assert(!cmRunning.some((l) => l.includes("to expand")), "codemode: nothing hidden on a single-line script");
+	assert([...cmCollapsed, ...cmExpanded, ...cmErr].every((l) => visibleWidth(l) === 100), "codemode: box fills the given width");
+	assert(fmtMs(2) === "2ms" && fmtMs(1400) === "1.4s" && fmtMs(undefined) === "", "duration wording: ms under a second, s above");
+	assert(codemodeOutput(cmRes.content) === "alpha: ok", "codemode: Script completed header dropped (own block)");
+	assert(codemodeOutput([{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n2" }]) === "2", "codemode: header dropped when joined with the output");
 	console.log("OK");
 }
