@@ -1,8 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.5] - 2026-10-04
 
 ### Fixed
+- Git info in the footer now works on a fresh machine: the branch is read straight from `.git/HEAD` (the trick pi's own footer uses), so it shows without a `git` install and on a repo git refuses to touch (its dubious-ownership guard). Tag, dirty count and ahead/behind still need the `git` binary; when it cannot answer, those parts are left out instead of a fabricated `-`/`clean` (`extensions/footer.ts`).
+- `run()` no longer swallows a failed `git` call into `""`. "git said nothing" and "git could not run" used to be indistinguishable, which is what made four different states — not a repo, no `git` on PATH, a detached HEAD, and a foreign-owned repo — all show as no git info at all.
+- The header's `Context`/`Skills`/`Extensions` counts show `—` instead of a misleading `0` under `"quietStartup": true` (or `"header"`), which hides the resource listing the counts are read from. The empty-tab placeholder now says the counts are not tracked, and the state resets on `session_start` so `/new` cannot show stale counts (`extensions/section-headers.ts`).
 - The header and footer preset chosen in `/arnative` now survives a restart. The choice was only kept on `globalThis`, so every new pi process fell back to the default Arnative (Full) header and footer. It is now written to `arnative-config.json` in the agent dir and read back at startup (`lib/preset-store.ts`, `extensions/section-headers.ts`, `extensions/footer.ts`).
 - The reload-box patch no longer blanks a whole chat: it only drops a container that holds nothing but the box itself (border rows, blank spacers and the message copy). Any other container whose content merely mentioned "Reloading keybindings" — a `read`/`grep` result, this repo's own source — was rendered as zero lines (`extensions/ui-render-tweaks.ts`).
 - Row-1 git info works from a subfolder of a repo: `.git` is looked up by walking up the directory tree like git itself does, so the branch no longer vanishes when the session runs in `extensions/` or `src/` (`extensions/footer.ts`).
