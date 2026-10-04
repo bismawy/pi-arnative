@@ -13,9 +13,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
@@ -77,7 +77,14 @@ if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
-type GitInfo = { branch: string; tag: string; uncommitted: number; ahead: number; behind: number } | null;
+type GitInfo = {
+	branch: string;
+	/** Absent (null) when git could not answer — never a false "-"/"clean". */
+	tag: string | null;
+	uncommitted: number | null;
+	ahead: number;
+	behind: number;
+} | null;
 let gitRefreshInFlight = false;
 
 let git: GitInfo = null;
@@ -118,18 +125,58 @@ export function currentToolVerb(active: ReadonlyMap<string, string>): string {
 	return verb;
 }
 
-function run(cmd: string, args: string[], cwd: string): Promise<string> {
-	return new Promise((resolve) => {
+type RunResult = { ok: boolean; out: string };
+/** Distinguishes "git said nothing" from "git could not run" — the caller must not
+ *  invent a clean tree when git is absent or the repo is not ours. */
+function run(cmd: string, args: string[], cwd: string): Promise<RunResult> {
+	return new Promise((resolvePromise) => {
 		execFile(cmd, args, { cwd, timeout: 2000 }, (err, stdout) => {
-			resolve(err ? "" : String(stdout).trim());
+			resolvePromise({ ok: !err, out: String(stdout).trim() });
 		});
 	});
+}
+
+/**
+ * The branch, straight from `.git/HEAD` — the same trick pi's own footer uses.
+ * `git branch --show-current` fails identically for a repo the user does not own
+ * (git's dubious-ownership guard), a PATH without git, and a detached HEAD; all
+ * three collapsed into a silent null before. Reading the ref needs no binary and
+ * no ownership check, so a fresh user sees the branch without installing git.
+ */
+function branchFromDisk(cwd: string): string | null {
+	try {
+		const dotGit = join(cwd, ".git");
+		// A worktree/submodule has a `.git` file pointing at the real git dir.
+		const gitDir = statSync(dotGit).isDirectory()
+			? dotGit
+			: resolve(cwd, readFileSync(dotGit, "utf8").trim().replace(/^gitdir:\s*/, ""));
+		const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+		const ref = /^ref:\s+refs\/heads\/(.+)$/.exec(head);
+		return ref ? ref[1] : "detached";
+	} catch {
+		return null; // not a repo, or the metadata is unreadable
+	}
 }
 
 // A refresh arriving while one is in flight is queued (last requested cwd wins) and
 // re-run afterwards — it used to be dropped, leaving the footer's git state stale
 // until the next trigger.
 let gitRefreshQueuedCwd: string | null = null;
+
+/**
+ * Row-1 git segment: branch(+sync), tag, worktree state. Halves git cannot answer
+ * (no binary, or a repo the user does not own) are omitted, so a fresh user still sees
+ * the branch but never a fabricated "-" or "clean".
+ */
+export function gitParts(info: GitInfo, acc: (t: string) => string, soft: (t: string) => string): string[] {
+	if (!info) return [];
+	const branch = `${acc("\uf126")} ${soft(info.branch)}${info.ahead > 0 ? ` ${soft(`↑${info.ahead}`)}` : ""}${info.behind > 0 ? ` ${soft(`↓${info.behind}`)}` : ""}`;
+	const parts = [branch];
+	if (info.tag !== null) parts.push(`${acc("\uf02b")} ${soft(info.tag)}`);
+	if (info.uncommitted !== null) parts.push(`${acc("\uf172")}  ${info.uncommitted > 0 ? soft(`~${info.uncommitted}`) : soft("clean")}`);
+	return parts;
+}
+
 async function refreshGit(cwd: string): Promise<void> {
 	if (gitRefreshInFlight) {
 		gitRefreshQueuedCwd = cwd;
@@ -137,7 +184,7 @@ async function refreshGit(cwd: string): Promise<void> {
 	}
 	gitRefreshInFlight = true;
 	try {
-		const branch = await run("git", ["branch", "--show-current"], cwd);
+		const branch = branchFromDisk(cwd);
 		if (!branch) {
 			git = null;
 			return;
@@ -147,13 +194,13 @@ async function refreshGit(cwd: string): Promise<void> {
 			run("git", ["status", "--porcelain"], cwd),
 			run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
 		]);
-		const uncommitted = status ? status.split("\n").filter((l) => l.trim().length > 0).length : 0;
-		const parts = sync.trim() === "" ? [] : sync.trim().split(/\s+/).map(Number);
+		const uncommitted = status.ok ? status.out.split("\n").filter((l) => l.trim().length > 0).length : null;
+		const parts = sync.ok && sync.out !== "" ? sync.out.split(/\s+/).map(Number) : [];
 		const behind = parts.length > 0 && parts[0] > 0 ? parts[0] : 0;
 		const ahead = parts.length > 1 && parts[1] > 0 ? parts[1] : 0;
 		git = {
 			branch,
-			tag: tag || "-",
+			tag: tag.ok && tag.out ? tag.out : null,
 			uncommitted,
 			ahead,
 			behind,
@@ -528,12 +575,7 @@ export default function (pi: ExtensionAPI) {
 							const cwdShort = shortenCwd(cwd);
 							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
 							if (git) {
-								const gitIcon = acc("\uf172");
-								const gitText = git.uncommitted > 0 ? soft(`~${git.uncommitted}`) : soft("clean");
-								const pBranch = `${acc("\uf126")} ${soft(git.branch)}${git.ahead > 0 ? ` ${soft(`↑${git.ahead}`)}` : ""}${git.behind > 0 ? ` ${soft(`↓${git.behind}`)}` : ""}`;
-								const pTag = `${acc("\uf02b")} ${soft(git.tag)}`;
-								const pState = `${gitIcon}  ${gitText}`;
-								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${sep}${pBranch}${sep}${pTag}${sep}${pState}`;
+								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, soft).map((p) => `${sep}${p}`).join("")}`;
 							}
 							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, soft, dim);
 
@@ -885,14 +927,39 @@ if (isMain(import.meta.url)) {
 	assert(s3.includes("↑1.1k") && s3.includes("↓2.6k"), "branch length changed: full rescan");
 
 	// regression: a refresh arriving while one is in flight is re-run with the newest
-	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger)
+	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger).
+	// "newest cwd" needs a real repo: the branch now comes from .git/HEAD, not from git.
+	const repo = mkdtempSync(join(tmpdir(), "pi-arnative-repo-"));
+	mkdirSync(join(repo, ".git"), { recursive: true });
+	writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/arnative-tests\n");
 	git = null;
 	const noGit = mkdtempSync(join(tmpdir(), "pi-arnative-nogit-"));
 	void refreshGit(noGit); // in flight (deterministic: sync up to the first await), resolves git = null
-	await refreshGit(process.cwd()); // queued behind it with the newest cwd
+	await refreshGit(repo); // queued behind it with the newest cwd
 	for (let i = 0; i < 100 && git === null; i++) await new Promise((r) => setTimeout(r, 20));
-	assert(git !== null && git.branch.length > 0, "queued git refresh re-ran on the newest cwd (not dropped)");
+	assert(git !== null && git.branch === "arnative-tests", "queued git refresh re-ran on the newest cwd (not dropped)");
 	rmSync(noGit, { recursive: true, force: true });
+	rmSync(repo, { recursive: true, force: true });
+
+	// A repo whose branch is readable without git on PATH: the branch comes from .git/HEAD
+	// (pi's own footer does this too), so a fresh user needs no git install for row 1.
+	const bare = mkdtempSync(join(tmpdir(), "pi-arnative-disk-"));
+	mkdirSync(join(bare, ".git"), { recursive: true });
+	writeFileSync(join(bare, ".git", "HEAD"), "ref: refs/heads/arnative-smoke\n");
+	assert(branchFromDisk(bare) === "arnative-smoke", "branch is read from .git/HEAD without running git");
+	writeFileSync(join(bare, ".git", "HEAD"), "1234567890abcdef1234567890abcdef12345678\n");
+	assert(branchFromDisk(bare) === "detached", "a raw HEAD hash reports detached, not null");
+	rmSync(bare, { recursive: true, force: true });
+
+	// Honesty: with the branch known but git unable to answer, tag/status must be absent
+	// rather than the old false "-"/"clean".
+	const A = (t: string) => t;
+	const S = (t: string) => t;
+	const unknownGit = gitParts({ branch: "main", tag: null, uncommitted: null, ahead: 0, behind: 0 }, A, S);
+	assert(unknownGit.length === 1 && unknownGit[0]!.endsWith("main"), "unreadable git: branch only, no fake '-'/'clean'");
+	const fullGit = gitParts({ branch: "main", tag: "v1.2.3", uncommitted: 2, ahead: 1, behind: 0 }, A, S);
+	assert(fullGit.length === 3 && fullGit[1]!.endsWith("v1.2.3") && fullGit[2]!.includes("~2"), "readable git: tag + dirty count present");
+	assert(gitParts(null, A, S).length === 0, "not a repo: no git segment at all");
 
 	// Footer presets: Arnative (Full) is the default; Pi (system) hands the footer slot back to pi (the editor stays arnative).
 	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 2, "Arnative (Full) is the default footer preset");
