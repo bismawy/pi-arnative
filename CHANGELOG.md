@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2] - 2026-10-04
+
+### Changed
+- Source cleanup only: the generator's 11 `accent` seeds, the color self-check and one test fixture no longer hold raw hex. Each seed is now the OKLCH value of the same colour (`#00d7ff` → `oklch(81.1% 0.1455 217.709375)`), produced by `hexToOklch`, so the theme output is **byte-identical**; `themes/*.json` are untouched. `lib/color.ts` also keeps its hex, deliberately: those literals are the test vectors for the hex parser, not styling (`themes/gen-themes.mjs`, `lib/color.ts`, `extensions/ui-render-tweaks.ts`).
+- `themes/gen-themes.mjs` dropped its private `parseOklch` (percent-only regex) for the shared one in `lib/color.ts`, which also accepts a fractional `L` — a seed can no longer parse as `NaN`.
+- No user-visible change; this release exists to bring the npm tarball in line with `main` after #8.
+
 ## [0.3.1] - 2026-10-04
 
 ### Changed
