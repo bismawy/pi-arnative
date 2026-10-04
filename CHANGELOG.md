@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.3] - 2026-10-04
 
 ### Changed
 - `codemode` now renders in the arnative box like every other tool call: side borders, green background (`toolSuccessBg`), and the script's first line prefixed with the `󱞩` summary glyph. While the tool runs the box shows the shared spinner; the `\uf489` glyph appears with the result (`extensions/tools.ts`).
