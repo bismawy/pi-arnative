@@ -616,9 +616,15 @@ function minimal(
 					dur,
 					expanded,
 				);
+				// Anything the collapsed summary hides gets the standard hint; without it a
+				// two-line box (edit: `+1 / -1`) looks complete while the diff sits behind it.
+				const hasDetail = countLines(text) > 1 || Boolean((result.details as { diff?: string } | undefined)?.diff);
 				const resLine = res(result, theme, soft, isErr, expanded);
-				if (resLine) rows.push(resLine);
 				if (expanded) rows.push(...full(result, theme));
+				else if (resLine) {
+					const hint = hasDetail ? ` ${expandHint(theme)}` : "";
+					rows.push(hint ? `${truncateToWidth(resLine, Math.max(8, inner - visibleWidth(hint)), "…")}${hint}` : resLine);
+				}
 				return box(theme, width, rows);
 			});
 		},
@@ -1182,6 +1188,31 @@ if (isMain(import.meta.url)) {
 	assert(fmtMs(2) === "2ms" && fmtMs(1400) === "1.4s" && fmtMs(undefined) === "", "duration wording: ms under a second, s above");
 	assert(codemodeOutput(cmRes.content) === "alpha: ok", "codemode: Script completed header dropped (own block)");
 	assert(codemodeOutput([{ type: "text", text: "Script completed\nWall time 0.01 seconds\nOutput:\n2" }]) === "2", "codemode: header dropped when joined with the output");
+	// minimal(): a collapsed summary hides more than it shows -> hint; expanded shows all.
+	{
+		const reg2: Record<string, any> = {};
+		const fakePi: any = { registerTool: (t: any) => { reg2[t.name] = t; }, registerToolRenderer: () => {}, on: () => {} };
+		arnativeTools(fakePi);
+		const minRender = (name: string, args: any, result: any, expanded = false) => {
+			const c: any = new ToolExecutionComponent(name, "1", args, {}, reg2[name], { requestRender() {} }, cwd);
+			c.updateResult(result, false);
+			c.setExpanded(expanded);
+			return (c.render(74) as string[]).map(stripAnsi).filter((l) => l !== "");
+		};
+		const diffRes = { content: [{ type: "text", text: "ok" }], details: { diff: "@@\n-old\n+new" } };
+		const ed = minRender("edit", { path: "README.md" }, diffRes);
+		assert(ed.some((l) => l.includes("+1 / -1") && l.includes("to expand")), "minimal(): collapsed edit summary carries the expand hint");
+		assert(!minRender("edit", { path: "README.md" }, diffRes, true).some((l) => l.includes("to expand")), "minimal(): expanded edit drops the hint");
+		assert(
+			minRender("bash", { command: "true" }, { content: [{ type: "text", text: "done" }], details: {} }).every((l) => !l.includes("to expand")),
+			"minimal(): a single-line output has nothing hidden, so no hint",
+		);
+		assert(
+			minRender("edit", { path: "README.md" }, diffRes).every((l) => visibleWidth(l) === 74),
+			"minimal(): hint row still fills the box width",
+		);
+	}
+
 	// Chrome DevTools: their bare renderers are replaced by our box (title + summary).
 	const textComp = (text: string, color?: string) => ({
 		render: (w: number) => (text ? text.split("\n").map((l) => (color ? th.fg(color, l) : l).slice(0, Math.max(0, w))) : []),
