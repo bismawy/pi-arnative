@@ -601,7 +601,9 @@ function minimal(
 			if (isPartial) return EMPTY;
 			((context.state ??= {}) as Record<string, unknown>).hasResult = true;
 			const text = textOf(result);
-			const isErr = Boolean(context.isError || result.isError || text.startsWith("Error"));
+			// `ctx.isError`/`result.isError` are the only honest sources: output text starting with
+			// "Error" is normal content (a file whose first line says "Error handling...").
+			const isErr = Boolean(context.isError || result.isError);
 			const dur = fmtMs(context.toolCallId ? TIMINGS.get(context.toolCallId) : undefined);
 			const icon = isErr ? theme.fg("error", "x") : theme.fg("success", "✓");
 			return new Lines((width) => {
@@ -1206,6 +1208,11 @@ if (isMain(import.meta.url)) {
 		assert(
 			minRender("bash", { command: "true" }, { content: [{ type: "text", text: "done" }], details: {} }).every((l) => !l.includes("to expand")),
 			"minimal(): a single-line output has nothing hidden, so no hint",
+		);
+		// Output that merely STARTS with "Error" is content, not a failure: the box keeps its ✓.
+		assert(
+			minRender("bash", { command: "true" }, { content: [{ type: "text", text: "Error handling notes" }], details: {} }).some((l) => l.includes("✓")),
+			"minimal(): text starting with 'Error' is not treated as a failed call",
 		);
 		assert(
 			minRender("edit", { path: "README.md" }, diffRes).every((l) => visibleWidth(l) === 74),

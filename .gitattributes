@@ -1,0 +1,8 @@
+# Normalize text files to LF in the repository, regardless of the platform checkout.
+# Without this, a Windows working copy (core.autocrlf=true) reintroduces CRLF and every
+# diff shows whole-file churn.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.webp binary
+*.png binary

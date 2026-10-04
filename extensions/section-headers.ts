@@ -282,7 +282,6 @@ export function buildLogoLines(th: Themeish): string[] {
 	];
 }
 
-export const ASCII_LOGO_LINES = buildLogoLines(null);
 
 // Singleton store for loaded resources
 const STORE_KEY = Symbol.for("pi-arnative.resourceStore");

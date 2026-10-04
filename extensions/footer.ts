@@ -15,7 +15,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
@@ -144,17 +144,23 @@ function run(cmd: string, args: string[], cwd: string): Promise<RunResult> {
  * no ownership check, so a fresh user sees the branch without installing git.
  */
 function branchFromDisk(cwd: string): string | null {
-	try {
-		const dotGit = join(cwd, ".git");
-		// A worktree/submodule has a `.git` file pointing at the real git dir.
-		const gitDir = statSync(dotGit).isDirectory()
-			? dotGit
-			: resolve(cwd, readFileSync(dotGit, "utf8").trim().replace(/^gitdir:\s*/, ""));
-		const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
-		const ref = /^ref:\s+refs\/heads\/(.+)$/.exec(head);
-		return ref ? ref[1] : "detached";
-	} catch {
-		return null; // not a repo, or the metadata is unreadable
+	// Walk up like git does: a subfolder of a repo is still inside it.
+	for (let dir = resolve(cwd); ; ) {
+		try {
+			const dotGit = join(dir, ".git");
+			// A worktree/submodule has a `.git` file pointing at the real git dir.
+			const gitDir = statSync(dotGit).isDirectory()
+				? dotGit
+				: resolve(dir, readFileSync(dotGit, "utf8").trim().replace(/^gitdir:\s*/, ""));
+			const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+			const ref = /^ref:\s+refs\/heads\/(.+)$/.exec(head);
+			return ref ? ref[1] : "detached";
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable metadata
+		}
+		const parent = dirname(dir);
+		if (parent === dir) return null; // reached the filesystem root: not a repo
+		dir = parent;
 	}
 }
 
@@ -186,7 +192,9 @@ async function refreshGit(cwd: string): Promise<void> {
 	try {
 		const branch = branchFromDisk(cwd);
 		if (!branch) {
+			// Clear the shared slot too, or the previous cwd's branch survives a reload.
 			git = null;
+			(globalThis as Record<symbol, any>)[GIT_KEY] = null;
 			return;
 		}
 		const [tag, status, sync] = await Promise.all([
@@ -949,6 +957,10 @@ if (isMain(import.meta.url)) {
 	assert(branchFromDisk(bare) === "arnative-smoke", "branch is read from .git/HEAD without running git");
 	writeFileSync(join(bare, ".git", "HEAD"), "1234567890abcdef1234567890abcdef12345678\n");
 	assert(branchFromDisk(bare) === "detached", "a raw HEAD hash reports detached, not null");
+	// A subfolder of the repo resolves to the repo's branch (walks up like git).
+	writeFileSync(join(bare, ".git", "HEAD"), "ref: refs/heads/arnative-smoke\n");
+	mkdirSync(join(bare, "src", "deep"), { recursive: true });
+	assert(branchFromDisk(join(bare, "src", "deep")) === "arnative-smoke", "branch resolves from a subfolder of the repo");
 	rmSync(bare, { recursive: true, force: true });
 
 	// Honesty: with the branch known but git unable to answer, tag/status must be absent

@@ -1,5 +1,3 @@
-node_modules/
-
 # local artifacts (node_modules symlink to the installed copy, temp screenshots)
 node_modules
 .clipboard-ref.png

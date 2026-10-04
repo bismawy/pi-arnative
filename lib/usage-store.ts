@@ -77,7 +77,8 @@ export function formatTokens(n: number): string {
 	return fmtUnit(n / 1_000_000_000, "B", "T");
 }
 
-const CACHE_FILE_PATH = join(getAgentDir(), "arnative-usage-cache.json");
+// Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
+const cacheFilePath = (): string => join(getAgentDir(), "arnative-usage-cache.json");
 const CACHE_VERSION = 2; // v2: per-entry cost
 
 // Disk cache is memoized; save writes memory + disk together.
@@ -87,8 +88,8 @@ function loadDiskCache(): Map<string, FileCacheItem> {
 	if (diskMemo) return diskMemo;
 	diskMemo = new Map<string, FileCacheItem>();
 	try {
-		if (existsSync(CACHE_FILE_PATH)) {
-			const raw = JSON.parse(readFileSync(CACHE_FILE_PATH, "utf8")) as Record<string, FileCacheItem>;
+		if (existsSync(cacheFilePath())) {
+			const raw = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as Record<string, FileCacheItem>;
 			for (const [k, v] of Object.entries(raw)) {
 				diskMemo.set(k, v);
 			}
@@ -105,9 +106,9 @@ function saveDiskCache(map: Map<string, FileCacheItem>): void {
 		for (const [k, v] of map.entries()) {
 			obj[k] = v;
 		}
-		const dir = dirname(CACHE_FILE_PATH);
+		const dir = dirname(cacheFilePath());
 		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-		writeFileSync(CACHE_FILE_PATH, JSON.stringify(obj), "utf8");
+		writeFileSync(cacheFilePath(), JSON.stringify(obj), "utf8");
 	} catch {
 		// ignore
 	}

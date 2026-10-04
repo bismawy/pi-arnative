@@ -50,8 +50,15 @@ let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: stri
 // Hide pi's built-in "Reloading keybindings, extensions, skills..." box
 // (hardcoded in handleReloadCommand, no auto-hide). Patches Container.render
 // through the prototype chain (Container is not exported) and drops the whole box on match.
+const RELOAD_TEXT = "Reloading keybindings, extensions, skills, prompts, themes, and context files...";
+/**
+ * True only for the box itself: border rows, blank spacers and (possibly wrapped) copy of the
+ * message. The patch sits on every plain Container, so a bare substring test would blank a
+ * whole chat the moment a transcript line mentioned the phrase.
+ */
 export function shouldHideReloadBox(lines: readonly string[]): boolean {
-	return lines.some((l) => l.includes("Reloading keybindings"));
+	const rows = lines.map((l) => stripAnsi(l).trim());
+	return rows.some((r) => r.includes("Reloading keybindings")) && rows.every((r) => r === "" || /^[─-]+$/.test(r) || RELOAD_TEXT.includes(r));
 }
 const RELOAD_BOX_KEY = Symbol.for("pi-arnative.reloadBoxHidden");
 if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[RELOAD_BOX_KEY]) {
@@ -360,7 +367,9 @@ if (CompactionSummaryMessageComponent?.prototype && !(globalThis as Record<symbo
 // Self-check: `node extensions/ui-render-tweaks.ts`
 if (isMain(import.meta.url)) {
 	// reload box fully hidden (not line by line)
-	assert(shouldHideReloadBox(["╭──╮", "│ Reloading keybindings, extensions, skills... │"]) === true, "reload box detected");
+	assert(shouldHideReloadBox(["────", "", " Reloading keybindings, extensions, skills, prompts, themes, and context files... ", "", "────"]) === true, "reload box detected");
+	assert(shouldHideReloadBox(["────", "", " Reloading keybindings, extensions,", " skills, prompts, themes, and context files...", "", "────"]) === true, "wrapped reload box detected");
+	assert(shouldHideReloadBox(["hello", "the log says Reloading keybindings", "world"]) === false, "chat lines that mention the phrase stay visible");
 	assert(shouldHideReloadBox(["hello", "world"]) === false, "normal lines pass through");
 
 	// selection: reverse video replaced with explicit colors (bg selectedBg + fg text)
