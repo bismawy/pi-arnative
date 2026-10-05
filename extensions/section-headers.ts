@@ -31,7 +31,7 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { renderBoxLines } from "../lib/box.ts";
-import { stripAnsi, themeOf } from "../lib/ansi.ts";
+import { getActiveTheme, setActiveTheme, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
@@ -53,8 +53,6 @@ export const SECTION_ICONS: Record<TabKey, string> = {
 };
 
 export type Themeish = { fg?(color: string, text: string): string; bg?(color: string, text: string): string } | null;
-
-let activeThemeProxy: Themeish = null;
 
 const MODEL_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentModel");
 const THINKING_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentThinking");
@@ -474,7 +472,7 @@ export class ArnativeHeader implements Component {
 		if (width < 36) {
 			return [centerLine(`pi v${VERSION}`, width)];
 		}
-		const th = this.themeProxy || (activeThemeProxy as Themeish);
+		const th = this.themeProxy || getActiveTheme<Themeish>();
 		const side = fgFirst(th, ["dim"], "│");
 
 		const infoLines: string[] = [];
@@ -689,7 +687,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 					const text = themedTextOf(child);
 					if (text.includes("[Extension issues]") && typeof child.render === "function") {
 						const origRender = child.render.bind(child);
-						child.render = (w: number) => renderBoxLines(activeThemeProxy, w, origRender(w), undefined, "warning");
+						child.render = (w: number) => renderBoxLines(getActiveTheme<Themeish>(), w, origRender(w), undefined, "warning");
 						return origAddChild.call(this, child);
 					}
 					// Any other element inside loadedResourcesContainer (e.g. Spacer) is hidden too
@@ -729,7 +727,9 @@ export default function (pi: ExtensionAPI) {
 		}
 		resourcesListingShown(quiet === false);
 		for (const key of ["Context", "Skills", "Extensions"] as const) tabStore.set(key, []);
-		activeThemeProxy = themeOf<Themeish>(ctx) ?? activeThemeProxy;
+		// A context without a theme (project-trust prompt) must not drop the one we have.
+		const th = themeOf<Themeish>(ctx);
+		if (th) setActiveTheme(th);
 		// Register the header for the active preset
 		applyHeaderPreset(ctx);
 	});
@@ -1066,6 +1066,28 @@ if (isMain(import.meta.url)) {
 	container.addChild(helpBlock);
 	assert(sectionBodyOf(helpBlock) === "\u2580\u2580\u2588  v0.99.1\n\u2588\u2580 \u2588 escape interrupt", "sectionBodyOf reads the build shape");
 	assert(sectionNameOf(sectionBodyOf(helpBlock)!) === null, "startup help block is not a resource section");
+
+	// pi's "[Extension issues]" diagnostic renders while the installing module's theme is
+	// still null (a `/reload` copy never saw session_start). The box must draw uncolored,
+	// not deref null — that crash was reported in the wild.
+	setActiveTheme(null);
+	const issuesChild = {
+		build: () => "[Extension issues]\n  extension \"x\" failed",
+		render: (_w: number) => ["[Extension issues]", '  extension "x" failed'],
+	};
+	container.addChild(issuesChild);
+	const issuesLines = issuesChild.render(80);
+	assert(issuesLines[0]!.startsWith("\u256d") && issuesLines.at(-1)!.startsWith("\u2570"), "extension-issues box renders without a theme");
+
+	// The theme proxy is globalThis-backed, so the copy that owns the addChild patch still
+	// paints once the other copy's session_start has stored the theme.
+	setActiveTheme({ fg: (c: string, t: string) => `<${c}>${t}</${c}>` });
+	const coloredChild = {
+		build: () => "[Extension issues]\n  extension \"x\" failed",
+		render: (_w: number) => ["[Extension issues]", '  extension "x" failed'],
+	};
+	container.addChild(coloredChild);
+	assert(coloredChild.render(80)[0]!.includes("<warning>"), "shared theme proxy colors the box even in the patched copy");
 
 	console.log("section-headers.ts self-check OK");
 }
