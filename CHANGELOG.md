@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6] - 2026-10-05
+
+### Fixed
+- Fixed a startup crash: `Cannot read properties of null (reading 'fg')`. pi's `[Extension issues]` diagnostic box passed a null theme into the box renderer, which dereferenced it and killed the process with `uncaughtException`. It only surfaced on machines where an extension reported a problem (a conflicting shortcut, a failed `session_start`, …), because that is when the diagnostic is drawn. The renderer now draws an uncolored box for the first frame instead of throwing (`lib/box.ts`).
+- The active theme now lives in a single `globalThis` slot. `/reload` re-imports extension modules, so two copies can coexist, and only one of them receives `session_start`. The copy that owns the `loadedResourcesContainer` patch used to keep a permanently-null theme; it now paints with the live theme (`lib/ansi.ts`, `extensions/section-headers.ts`, `extensions/ui-render-tweaks.ts`).
+- Removed the `activeThemeProxy ?? Theme` fallback in the package-update box: `Theme` is a class, not an instance, so the fallback would itself have thrown `th.fg is not a function`. The box component now tolerates a null theme (`extensions/ui-render-tweaks.ts`).
+
 ## [0.3.5] - 2026-10-04
 
 ### Fixed
