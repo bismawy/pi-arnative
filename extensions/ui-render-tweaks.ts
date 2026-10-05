@@ -238,7 +238,7 @@ export class PackageUpdateBoxComponent implements Component {
 		const th = this.th;
 		const fg = (color: string, text: string) => (th ? th.fg(color, text) : text);
 		const rows = [
-			fg("warning", "\x1b[1m\uf449  Package Updates Available\x1b[22m"),
+			fg("warning", "\x1b[1m\uf449 Package Updates Available\x1b[22m"),
 			`${fg("muted", "Package updates are available. Run ")}${fg("accent", "pi update --extensions")}`,
 			fg("muted", "Packages:"),
 			...this.packages.map((pkg) => `- ${pkg}`),
