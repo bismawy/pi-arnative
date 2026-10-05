@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.7] - 2026-10-05
 
 ### Fixed
 - The `powershell` and `ls` tools now render in the arnative box like every other call. pi draws a tool that ships its own `renderCall`/`renderResult` but sets no `renderShell` through its own `contentBox` — a background block with no border. Both tools match that shape (their definitions spread the renderer functions onto the tool object), so they now go through `minimal()` like `bash`/`grep`/`read`. `powershell` is Windows-only: `getPowerShellConfig()` throws elsewhere, and re-registering it would activate a tool the builtin deliberately leaves off (`extensions/tools.ts`).
