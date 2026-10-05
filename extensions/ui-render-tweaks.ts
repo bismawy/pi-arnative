@@ -21,7 +21,6 @@ import {
 	getMarkdownTheme,
 	initTheme,
 	InteractiveMode,
-	keyText,
 	Theme,
 	UserMessageComponent,
 	type ExtensionAPI,
@@ -40,12 +39,13 @@ import {
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
-import { ansiBgOpen, stripAnsi, themeOf, accentSoftOf } from "../lib/ansi.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, accentSoftOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { contrast, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
 
-let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
+type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
+const activeTheme = () => getActiveTheme<Exclude<ActiveTheme, null>>();
 
 // Hide pi's built-in "Reloading keybindings, extensions, skills..." box
 // (hardcoded in handleReloadCommand, no auto-hide). Patches Container.render
@@ -141,8 +141,8 @@ if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[SELECTIO
 	if (typeof origHighlight === "function") {
 		TuiAltScreen.prototype.applySelectionHighlight = function (text: string): string {
 			const highlighted = origHighlight.call(this, text);
-			const fgOpen = ansiFgOpen(activeThemeProxy);
-			const bgOpen = ansiBgOpen(activeThemeProxy, "selectedBg");
+			const fgOpen = ansiFgOpen(activeTheme());
+			const bgOpen = ansiBgOpen(activeTheme(), "selectedBg");
 			return fgOpen && bgOpen ? recolorSelection(highlighted, fgOpen, bgOpen) : highlighted;
 		};
 	}
@@ -161,7 +161,7 @@ if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[PILL_KEY
 			layout: unknown,
 			width: number,
 		) {
-			return withAccentPill(this, () => origComposite.call(this, screen, layout, width), activeThemeProxy);
+			return withAccentPill(this, () => origComposite.call(this, screen, layout, width), activeTheme());
 		};
 	}
 }
@@ -190,7 +190,7 @@ if (ExtensionSelectorComponent?.prototype && !(globalThis as Record<symbol, bool
 	};
 	const origUpdateList = proto.updateList;
 	proto.updateList = function (this: typeof proto) {
-		const th = activeThemeProxy;
+		const th = activeTheme();
 		if (!th) return origUpdateList.call(this); // no theme yet -> pi's default
 		this.listContainer.clear();
 		for (let i = 0; i < this.options.length; i++) {
@@ -206,7 +206,8 @@ if (ExtensionSelectorComponent?.prototype && !(globalThis as Record<symbol, bool
 export default function uiRenderTweaks(pi: ExtensionAPI) {
 	// The active theme is re-read per session (ctx.ui.theme); render reads it lazily.
 	pi.on("session_start", async (_event, ctx) => {
-		activeThemeProxy = themeOf<typeof activeThemeProxy>(ctx) ?? activeThemeProxy;
+		const th = themeOf<Exclude<ActiveTheme, null>>(ctx);
+		if (th) setActiveTheme(th);
 	});
 
 	// 4. `pi-jev-eye-review` contract message: use our own border box.
@@ -224,9 +225,9 @@ export default function uiRenderTweaks(pi: ExtensionAPI) {
 // body text is unchanged.
 export class PackageUpdateBoxComponent implements Component {
 	private packages: string[];
-	private th: { fg(c: string, t: string): string };
+	private th: { fg(c: string, t: string): string } | null;
 
-	constructor(packages: string[], th: { fg(c: string, t: string): string }) {
+	constructor(packages: string[], th: { fg(c: string, t: string): string } | null) {
 		this.packages = packages;
 		this.th = th;
 	}
@@ -235,10 +236,11 @@ export class PackageUpdateBoxComponent implements Component {
 
 	render(width: number): string[] {
 		const th = this.th;
+		const fg = (color: string, text: string) => (th ? th.fg(color, text) : text);
 		const rows = [
-			th.fg("warning", "\x1b[1m\uf449  Package Updates Available\x1b[22m"),
-			`${th.fg("muted", "Package updates are available. Run ")}${th.fg("accent", "pi update --extensions")}`,
-			th.fg("muted", "Packages:"),
+			fg("warning", "\x1b[1m\uf449  Package Updates Available\x1b[22m"),
+			`${fg("muted", "Package updates are available. Run ")}${fg("accent", "pi update --extensions")}`,
+			fg("muted", "Packages:"),
 			...this.packages.map((pkg) => `- ${pkg}`),
 		];
 		return renderBoxLines(th, width, rows, undefined, "warning");
@@ -257,7 +259,7 @@ if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKA
 			ui: { requestRender(): void };
 		};
 		self.chatContainer.addChild(new Spacer(1));
-		self.chatContainer.addChild(new PackageUpdateBoxComponent(packages, activeThemeProxy ?? Theme));
+		self.chatContainer.addChild(new PackageUpdateBoxComponent(packages, activeTheme()));
 		self.ui.requestRender();
 	};
 }
@@ -333,7 +335,7 @@ if (CompactionSummaryMessageComponent?.prototype && !(globalThis as Record<symbo
 	const proto = CompactionSummaryMessageComponent.prototype as any;
 	const origUpdateDisplay = proto.updateDisplay;
 	proto.updateDisplay = function (): void {
-		const th = activeThemeProxy;
+		const th = activeTheme();
 		if (!th) return origUpdateDisplay.call(this);
 		const message = this.message as { tokensBefore?: number; summary?: string } | undefined;
 		const tokenStr = Number(message?.tokensBefore ?? 0).toLocaleString();

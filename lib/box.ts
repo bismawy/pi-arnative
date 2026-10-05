@@ -23,18 +23,21 @@ const applyBg = (line: string, width: number, bgFn: (text: string) => string): s
 	return bgFn(line + " ".repeat(pad));
 };
 
-/** Wrap `rows` (plain or ANSI-colored) into a box. `bgType` = theme bg name (no-op when the theme has no `bg`); `borderColor` = border color. */
-export function renderBoxLines(theme: BoxTheme, width: number, rows: string[], bgType?: string, borderColor = "dim"): string[] {
-	const dim = (s: string) => theme.fg(borderColor, s);
+/** Wrap `rows` (plain or ANSI-colored) into a box. `bgType` = theme bg name (no-op when the theme has no `bg`); `borderColor` = border color.
+ *  `theme` may be null: a box is patched in at module load, before `session_start`
+ *  delivers the active theme. An uncolored box for that first frame beats a null
+ *  deref that kills the process. */
+export function renderBoxLines(theme: BoxTheme | null, width: number, rows: string[], bgType?: string, borderColor = "dim"): string[] {
+	const dim = (s: string) => (theme ? theme.fg(borderColor, s) : s);
 	const inner = Math.max(8, width - 4);
 	const lines = [boxEdge("╭", "╮", width, dim)];
 	for (const row of rows) {
 		for (const line of wrapTextWithAnsi(row, inner)) lines.push(boxRow(line, width, dim));
 	}
 	lines.push(boxEdge("╰", "╯", width, dim));
-	if (bgType && theme.bg) {
+	if (bgType && theme?.bg) {
 		try {
-			return lines.map((l) => applyBg(l, width, (s) => theme.bg!(bgType, s)));
+			return lines.map((l) => applyBg(l, width, (s) => theme!.bg!(bgType, s)));
 		} catch {
 			return lines;
 		}
@@ -50,5 +53,8 @@ if (isMain(import.meta.url)) {
 	assert(plain[1] === "│ hello                │", "content line padded flush");
 	assert(renderBoxLines(th, 24, ["x".repeat(40)]).length === 4, "long line wrapped");
 	assert(renderBoxLines(th, 20, ["hi"], "customMessageBg").length === 3, "bg ignored when the theme has no bg");
+	const nullTheme = renderBoxLines(null, 24, ["hello"], "customMessageBg");
+	assert(nullTheme.every((l) => visibleWidth(l) === 24), "null theme renders an uncolored box instead of throwing");
+	assert(nullTheme[0]!.startsWith("╭") && nullTheme[1] === "│ hello                │", "null-theme frame and padding intact");
 	console.log("lib/box.ts OK");
 }

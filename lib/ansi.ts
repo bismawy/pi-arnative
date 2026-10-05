@@ -25,6 +25,19 @@ export function themeOf<T>(ctx: unknown): T | null {
 	return (ctx as { ui?: { theme?: T } } | null | undefined)?.ui?.theme ?? null;
 }
 
+// Shared active-theme slot. `/reload` re-imports an extension's modules, so two copies
+// can coexist: one carries the session_start handler, the other owns a stacked UI patch.
+// globalThis gives both the same theme, so the patched copy paints instead of drawing
+// uncolored (or, before the null-guard fix, crashing). Set from `session_start`.
+const THEME_PROXY_KEY = Symbol.for("pi-arnative.activeThemeProxy");
+export function getActiveTheme<T>(): T | null {
+	return (globalThis as Record<symbol, T>)[THEME_PROXY_KEY] ?? null;
+}
+export function setActiveTheme<T>(th: T | null): void {
+	if (th) (globalThis as Record<symbol, T>)[THEME_PROXY_KEY] = th;
+	else delete (globalThis as Record<symbol, T>)[THEME_PROXY_KEY];
+}
+
 /** Painter for the `accentSoft` token, which only arnative themes define; other themes fall back to accent (probed once). */
 export function accentSoftOf(th: { fg?(c: string, t: string): string } | null): (s: string) => string {
 	const fg = th?.fg?.bind(th);
@@ -45,6 +58,11 @@ if (isMain(import.meta.url)) {
 	assert(stripAnsi("x\x1b[K") === "x", "stripAnsi removes non-SGR CSI too");
 	assert(themeOf({ ui: { theme: "T" } }) === "T", "themeOf reads ctx.ui.theme");
 	assert(themeOf(null) === null, "themeOf tolerates a missing ctx");
+
+	setActiveTheme({ fg: (c, t) => `<${c}>${t}</${c}>` });
+	assert(getActiveTheme<object>() !== null, "active theme round-trips through globalThis");
+	setActiveTheme(null);
+	assert(getActiveTheme<object>() === null, "clearing the active theme leaves no stale slot");
 
 	const tag = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
 	assert(accentSoftOf(tag)("x") === "<accentSoft>x</accentSoft>", "accentSoftOf uses accentSoft when the theme defines it");
