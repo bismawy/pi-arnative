@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- pi's `[Extension issues]` diagnostic now draws in the arnative box, stripped to two content rows: the title (warning glyph + section name, brackets dropped, `[ctrl+o to expand]` hint) over the extension's source path. pi's extra diagnostic lines are dropped — the expand hint stands in for them (`extensions/section-headers.ts`).
+- The package-update box title lost the double space after its glyph (`extensions/ui-render-tweaks.ts`).
+
+### Changed
+- The `section-headers.ts` self-check moved out of the extension into `test/section-headers.test.ts` and runs under `node --test`, so `npm test` lists it as a test instead of a script that prints `OK`. This is a pilot for the other modules; the remaining in-file self-checks follow the same layout once proven (`extensions/section-headers.ts`, `test/section-headers.test.ts`, `package.json`).
+
 ## [0.3.6] - 2026-10-05
 
 ### Fixed

@@ -11,7 +11,7 @@
  * - Box divider '├────┤'. Active tab content is left-aligned, wrapped, soft.
  * - Hides pi's built-in stacked list in loadedResourcesContainer.
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { userInfo } from "node:os";
 import { join } from "node:path";
