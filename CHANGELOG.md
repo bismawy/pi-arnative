@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The `powershell` and `ls` tools now render in the arnative box like every other call. pi draws a tool that ships its own `renderCall`/`renderResult` but sets no `renderShell` through its own `contentBox` — a background block with no border. Both tools match that shape (their definitions spread the renderer functions onto the tool object), so they now go through `minimal()` like `bash`/`grep`/`read`. `powershell` is Windows-only: `getPowerShellConfig()` throws elsewhere, and re-registering it would activate a tool the builtin deliberately leaves off (`extensions/tools.ts`).
+- pi-fff's default-mode tools `ffgrep` and `fffind` are boxed too. The box path only recognized the override names `find`/`grep`, which pi-fff uses when it replaces pi's builtins, so a session running it in default mode showed those calls as bare blocks (`extensions/tools.ts`).
+
 ## [0.3.6] - 2026-10-05
 
 ### Fixed
