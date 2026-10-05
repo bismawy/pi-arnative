@@ -24,6 +24,10 @@ import {
 	createEditTool,
 	createFindTool,
 	createGrepTool,
+	createLsTool,
+	createLsToolDefinition,
+	createPowerShellTool,
+	createPowerShellToolDefinition,
 	createReadTool,
 	createWriteTool,
 	getMarkdownTheme,
@@ -290,11 +294,23 @@ for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
 
 const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
 
-const FFF_OVERRIDE = ["find", "grep"];
-const usesTheirCallRenderer = (self: any): boolean =>
-	BOXED_TOOLS.has(self.toolName) ||
-	MCP_TOOL(self.toolName) ||
-	(FFF_OVERRIDE.includes(self.toolName) && self.toolDefinition?.renderShell !== "self");
+// pi-fff / pi core/plugin tools whose renderers we rebuild in our own box when their
+// renderer carries no explicit `renderShell` marker (our `minimal()` sets "self").
+//   pi-fff: `ffgrep`/`fffind` in the default mode, `find`/`grep` once it "overrides"
+//           pi's builtins; matching either name covers both of its modes.
+//   pi core: `powershell` and `ls` — pi's runtime keeps `createAllToolDefinitions`, which
+//           spreads `renderCall`/`renderResult` onto the tool OBJECT; `wrapToolDefinition`
+//           (used by `createPowerShellTool`/`createLsTool`) drops them instead.
+const boxTheirRenderers = (self: any): boolean =>
+	self.toolDefinition?.renderShell !== "self" &&
+	(self.toolName === "ls" ||
+		self.toolName === "powershell" ||
+		self.toolName === "ffgrep" ||
+		self.toolName === "fffind" ||
+		self.toolName === "find" ||
+		self.toolName === "grep" ||
+		BOXED_TOOLS.has(self.toolName) ||
+		MCP_TOOL(self.toolName));
 
 // The MCP box title names the invoked tool (full args when expanded).
 const mcpInfo = (name: string, args: any, th: Theme): string => {
@@ -352,7 +368,11 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	const origCall = proto.getCallRenderer;
 	const origResult = proto.getResultRenderer;
 	const origShell = proto.getRenderShell;
-	const hasOwnRenderer = (self: any): boolean => Boolean(origCall.call(self) || origResult.call(self));
+	const hasOwnRenderer = (self: any): boolean =>
+		!boxTheirRenderers(self) && Boolean(origCall.call(self) || origResult.call(self));
+	// pi-fff splits title (renderCall) and result (renderResult) — both merge into one box.
+	// Its two naming modes are covered: `find`/`grep` (override) and `ffgrep`/`fffind` (default).
+	const FFF_TOOLS = ["find", "grep", "ffgrep", "fffind"];
 
 	// A tool call with no registered definition (e.g. an unknown tool name that
 	// errored with "Tool X not found") makes hasRendererDefinition() false, so the
@@ -366,13 +386,13 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	};
 
 	proto.getRenderShell = function (): string {
-		if (usesTheirCallRenderer(this)) return "self";
+		if (boxTheirRenderers(this)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
 	};
 
 	proto.getCallRenderer = function () {
 		const name: string = this.toolName;
-		const mine = usesTheirCallRenderer(this);
+		const mine = boxTheirRenderers(this);
 		const own = origCall.call(this);
 		// Chrome DevTools' own renderCall is a bare line; ours replaces it (icon + name).
 		if (own && !mine && !CDP_NAME.has(name)) return own;
@@ -394,9 +414,9 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 		const name: string = this.toolName;
 		const own = origResult.call(this);
 		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
-		const fff = FFF_OVERRIDE.includes(name) && this.toolDefinition?.renderShell !== "self";
+		const fff = FFF_TOOLS.includes(name) && this.toolDefinition?.renderShell !== "self";
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).
-		if (own && !usesTheirCallRenderer(this)) return own;
+		if (own && !boxTheirRenderers(this)) return own;
 		const boxed = BOXED_TOOLS.has(name);
 		// Chrome DevTools are in BOXED_TOOLS for the title/icon only: their renderResult
 		// (raw text, empty when collapsed) would drop our title row, so it is ignored.
@@ -659,6 +679,31 @@ function arnativeTools(pi: ExtensionAPI) {
 	});
 
 	// Gap is only stripped for our own boxes (see OWN_BOX above).
+
+	// powershell: pi core registers it as a separate builtin (only on Windows); without
+	// our own registration it keeps pi's "default" shell and renders as a bg block, not a
+	// box (the same reason `bash` is re-registered below). Windows only: on any other
+	// platform `getPowerShellConfig()` throws, and an unregistered tool would stay off
+	// while our registration is active on load.
+	if (process.platform === "win32")
+		minimal(
+			pi,
+			createPowerShellTool(cwd),
+			(th) => th.fg("accent", "PS>"),
+			(a, _th, soft, expanded) => {
+				const cmd = (a.command ?? "").replace(/\r?\n/g, " ").trim();
+				return paintLinks(expanded ? cmd : smartTitle(cmd), soft);
+			},
+		);
+
+	// ls: no renderShell of its own, so pi's default shell turns it into a bg block.
+	minimal(
+		pi,
+		createLsTool(cwd),
+		(th) => th.fg("accent", "ls"),
+		(a, _th, soft) => soft(shortPath(a.path ?? ".")),
+		numRes((n) => `${n} entries`),
+	);
 
 	// bash: `󰔟 $ <6 words>…` / `✓ $ <full title when expanded>  0.1s`
 	minimal(
@@ -997,6 +1042,38 @@ if (isMain(import.meta.url)) {
 	assert(fffOut.some((l: string) => l.includes("*.ts in D:/Pi/x")), "pi-fff find: renderCall title goes in the box");
 	assert(fffOut.some((l: string) => l.includes("6 more lines")), "pi-fff find: renderResult summary goes in the box");
 
+	// pi-fff default mode (`ffgrep`/`fffind`): same renderer shape, different names.
+	for (const n of ["ffgrep", "fffind"]) {
+		const t = { toolName: n, toolDefinition: { renderCall: () => fffCall, renderResult: () => fffRes } };
+		assert(
+			ToolExecutionComponent.prototype.getRenderShell.call(t) === "self",
+			`pi-fff ${n}: shell forced to self (default mode is boxed too)`,
+		);
+		const out = (ToolExecutionComponent.prototype.getResultRenderer.call(t) as any)(
+			{ content: [{ type: "text", text: "src/a.ts\nsrc/b.ts" }] },
+			{ expanded: false, isPartial: false },
+			th,
+			{ args: { pattern: "*.ts" }, state: {} },
+		).render(60);
+		assert(
+			out[0].startsWith("╭") && out.some((l: string) => l.includes("6 more lines")),
+			`pi-fff ${n}: result + summary merged into one box`,
+		);
+	}
+
+	// pi core `powershell` / `ls` spread their renderers into the tool object and set no
+	// renderShell, so pi's "default" shell used to render them as a bare bg block (see the
+	// OWN_BOX block below for the registration half of this fix).
+	for (const [n, t] of [
+		["powershell", createPowerShellToolDefinition(cwd)],
+		["ls", createLsToolDefinition(cwd)],
+	] as const) {
+		assert(
+			ToolExecutionComponent.prototype.getRenderShell.call({ toolName: n, toolDefinition: t }) === "self",
+			`pi core ${n}: shell forced to self (joins our box, not a bg block)`,
+		);
+	}
+
 	const oursFind = { toolName: "find", toolDefinition: { renderShell: "self", renderCall: () => fffCall, renderResult: () => fffRes } };
 	assert(
 		(ToolExecutionComponent.prototype.getCallRenderer.call(oursFind) as any)() === fffCall &&
@@ -1067,7 +1144,35 @@ if (isMain(import.meta.url)) {
 		"OWN_BOX: our own tools + boxed tools registered",
 	);
 	assert(!OWN_BOX.has("mcp") && !OWN_BOX.has("source_check"), "OWN_BOX: third-party renderers not tightened");
-	assert(hasOwnRendererDef(mcpTool) && !hasOwnRendererDef(noRenderer), "tightened benchmark: tool renderer definition");
+	// pi core `powershell`/`ls` spread their renderer functions onto the tool object and
+	// set no renderShell; that is exactly the shape that used to fall into pi's "default"
+	// shell and render as a bare bg block. Registering them through minimal() boxes them.
+	const coreReg: Record<string, any> = {};
+	arnativeTools({ registerTool: (t: any) => { coreReg[t.name] = t; }, registerToolRenderer: () => {}, on: () => {} } as never);
+	for (const [n, t] of [
+		["powershell", createPowerShellToolDefinition(cwd)],
+		["ls", createLsToolDefinition(cwd)],
+	] as const) {
+		const def = t as any;
+		assert(
+			Boolean(def.renderCall) && Boolean(def.renderResult),
+			`pi core ${n}: the definition pi runs spreads its renderers onto the object`,
+		);
+		assert(
+			ToolExecutionComponent.prototype.getRenderShell.call({ toolName: n, toolDefinition: def }) === "self",
+			`pi core ${n}: shell forced to self (joins our box, not a bg block)`,
+		);
+	}
+	// The guard is load-bearing: `getPowerShellConfig()` throws off Windows, and our
+	// registration activates a tool the builtin deliberately leaves off.
+	assert(
+		coreReg.ls?.renderShell === "self",
+		"pi core ls: registered through minimal() (boxing is live)",
+	);
+	assert(
+		process.platform === "win32" ? coreReg.powershell?.renderShell === "self" : coreReg.powershell === undefined,
+		"pi core powershell: registered on Windows only (getPowerShellConfig throws elsewhere)",
+	);	assert(hasOwnRendererDef(mcpTool) && !hasOwnRendererDef(noRenderer), "tightened benchmark: tool renderer definition");
 	assert(
 		capped(th, ["a", "b", "c"], false).length === CALL_ROWS + 1 &&
 			capped(th, ["a", "b", "c"], true).length === 3 &&
