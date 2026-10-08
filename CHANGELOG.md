@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.9] - 2026-10-08
+
+### Fixed
+- The README told you to press `ctrl+e` to expand a tool box. The key actually follows pi's `app.tools.expand` binding, whose default is `ctrl+o` (`lib/format.ts`, `extensions/tools.ts`). Docs only — no behaviour changed in this release.
+
+### Changed
+- The README now states the footer facts it never listed: all three presets (`Arnative (Full)`, `Pi (system)`, `Arnative (Minimal)`), the Minimal preset's click behaviour and `ctrl+alt+m`, the session clock surviving `/resume`, and the working-tree diff beside it (`README.md`).
+
 ## [0.3.8] - 2026-10-08
 
 ### Added
