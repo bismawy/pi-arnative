@@ -7,7 +7,8 @@
  *   │ ✓ $ cmd smart…      0.1s   │  final, collapsed; duration right-aligned
  *   │ 󱞩 first output line        │
  *   ╰────────────────────────────╯
- * Click / ctrl+e = full title + detail (output dim; edit = toolDiff*).
+ * Click / the `app.tools.expand` key (ctrl+o by default) = full title + detail
+ * (output dim; edit = toolDiff*).
  * Collapsed summary: bash/write `󱞩 first line`; grep/find/read numeric
  * (→ N matches / → N files / N lines); edit `󱞩 +N / -M`. Expanded plain output
  * gets no summary line (no duplicated first line).
