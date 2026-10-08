@@ -210,9 +210,9 @@ export function stripBlankEdges(lines: string[]): string[] {
 }
 
 // The inter-box gap is the built-in Spacer(1) of ToolExecutionComponent, stripped
-// with a prototype render patch (same pattern as the footer patch). Only lines we
-// draw ourselves are stripped: third-party tools use their own "self" shell too, so
-// the marker is a name list (OWN_BOX, filled by minimal() + BOXED_TOOLS), not the shell.
+// with a prototype render patch (same pattern as the footer patch). Own boxes (our
+// minimal() tools + codemode) and every box forced by the generic predicate below
+// are stripped; a box-owning third party left untouched is not.
 const OWN_BOX = new Set<string>();
 const hasOwnRendererDef = (self: { toolDefinition?: { renderCall?: unknown; renderResult?: unknown } }): boolean =>
 	Boolean(self?.toolDefinition?.renderCall || self?.toolDefinition?.renderResult);
@@ -240,30 +240,28 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	const origRender = ToolExecutionComponent.prototype.render;
 	ToolExecutionComponent.prototype.render = function (width: number): string[] {
 		const lines = origRender.call(this, width);
-		const name = (this as { toolName?: string }).toolName ?? "";
-		return OWN_BOX.has(name) || !hasOwnRendererDef(this) ? stripEdgesKeepingImages(lines) : lines;
+		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
+			? stripEdgesKeepingImages(lines)
+			: lines;
 	};
 }
 
 // --- Tools without their own renderer: same box, one-line summary ---
 // Without this pi renders them as a plain bg block (name + 10 output lines). Our
 // renderer is installed through the prototype (same pattern as the gap patch) only
-// for tools that define no renderCall/renderResult of their own (our own tools and
-// pi-web-access etc. are untouched).
+// for tools that define no renderCall/renderResult of their own; third-party
+// renderers are handled by the generic predicate below.
 //
-// BOXED_TOOLS exceptions: the pi-web-access tools whose display names that package
-// hardcodes as "search "/"fetch "/"get_content " — their renderer content is used
-// as-is and only wrapped in our box. `source_check` is deliberately NOT boxed: its
-// partial phase (curator: URLs + approval state) would disappear because our partial
-// path returns nothing. The `todo` tool (@juicesharp/rpiv-todo) is boxed with a
-// check-square icon (\uf14a) and the toolPendingBg/toolSuccessBg backgrounds.
+// BOXED_TOOLS is now a display-name map (plus the todo/cdp special render paths);
+// boxing itself is generic (see boxTheirRenderers). The pi-web-access tools get a
+// friendlier title ("search "/"fetch "/"get_content ") and their renderer content is
+// reused inside our box. `todo` (@juicesharp/rpiv-todo) gets a check-square icon
+// (\uf14a) and the toolPendingBg/toolSuccessBg backgrounds.
 //
-// MCP tools (pi-mcp-adapter) already use the "self" shell, but their result renderer
-// prints the WHOLE output on error (unbounded, outside the box) and their call args
-// can run to dozens of lines: a 1-line summary + [ctrl+o to expand] is tighter while
-// the invoked tool stays visible. pi-fff "override" mode re-registers `find`/`grep`
-// with its own renderers, replacing our boxed versions -> box theirs too (ours carry
-// renderShell "self" = minimal).
+// MCP tools (pi-mcp-adapter) declare `renderShell: "default"`, so the generic
+// predicate boxes them, but their result renderer prints the WHOLE output on error
+// (unbounded) and their call args can run to dozens of lines: a 1-line summary +
+// [ctrl+o to expand] is tighter while the invoked tool stays visible.
 const BOXED_TOOLS = new Map([
 	["web_search", "search"],
 	["fetch_content", "fetch"],
@@ -294,23 +292,20 @@ for (const n of BOXED_TOOLS.keys()) OWN_BOX.add(n);
 
 const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScript" || name.startsWith("mcp__");
 
-// pi-fff / pi core/plugin tools whose renderers we rebuild in our own box when their
-// renderer carries no explicit `renderShell` marker (our `minimal()` sets "self").
-//   pi-fff: `ffgrep`/`fffind` in the default mode, `find`/`grep` once it "overrides"
-//           pi's builtins; matching either name covers both of its modes.
-//   pi core: `powershell` and `ls` — pi's runtime keeps `createAllToolDefinitions`, which
-//           spreads `renderCall`/`renderResult` onto the tool OBJECT; `wrapToolDefinition`
-//           (used by `createPowerShellTool`/`createLsTool`) drops them instead.
+// Generic, not a name list: any tool that ships its own renderers is boxed, unless
+// it declares `renderShell: "self"` (our own `minimal()`/codemode boxes) or sits in
+// NOT_BOXED. That covers every third-party extension without a registration step:
+// pi-fff (`ffgrep`/`fffind`, and `find`/`grep` in its override mode), pi core's
+// `powershell`/`ls` (their definitions spread `renderCall`/`renderResult` onto the
+// tool object) and pi-mcp-adapter (`renderShell: "default"`) all fall in by shape.
+//
+// `source_check` is the single exception: its partial phase (curator URLs + approval
+// state) would disappear because our partial path returns nothing.
+const NOT_BOXED = new Set(["source_check"]);
 const boxTheirRenderers = (self: any): boolean =>
-	self.toolDefinition?.renderShell !== "self" &&
-	(self.toolName === "ls" ||
-		self.toolName === "powershell" ||
-		self.toolName === "ffgrep" ||
-		self.toolName === "fffind" ||
-		self.toolName === "find" ||
-		self.toolName === "grep" ||
-		BOXED_TOOLS.has(self.toolName) ||
-		MCP_TOOL(self.toolName));
+	Boolean(self.toolDefinition) &&
+	self.toolDefinition.renderShell !== "self" &&
+	!NOT_BOXED.has(self.toolName);
 
 // The MCP box title names the invoked tool (full args when expanded).
 const mcpInfo = (name: string, args: any, th: Theme): string => {
@@ -417,7 +412,6 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 		const fff = FFF_TOOLS.includes(name) && this.toolDefinition?.renderShell !== "self";
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).
 		if (own && !boxTheirRenderers(this)) return own;
-		const boxed = BOXED_TOOLS.has(name);
 		// Chrome DevTools are in BOXED_TOOLS for the title/icon only: their renderResult
 		// (raw text, empty when collapsed) would drop our title row, so it is ignored.
 		const cdp = CDP_NAME.has(name);
@@ -428,10 +422,12 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 			// pi-web-access reports failure via `details.error` without throwing, so
 			// ctx.isError alone is not enough: without this the error box shows ✓.
 			const isErr = Boolean(ctx.isError || result.isError || (result.details as { error?: unknown } | undefined)?.error);
-			// Errors use our own path: pi-web-access' own error box is a box inside a
-			// box. Their renderer content is only used on success.
+			// Their renderer content is reused inside our box unless it is unusable:
+			// MCP dumps the whole output on error (1-line summary instead), Chrome
+			// DevTools is a bare line, and errors take our own path (pi-web-access'
+			// own error box would nest a box inside a box).
 			const theirs =
-				(boxed || fff) && !isErr && !cdp
+				own && !isErr && !cdp && !MCP_TOOL(name)
 					? safeCall(() => own.call(this, { content: result.content, details: result.details }, opts, th, ctx))
 					: null;
 			return new Lines((width) => {
@@ -919,11 +915,18 @@ if (isMain(import.meta.url)) {
 			noDefOut.some((l: string) => l.includes('[ctrl+o to expand]')),
 		"tool without a definition: title + summary + expand hint",
 	);
+	// Generic predicate: any tool that ships its own renderers and no `renderShell: "self"`
+	// is boxed — no name list to maintain for new extensions.
 	const withRenderer = { toolName: "bash", toolDefinition: { renderResult: () => undefined } };
 	assert(ToolExecutionComponent.prototype.getRenderShell.call(noRenderer) === "self", "plain tool -> self shell");
 	assert(
-		ToolExecutionComponent.prototype.getRenderShell.call(withRenderer) === "default",
-		"tool with a renderer -> its own shell (untouched)",
+		ToolExecutionComponent.prototype.getRenderShell.call(withRenderer) === "self",
+		"tool with its own renderer -> boxed too (generic predicate, no name list)",
+	);
+	const extTool = { toolName: "some_ext_tool", toolDefinition: { renderCall: () => undefined } };
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(extTool) === "self",
+		"unknown third-party tool with its own renderer -> boxed",
 	);
 	assert(
 		toolSummary("memory_write", "Appended to MEMORY.md\n\nExisting MEMORY.md preview (1 lines)", {

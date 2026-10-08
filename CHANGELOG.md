@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Every third-party tool that ships its own `renderCall`/`renderResult` now renders in the arnative box, not just the ones on a hardcoded name list. The predicate was an allowlist (`ls`, `powershell`, `ffgrep`, `fffind`, `find`, `grep`, `BOXED_TOOLS`, MCP), so any other extension's tool — present or future — fell through to pi's `contentBox`: a padded background block with no border. It is now shape-based: boxed unless the tool declares `renderShell: "self"` (arnative's own boxes) or is in `NOT_BOXED` (`extensions/tools.ts`).
+- The inter-box gap is now stripped for the generic box path too. The gap-strip patch keyed on a name list (`OWN_BOX`), so a tool boxed by the widened predicate but not registered through `minimal()`/`BOXED_TOOLS` kept the leading `Spacer` and floated a blank row above its box (`extensions/tools.ts`).
+
 ## [0.3.7] - 2026-10-05
 
 ### Fixed
