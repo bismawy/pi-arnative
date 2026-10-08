@@ -1,0 +1,43 @@
+name: CI
+
+# Gate every change that reaches main, not just the release: the repo had no automated
+# check at all, so a test that only passed because of the local checkout — a test that
+# read `process.cwd()` and asserted on the shortened path — was caught only by running
+# `npm test` in a clean clone by hand.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.x is the floor the peer packages require (`@earendil-works/pi-coding-agent`
+        # declares engines: node >=22.19.0, the first line where running a `.ts` file
+        # works with no flag — `npm test` executes the extensions directly).
+        # 24.x is the current LTS and the second point where type stripping changed.
+        node: ["22.x", "24.x"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+      # No `cache: npm`: the project ships no lockfile (package-lock.json is gitignored),
+      # and setup-node hashes one. The install pulls the three peer packages, which npm
+      # resolves from the registry because peerDependencies range over "*".
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Test
+        run: npm test
