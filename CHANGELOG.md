@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.8] - 2026-10-08
 
 ### Added
 - New footer preset **Arnative (Minimal)**, selectable in `/arnative` → Footers. It shows a single head row (cwd, clock, diff, git, model) with a dim `▲` at the end of each side. Each head's own text is the click target — anywhere on the cwd/git string toggles the left side (extension statuses), anywhere on the model string toggles the right side (speed/cache/token) — while the blank gap between them is inert, so a stray click on empty space cannot expand anything. Opened sides show `▼` and their rows; the two sides open independently. Ctrl+alt+M (alt+M on Windows/WSL) toggles both, so it also works in `tuiMode: "regular"` where the terminal owns the mouse. Zone columns are measured from the row this module places itself rather than mirrored from `pairRow`, because the ellipsis on a truncated head shifts every column after it (`extensions/footer.ts`, `lib/shortcuts.ts`).
