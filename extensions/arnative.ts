@@ -358,6 +358,8 @@ if (isMain(import.meta.url)) {
 	const footerLines = footerPicker.render(50);
 	assert(footerLines.some((l) => l.includes("Arnative · Footers")), "footers picker title");
 	assert(footerLines.some((l) => l.includes("● Pi (system)")), "footers picker marks the active preset");
+	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
+	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
 
 	console.log("arnative.ts self-check OK");
 }
