@@ -11,7 +11,7 @@
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +19,7 @@ import { dirname, join, resolve } from "node:path";
 import { stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
-import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
+import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
 
@@ -32,9 +32,21 @@ import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetC
 // in both — pi's `setEditorComponent()` would close the picker mid-preview). The picker
 // lives in arnative.ts, so the choice is shared through globalThis like the header preset.
 // Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
-export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)"] as const;
+export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
+/** Presets that this extension's registrar draws (everything but pi's built-in footer). */
+const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)"];
+/** Collapse state of the minimal footer: one flag per side, so a click on the left
+ *  head does not open the right metrics. Session-scoped, not persisted. */
+const MINIMAL_EXPAND_KEY = Symbol.for("pi-arnative.minimalFooter.expanded");
+export function minimalExpanded(): { left: boolean; right: boolean } {
+	const slot = (globalThis as Record<symbol, { left: boolean; right: boolean } | undefined>)[MINIMAL_EXPAND_KEY];
+	if (slot) return slot;
+	const fresh = { left: false, right: false };
+	(globalThis as Record<symbol, { left: boolean; right: boolean }>)[MINIMAL_EXPAND_KEY] = fresh;
+	return fresh;
+}
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
 
@@ -56,7 +68,6 @@ export function applyFooterPreset(ctx: ExtensionContext): void {
 	const register = (globalThis as Record<symbol, ((ctx: ExtensionContext) => void) | undefined>)[FOOTER_REGISTRAR_KEY];
 	register?.(ctx);
 }
-
 /** Select a preset and apply it immediately (the footer swaps on the spot). */
 export function setFooterPreset(name: FooterPreset, ctx: ExtensionContext): void {
 	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = name;
@@ -84,6 +95,10 @@ type GitInfo = {
 	/** Absent (null) when git could not answer — never a false "-"/"clean". */
 	tag: string | null;
 	uncommitted: number | null;
+	/** Working tree vs HEAD, tracked files only (an untracked file is not a diff).
+	 *  Null when git could not answer. */
+	added: number | null;
+	removed: number | null;
 	ahead: number;
 	behind: number;
 } | null;
@@ -94,6 +109,9 @@ let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 let lastPokeMs = 0;
+/** Column ranges of the minimal footer's disclosure markers, recorded per render
+ *  (mouse coordinates are component-local, so they must come from the same frame). */
+let minimalRanges: { left: [number, number]; right: [number, number] } | null = null;
 
 const SESSION_START_KEY = Symbol.for("pi-arnative.sessionStartMs");
 let sessionStartMs: number = (globalThis as Record<symbol, number>)[SESSION_START_KEY] || Date.now();
@@ -176,13 +194,34 @@ let gitRefreshQueuedCwd: string | null = null;
  * (no binary, or a repo the user does not own) are omitted, so a fresh user still sees
  * the branch but never a fabricated "-" or "clean".
  */
-export function gitParts(info: GitInfo, acc: (t: string) => string, soft: (t: string) => string): string[] {
+export function gitParts(
+	info: GitInfo,
+	acc: (t: string) => string,
+	soft: (t: string) => string,
+): string[] {
 	if (!info) return [];
 	const branch = `${acc("\uf126")} ${soft(info.branch)}${info.ahead > 0 ? ` ${soft(`↑${info.ahead}`)}` : ""}${info.behind > 0 ? ` ${soft(`↓${info.behind}`)}` : ""}`;
 	const parts = [branch];
 	if (info.tag !== null) parts.push(`${acc("\uf02b")} ${soft(info.tag)}`);
 	if (info.uncommitted !== null) parts.push(`${acc("\uf172")}  ${info.uncommitted > 0 ? soft(`~${info.uncommitted}`) : soft("clean")}`);
 	return parts;
+}
+
+/**
+ * Working-tree diff vs HEAD as `+500 -100`, or `""` when there is nothing to show:
+ * a clean tree, or git cannot answer (not a repo, no binary, unreadable HEAD). This is
+ * the whole uncommitted change, not just what this session touched — a snapshot at
+ * session start would be needed for that, which is not worth the cost here.
+ */
+export function formatDiffStat(
+	info: GitInfo,
+	acc: (t: string) => string,
+	pos: (t: string) => string,
+	neg: (t: string) => string,
+): string {
+	if (!info || info.added === null || info.removed === null) return "";
+	if (info.added + info.removed === 0) return "";
+	return `${acc("\uf4d2")} ${pos(`+${info.added}`)} ${neg(`-${info.removed}`)}`;
 }
 
 async function refreshGit(cwd: string): Promise<void> {
@@ -199,19 +238,26 @@ async function refreshGit(cwd: string): Promise<void> {
 			(globalThis as Record<symbol, any>)[GIT_KEY] = null;
 			return;
 		}
-		const [tag, status, sync] = await Promise.all([
+		const [tag, status, sync, numstat] = await Promise.all([
 			run("git", ["describe", "--tags", "--abbrev=0"], cwd),
 			run("git", ["status", "--porcelain"], cwd),
 			run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
+			run("git", ["diff", "HEAD", "--numstat"], cwd),
 		]);
 		const uncommitted = status.ok ? status.out.split("\n").filter((l) => l.trim().length > 0).length : null;
 		const parts = sync.ok && sync.out !== "" ? sync.out.split(/\s+/).map(Number) : [];
 		const behind = parts.length > 0 && parts[0] > 0 ? parts[0] : 0;
 		const ahead = parts.length > 1 && parts[1] > 0 ? parts[1] : 0;
+		// An unborn HEAD (a repo with no commit yet) makes `diff HEAD` fail; compare the
+		// working tree against the canonical empty tree so a staged first commit still counts.
+		const numstat2 = numstat.ok ? numstat : await run("git", ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"], cwd);
+		const { added, removed } = sumNumstat(numstat2.out);
 		git = {
 			branch,
 			tag: tag.ok && tag.out ? tag.out : null,
 			uncommitted,
+			added: numstat2.ok ? added : null,
+			removed: numstat2.ok ? removed : null,
 			ahead,
 			behind,
 		};
@@ -226,6 +272,43 @@ async function refreshGit(cwd: string): Promise<void> {
 	}
 }
 
+/**
+ * Head row for the minimal footer, plus the exact click zones (0-based, inclusive
+ * columns) of its two heads. Placing the row here instead of guessing at `pairRow`'s
+ * arithmetic is deliberate: `pairRow` truncates with an ellipsis, which shifts columns,
+ * and a mirror of that logic silently drifts at narrow widths — the bug where a click on
+ * blank space toggled a side. Measuring the placed cells cannot drift. The blank gap and
+ * any padding stay inert; a head the row cannot fit gets `[-1, -1]`.
+ */
+export function placeMinimalHead(
+	left: string,
+	right: string,
+	width: number,
+): { row: string; left: [number, number]; right: [number, number] } {
+	const lw = visibleWidth(left);
+	const rw = visibleWidth(right);
+	if (lw + 1 + rw <= width) {
+		const rightStart = width - rw;
+		return {
+			row: left + " ".repeat(rightStart - lw) + right,
+			left: lw > 0 ? [0, lw - 1] : [-1, -1],
+			right: rw > 0 ? [rightStart, width - 1] : [-1, -1],
+		};
+	}
+	// Too wide: the left head is cut, the right one keeps its edge column like pairRow.
+	const room = Math.max(1, width - Math.min(rw, width) - 1);
+	const lCut = truncateToWidth(left, room);
+	const rCut = truncateToWidth(right, width - room - 1);
+	const lCutW = visibleWidth(lCut);
+	const rCutW = visibleWidth(rCut);
+	const rightStart = lCutW + 1;
+	return {
+		row: lCut + " " + rCut,
+		left: lCutW > 0 ? [0, lCutW - 1] : [-1, -1],
+		right: rCutW > 0 ? [rightStart, rightStart + rCutW - 1] : [-1, -1],
+	};
+}
+
 function formatModelName(
 	model: { id: string; name?: string; provider?: string } | undefined,
 	thinkingLevel: string | undefined,
@@ -237,7 +320,7 @@ function formatModelName(
 	const { name, provider } = modelDisplayParts({ id: model.id, name: model.name, provider: model.provider });
 	const provStr = provider ? ` ${dim(`(${provider})`)}` : "";
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? capitalize(thinkingLevel) : "";
-	const thinkStr = capThinking ? `${acc("\udb80\udf35")} ${soft(capThinking)} ${dim("·")} ` : "";
+	const thinkStr = capThinking ? `${acc("\uee9c")} ${soft(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${acc(name)}${provStr}`;
 }
 
@@ -252,6 +335,30 @@ export function shortenCwd(raw: string): string {
 	if (parts.length <= 2) return p;
 	const head = drive ? `${drive[0]}/\u2026/` : p.startsWith("/") ? "\u2026/" : "\u2026";
 	return head + parts.slice(-2).join("/");
+}
+
+// Session age must survive `/resume`: the header holds the moment the session was
+// created, so reopening it shows the real age instead of restarting at 0. `new` and
+// `fork` write a fresh header, so the same read yields "just now" there. `/reload`
+// keeps the in-memory value (the header would be identical anyway).
+export function resolveSessionStartMs(reason: string, headerTimestamp: string | undefined, now: number, prev: number): number {
+	if (reason === "reload") return prev;
+	const parsed = headerTimestamp ? Date.parse(headerTimestamp) : NaN;
+	return Number.isFinite(parsed) && parsed > 0 && parsed <= now ? parsed : now;
+}
+
+/** Sum `git diff --numstat` output: `added<TAB>removed<TAB>path` per line. A `-`
+ * marks a binary file — no line count, so it is skipped, not counted as 0. */
+export function sumNumstat(out: string): { added: number; removed: number } {
+	let added = 0;
+	let removed = 0;
+	for (const line of out.split("\n")) {
+		const [a, r] = line.split("\t");
+		if (!/^\d+$/.test(a ?? "") || !/^\d+$/.test(r ?? "")) continue;
+		added += Number(a);
+		removed += Number(r);
+	}
+	return { added, removed };
 }
 
 export function formatDuration(ms: number): string {
@@ -516,6 +623,20 @@ export function getToolWorkingMessage(toolName: string, args?: any): string {
 export default function (pi: ExtensionAPI) {
 	let runtimeGen = 0;
 
+	// Keyboard path for the minimal footer's disclosure: mouse clicks only exist in
+	// fullscreen mode, so pi's own rule ("always design a keyboard path") needs this.
+	// One key toggles both sides: expand all unless everything is already open.
+	const toggleMinimal = () => {
+		const state = minimalExpanded();
+		const allOpen = state.left && state.right;
+		state.left = !allOpen;
+		state.right = !allOpen;
+		poke();
+	};
+	for (const key of SHORTCUT_TOGGLE_FOOTER.keys) {
+		pi.registerShortcut(key, { description: "Expand/collapse the minimal footer", handler: toggleMinimal });
+	}
+
 	// Assistant speed timer (user message timestamps come from extensions/timestamps.ts)
 	pi.on("message_start", async (event) => {
 		if (event.message.role === "assistant") {
@@ -529,7 +650,7 @@ export default function (pi: ExtensionAPI) {
 		// ctx.ui closures) may still be alive; clear it before starting a new one.
 		stopWorkingClock();
 		if (event.reason !== "reload") {
-			sessionStartMs = Date.now();
+			sessionStartMs = resolveSessionStartMs(event.reason, ctx.sessionManager.getHeader()?.timestamp, Date.now(), sessionStartMs);
 			(globalThis as Record<symbol, number>)[SESSION_START_KEY] = sessionStartMs;
 			currentModel = ctx.model;
 			currentThinkingLevel = ctx.thinkingLevel;
@@ -578,16 +699,32 @@ export default function (pi: ExtensionAPI) {
 								// fallback
 							}
 							const soft = (text: string) => fgAny(softName, text);
+							// Diff colors: the same theme slots pi uses for a diff body, with the
+							// plain soft color as fallback for a theme that omits them.
+							const colorOr = (name: string, fallback: (t: string) => string) => (t: string) => {
+								try {
+									return fgAny(name, t);
+								} catch {
+									return fallback(t);
+								}
+							};
+							const diffAdd = colorOr("toolDiffAdded", soft);
+							const diffDel = colorOr("toolDiffRemoved", soft);
 							const sep = dim(" | ");
 
 							const durationStr = formatDuration(Date.now() - sessionStartMs);
-							const pDuration = `${acc("\uf017")} ${soft(durationStr)}`;
+							const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
+							const pDuration = `${acc("\uf017")} ${soft(durationStr)}${diffStat ? `${sep}${diffStat}` : ""}`;
 							const cwdShort = shortenCwd(cwd);
+							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
+							const open = minimalExpanded();
+							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
 							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
 							if (git) {
 								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, soft).map((p) => `${sep}${p}`).join("")}`;
 							}
-							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, soft, dim);
+							if (isMinimal) left1 += arrow(open.left);
+							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, soft, dim) + (isMinimal ? arrow(open.right) : "");
 
 							const statuses: ReadonlyMap<string, string> = (() => {
 								try {
@@ -613,7 +750,7 @@ export default function (pi: ExtensionAPI) {
 									if (/LITE/i.test(s)) mode = "LITE";
 									else if (/ULTRA/i.test(s)) mode = "ULTRA";
 									else if (/FULL/i.test(s)) mode = "FULL";
-									return `${acc("\uef04")}  ${soft("ponytail:")} ${bullet} ${soft(mode)}`;
+									return `${acc("\uef51")} ${soft("ponytail:")} ${bullet} ${soft(mode)}`;
 								}
 								if (s.includes("jev-eye")) {
 									const isOff = s.includes("OFF") || s.includes("○");
@@ -652,8 +789,36 @@ export default function (pi: ExtensionAPI) {
 							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${soft(opt)}` : "", usageStr].filter(Boolean);
 
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
-							// wrapped inside their half of the width — no click toggle.
-							return layoutFooterGrid(left1, right1, groups, metricCells, sep, ` ${dim("·")} `, width);
+							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
+							// and reveals the same rows on click/keypress, one side at a time.
+							const leftRows = isMinimal && !open.left ? [] : groups;
+							const rightRows = isMinimal && !open.right ? [] : metricCells;
+							if (isMinimal) {
+								// Own head row: it reports the zones measured from what it actually placed.
+								const placed = placeMinimalHead(left1, right1, width);
+								minimalRanges = { left: placed.left, right: placed.right };
+								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, ` ${dim("·")} `, width).slice(1);
+								return [placed.row, ...rest];
+							}
+							minimalRanges = null;
+							return layoutFooterGrid(left1, right1, leftRows, rightRows, sep, ` ${dim("·")} `, width);
+						},
+						handleMouse(event: TuiMouseEvent) {
+							// Clicks only reach here in fullscreen mode; the keyboard shortcut covers
+							// regular mode. Return handled on press so pi records the target — without
+							// that it never dispatches the follow-up click.
+							if (event.button !== "left" || event.y !== 0) return undefined;
+							const ranges = minimalRanges;
+							if (!ranges) return undefined;
+							const inside = (r: [number, number]) => event.x >= r[0] && event.x <= r[1];
+							const hit = inside(ranges.left) ? "left" : inside(ranges.right) ? "right" : null;
+							if (!hit) return undefined;
+							if (event.type === "press") return { handled: true, render: false };
+							if (event.type !== "click") return undefined;
+							const state = minimalExpanded();
+							state[hit] = !state[hit];
+							poke();
+							return { handled: true, render: true };
 						},
 					};
 				});
@@ -969,16 +1134,53 @@ if (isMain(import.meta.url)) {
 	// rather than the old false "-"/"clean".
 	const A = (t: string) => t;
 	const S = (t: string) => t;
-	const unknownGit = gitParts({ branch: "main", tag: null, uncommitted: null, ahead: 0, behind: 0 }, A, S);
+	const unknownGit = gitParts({ branch: "main", tag: null, uncommitted: null, added: null, removed: null, ahead: 0, behind: 0 }, A, S);
 	assert(unknownGit.length === 1 && unknownGit[0]!.endsWith("main"), "unreadable git: branch only, no fake '-'/'clean'");
-	const fullGit = gitParts({ branch: "main", tag: "v1.2.3", uncommitted: 2, ahead: 1, behind: 0 }, A, S);
+	const fullGit = gitParts({ branch: "main", tag: "v1.2.3", uncommitted: 2, added: 500, removed: 100, ahead: 1, behind: 0 }, A, S);
 	assert(fullGit.length === 3 && fullGit[1]!.endsWith("v1.2.3") && fullGit[2]!.includes("~2"), "readable git: tag + dirty count present");
 	assert(gitParts(null, A, S).length === 0, "not a repo: no git segment at all");
+	// Diff stat is clock-adjacent, so it renders with or without a repo.
+	const dirty = { branch: "main", tag: null, uncommitted: 2, added: 500, removed: 100, ahead: 0, behind: 0 };
+	assert(formatDiffStat(dirty, A, (t) => `<A>${t}</A>`, (t) => `<D>${t}</D>`).includes("<A>+500</A> <D>-100</D>"), "+/- use the diff colors");
+	assert(formatDiffStat({ ...dirty, added: 0, removed: 0 }, A, A, A) === "", "a clean tree hides the diff segment");
+	assert(formatDiffStat(null, A, A, A) === "", "no repo: the diff segment is hidden, never a fake 0");
+	assert(formatDiffStat({ ...dirty, added: null, removed: null }, A, A, A) === "", "git cannot answer: the diff segment is hidden");
+	assert(sumNumstat("12\t3\tsrc/a.ts\n-\t-\timg.png\n4\t0\tb.ts\n").added === 16, "numstat sums added lines and skips binary");
+	assert(sumNumstat("12\t3\tsrc/a.ts\n-\t-\timg.png\n4\t0\tb.ts\n").removed === 3, "numstat sums removed lines and skips binary");
+	assert(sumNumstat("").added === 0 && sumNumstat("").removed === 0, "empty numstat is zero, not NaN")
 
 	// Footer presets: Arnative (Full) is the default; Pi (system) hands the footer slot back to pi (the editor stays arnative).
-	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 2, "Arnative (Full) is the default footer preset");
-	assert(FOOTER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full)", "built-in preset is listed first");
-	assert(markedLabels(FOOTER_PRESETS, "Pi (system)").join(" | ") === "● Pi (system) |   Arnative (Full)", "footer preset labels mark the active one");
+	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 3, "Arnative (Full) is the default footer preset");
+	assert(FOOTER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full) | Arnative (Minimal)", "built-in preset is listed first, minimal last");
+	assert(markedLabels(FOOTER_PRESETS, "Pi (system)").join(" | ") === "● Pi (system) |   Arnative (Full) |   Arnative (Minimal)", "footer preset labels mark the active one");
+	assert(ARNATIVE_PRESETS.join(" | ") === "Arnative (Full) | Arnative (Minimal)", "the arnative-drawn presets exclude pi's built-in footer");
+	// Minimal disclosure: both sides start closed, then toggle independently.
+	delete (globalThis as Record<symbol, unknown>)[MINIMAL_EXPAND_KEY];
+	const expand0 = minimalExpanded();
+	assert(expand0.left === false && expand0.right === false, "the minimal footer starts fully collapsed");
+	expand0.left = true;
+	assert(minimalExpanded().left === true && minimalExpanded().right === false, "one side opens without opening the other");
+	delete (globalThis as Record<symbol, unknown>)[MINIMAL_EXPAND_KEY];
+	// Disclosure arrows: the left zone ends the left head, the right one the terminal edge.
+	const normal = placeMinimalHead("L".repeat(20), "R".repeat(10), 80);
+	assert(visibleWidth(normal.row) === 80, "the head row fills the terminal width");
+	assert(normal.left[0] === 0 && normal.left[1] === 19, "the left zone is exactly the left head text");
+	assert(normal.right[0] === 70 && normal.right[1] === 79, "the right zone is exactly the right head text");
+	assert(50 > normal.left[1] && 50 < normal.right[0], "the gap between the heads is inert");
+	const clipped = placeMinimalHead("L".repeat(70), "R".repeat(20), 80);
+	assert(visibleWidth(clipped.row) <= 80, "a cut head row never exceeds the width");
+	assert(clipped.left[1] < clipped.right[0], "cut zones stay ordered and disjoint");
+	assert(clipped.row.slice(clipped.left[0], clipped.left[1] + 1) === clipped.row.slice(0, clipped.left[1] + 1), "the left zone matches the placed text");
+	// Squeezed: the left head keeps at least one column, the right one is dropped once
+	// nothing is left for it. Both outcomes are measured from the placed row.
+	const squeezed = placeMinimalHead("L".repeat(30), "R".repeat(30), 12);
+	assert(visibleWidth(squeezed.row) <= 12, "a squeezed head row never exceeds the width");
+	assert(squeezed.left[0] === 0, "the left head keeps its columns");
+	assert(squeezed.right[0] === -1 || squeezed.right[0] > squeezed.left[1], "zones stay disjoint when squeezed");
+	const noRight = placeMinimalHead("L", "R".repeat(40), 2);
+	assert(noRight.right[0] === -1, "a right head with no room gets no zone");
+	const onlyLeft = placeMinimalHead("L".repeat(5), "", 20);
+	assert(onlyLeft.left[0] === 0 && onlyLeft.left[1] === 4 && onlyLeft.right[0] === -1, "an empty head has no zone");
 	let footerCleared = 0;
 	let editorTouched = 0;
 	const presetCtx: any = {
@@ -1009,6 +1211,19 @@ if (isMain(import.meta.url)) {
 	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 	resetPresetCache();
+
+	// Self-check: formatModelName thinking icon
+	const fmnRes = formatModelName({ id: "claude-3-7-sonnet", name: "Sonnet" }, "low", (s) => s, (s) => s, (s) => s);
+	assert(fmnRes.includes("\uee9c Low"), "formatModelName includes \\uee9c Low thinking indicator");
+
+	// Self-check: session age survives /resume (header timestamp wins over now).
+	const NOW = Date.parse("2026-10-08T12:00:00.000Z");
+	assert(resolveSessionStartMs("resume", "2026-10-08T09:00:00.000Z", NOW, NOW) === Date.parse("2026-10-08T09:00:00.000Z"), "resume restores the session age from the header");
+	assert(resolveSessionStartMs("startup", "2026-10-08T11:59:59.000Z", NOW, NOW) === Date.parse("2026-10-08T11:59:59.000Z"), "startup reads the freshly written header");
+	assert(resolveSessionStartMs("reload", undefined, NOW, 1234) === 1234, "reload keeps the in-memory start");
+	assert(resolveSessionStartMs("resume", undefined, NOW, 1234) === NOW, "a missing header falls back to now");
+	assert(resolveSessionStartMs("resume", "not-a-date", NOW, 1234) === NOW, "an unparsable header falls back to now");
+	assert(resolveSessionStartMs("resume", "2026-10-08T13:00:00.000Z", NOW, 1234) === NOW, "a future header is clamped to now, never a negative age");
 
 	console.log("footer.ts self-check OK");
 }

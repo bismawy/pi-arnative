@@ -98,6 +98,8 @@ npm test        # Run self-checks & theme generator check
 npm run themes  # Rebuild all theme variants
 ```
 
+**CI:** `.github/workflows/ci.yml` runs `npm install` + `npm test` on every push to `main` and every pull request, against Node 22.x (the floor the peer packages require) and 24.x (current LTS). No lockfile is committed, so the workflow installs without a cache key. The suite must pass in a clean checkout — a test that reads `process.cwd()` or a machine-local path will fail there.
+
 **Releasing:** `scripts/release-check.mjs` is a read-only preflight (never writes, tags, pushes or publishes) with one stage per step of the release:
 
 | Stage | Run before | Checks |

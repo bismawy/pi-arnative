@@ -42,6 +42,9 @@ function build(letter: string): Shortcut {
 export const SHORTCUT_NEXT_TAB = build("t");
 export const SHORTCUT_NEW_SESSION = build("n");
 export const SHORTCUT_RELOAD = build("r");
+/** Expand/collapse the minimal footer. Ctrl+alt+m on macOS/Linux, alt+m on Windows/WSL
+ *  (same platform split as the shortcuts above). */
+export const SHORTCUT_TOGGLE_FOOTER = build("m");
 
 if (isMain(import.meta.url)) {
 	assert(SHORTCUT_RELOAD.keys[0] === Key.ctrlAlt("r"), "ctrl+alt+r is registered on every platform");
@@ -63,5 +66,11 @@ if (isMain(import.meta.url)) {
 	assert(!SHORTCUT_RELOAD.matches("\x12"), "bare control char does not match ctrl+alt+r");
 	assert(!SHORTCUT_RELOAD.matches("r"), "bare letter does not match ctrl+alt+r");
 	assert(!SHORTCUT_NEXT_TAB.matches("\x1br"), "alt+r does not match the next-tab shortcut");
+	assert(SHORTCUT_TOGGLE_FOOTER.keys[0] === Key.ctrlAlt("m"), "ctrl+alt+m is registered on every platform");
+	assert(
+		SHORTCUT_TOGGLE_FOOTER.keys.includes(Key.alt("m")) === IS_WINDOWS_LIKE,
+		"alt+m is registered only where Ctrl+Alt is aliased away",
+	);
+	assert(!SHORTCUT_TOGGLE_FOOTER.matches("\x1b\x12"), "ctrl+alt+r does not match the footer toggle");
 	console.log("shortcuts.ts self-check OK");
 }
