@@ -145,6 +145,25 @@ export function currentToolVerb(active: ReadonlyMap<string, string>): string {
 	return verb;
 }
 
+/**
+ * The ponytail status cell. The horse lives at U+EF04 (fa-horse). U+EF51
+ * (fa-circle_radiation) carries no outline in the Windows Nerd Font build, so it
+ * renders as a blank cell there and the status silently loses its icon; U+EF04 does
+ * draw. Kept out of the render closure so the self-check drives this exact path.
+ */
+export function ponytailStatusLine(
+	status: string,
+	acc: (text: string) => string,
+	dim: (text: string) => string,
+	soft: (text: string) => string,
+): string {
+	const bullet = status.includes("\u25CF") ? acc("\u25CF") : dim("\u25CB");
+	let mode = "FULL";
+	if (/LITE/i.test(status)) mode = "LITE";
+	else if (/ULTRA/i.test(status)) mode = "ULTRA";
+	return `${acc("\uef04")} ${soft("ponytail:")} ${bullet} ${soft(mode)}`;
+}
+
 type RunResult = { ok: boolean; out: string };
 /** Distinguishes "git said nothing" from "git could not run" — the caller must not
  *  invent a clean tree when git is absent or the repo is not ours. */
@@ -743,15 +762,7 @@ export default function (pi: ExtensionAPI) {
 									const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
 									return `${acc("\uf233")} ${soft(m ? m[0] : rest || "MCP")}`;
 								}
-								if (s.includes("ponytail")) {
-									const isActive = s.includes("●");
-									const bullet = isActive ? acc("●") : dim("○");
-									let mode = "FULL";
-									if (/LITE/i.test(s)) mode = "LITE";
-									else if (/ULTRA/i.test(s)) mode = "ULTRA";
-									else if (/FULL/i.test(s)) mode = "FULL";
-									return `${acc("\uef51")} ${soft("ponytail:")} ${bullet} ${soft(mode)}`;
-								}
+								if (s.includes("ponytail")) return ponytailStatusLine(s, acc, dim, soft);
 								if (s.includes("jev-eye")) {
 									const isOff = s.includes("OFF") || s.includes("○");
 									const isReview = /REVIEW/i.test(s);
@@ -764,6 +775,8 @@ export default function (pi: ExtensionAPI) {
 										}
 									}
 									const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
+									// Two spaces: \uedcf's ink is wider than MCP's \uf233 or ponytail's \uef04,
+									// so it needs the extra cell to clear the label.
 									return `${acc("\uedcf")}  ${soft("Jev:")} ${bullet} ${soft(label)}`;
 								}
 								let clean = stripAnsi(s);
@@ -1215,6 +1228,14 @@ if (isMain(import.meta.url)) {
 	// Self-check: formatModelName thinking icon
 	const fmnRes = formatModelName({ id: "claude-3-7-sonnet", name: "Sonnet" }, "low", (s) => s, (s) => s, (s) => s);
 	assert(fmnRes.includes("\uee9c Low"), "formatModelName includes \\uee9c Low thinking indicator");
+
+	// Self-check: the ponytail glyph. \uef51 carries no outline in the Windows Nerd Font
+	// build and renders blank there, so the status silently loses its icon (this is what
+	// a past commit did). Pin the codepoint so a swap back to an invisible one fails here.
+	const ponyLine = ponytailStatusLine("⚡ ponytail: FULL", (s) => s, (s) => s, (s) => s);
+	assert(ponyLine.includes("\uef04"), "the ponytail status renders the \\uef04 horse, not the blank \\uef51");
+	assert(!ponyLine.includes("\uef51"), "the blank \\uef51 glyph must never come back");
+	assert(ponytailStatusLine("ponytail: LITE", (s) => s, (s) => s, (s) => s).includes("LITE"), "the ponytail mode is read from the status text");
 
 	// Self-check: session age survives /resume (header timestamp wins over now).
 	const NOW = Date.parse("2026-10-08T12:00:00.000Z");

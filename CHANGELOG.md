@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The ponytail icon rendered as a blank cell on Windows. The status drew `U+EF51` (`fa-circle_radiation`), a codepoint the Windows JetBrainsMono Nerd Font build lists in its cmap but rasterizes with no outline, so the footer left an empty gap before `ponytail:`. It now draws `U+EF04` (`fa-horse`), which renders on both platforms. The cell also spends one space after the icon instead of two, matching `MCP:`. A self-check pins the codepoint, so an edit back to an invisible glyph fails `bun run test` instead of shipping silently (`extensions/footer.ts`).
+
 ## [0.3.9] - 2026-10-08
 
 ### Fixed
