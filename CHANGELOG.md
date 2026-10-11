@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- The header's brand now reads `Arnative⠙ vX.Y.Z` — the same Braille cell (U+2819) the `/arnative` menu title carries — instead of a bare `Arnative vX.Y.Z`. The glyph is a shared `HEADER_BRAND` constant and the visual suite asserts it, so the header and the menu can no longer drift apart (`extensions/section-headers.ts`, `test/section-headers.test.ts`).
+
 ## [0.3.10] - 2026-10-11
 
 ### Fixed
