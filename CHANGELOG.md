@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.0] - 2026-10-12
 
 ### Added
 - `/arnative` → **Animations** picker and working-spinner presets (`lib/spinner.ts`, `extensions/animations.ts`): Diamond Glow (default), Diamond Pulse, Circle Pulse, Circle Wave, Shade Wave, Braille Column, Braille Level, Kanji Count, Suzhou Tally, Pi (system), Gemini (Google brand gradient), and Claude (pulsing mark loop).
