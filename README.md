@@ -6,21 +6,35 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 [![badge](https://shieldcn.dev/npm/@bismawy/pi-arnative.svg?variant=outline&size=xs)](https://www.npmjs.com/package/@bismawy/pi-arnative)
 [![license](https://shieldcn.dev/github/bismawy/pi-arnative/license.svg?variant=outline&size=xs)](https://github.com/bismawy/pi-arnative)
 
-![Arnative: tabbed header, rounded tool boxes, transcript clock and /usage dashboard](https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/pi-arnative.webp)
+<img src="https://raw.githubusercontent.com/bismawy/pi-arnative/main/assets/pi-arnative.webp" alt="pi-arnative" width="100%">
 
 ## Overview
 
 pi-arnative replaces pi’s default terminal chrome with a unified, cohesive visual aesthetic.
 
-- Warm Themes: Cohesive, contrast-checked color palettes generated without drift.
-- Tabbed Header: Greeting, version line, and a compact box menu over Directory, Model, Context, Skills, Extensions, and Shortcut.
-  > The Context/Skills/Extensions counts read pi's startup listing, which `"quietStartup": true` (and `"header"`) hides. Under those settings the counts show `—` rather than a misleading `0`; set `"quietStartup": false` to see the real numbers.
-- Rounded Tool Boxes: Clear status, spinner, and duration for every tool call. Built-in `codemode` is boxed and collapsed to two rows (title + first script line) like `bash`/`grep`/`read`; nested calls and output sit behind `[ctrl+o to expand]` (shown whenever the collapsed summary hides more, including `edit` diffs); a failed run always shows its full output. The `chrome_devtools_*` tools box too, replacing their bare "Chrome DevTools: …" lines.
-- Enhanced Footer: fixed 3-row grid — directory/git line, then extension status paired with token metrics. The clock keeps the session's real age across `/resume`, and the working tree's diff (`+500 -100`) sits beside it while there is one.
-  > Three presets via `/arnative` → **Footers**: `Arnative (Full)`, `Pi (system)`, and `Arnative (Minimal)` — a single head row whose two sides expand independently on click (`ctrl+alt+m` toggles both).
-  > The branch is read straight from `.git/HEAD`, so it shows up without a git install. Tag, dirty count, and ahead/behind need the `git` binary — when it is missing (or the repo is owned by another user, which git refuses to touch) that half is left out rather than shown wrong. Run `git config --global --add safe.directory <repo>` (a local, non-synced setting) to make `git` cooperate with such a repo.
-- Transcript Clock: Timestamps for messages with clean bubble backgrounds.
-- Usage Dashboard: /usage command to track tokens and session costs.
+- Warm Themes: Cohesive, contrast-checked OKLCH color palettes generated without drift.
+- Tabbed Header: Compact box menu showing Directory, Model, Context, Skills, Extensions, and Shortcuts.
+- Rounded Tool Boxes: Status, spinner, and duration for every tool call with expandable outputs.
+- Enhanced Footer: 3-row status grid tracking branch, active duration (30s idle freeze), and token speed.
+- Transcript Clock: Timestamps for conversation messages with clean bubble backgrounds.
+- Usage Dashboard: Real-time token counts and cost tracking across all local sessions via `/usage`.
+
+<details>
+<summary><b>Configuration & Presets</b></summary>
+
+### Working Spinner Presets
+Configurable via `/arnative` → **Animations** (saved to `arnative-config.json`):
+- `Diamond Glow` (default), `Diamond Pulse`, `Circle Pulse`, `Circle Wave`, `Shade Wave`
+- `Braille Column`, `Braille Level`, `Kanji Count`, `Suzhou Tally`
+- `Pi (system)`, `Gemini` (Google gradient sweep), and `Claude` (pulsing marks)
+
+### Footer Presets
+Configurable via `/arnative` → **Footers**:
+- `Arnative (Full)` (default 3-row grid)
+- `Arnative (Minimal)` (single collapsible head row; click or `ctrl+alt+m` to toggle)
+- `Pi (system)` (built-in footer)
+
+</details>
 
 ## Install
 
@@ -28,13 +42,12 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 pi install npm:@bismawy/pi-arnative
 ```
 
-Select a theme via `/settings` → **Theme** → `arnative` (or any `arnative-*` variant).
+Apply a theme via `/settings` → **Theme** → `arnative` (or variant). Requires a [Nerd Font](https://www.nerdfonts.com/font-downloads).
 
-To test locally without installing:
+To test locally:
 ```bash
 pi --extension ./extensions/footer.ts
 ```
-> **Prerequisite:** Requires a [Nerd Font](https://www.nerdfonts.com/font-downloads) (e.g. JetBrains Mono Nerd Font) for icons and rounded box borders.
 
 ## Shortcuts
 
@@ -42,75 +55,68 @@ pi --extension ./extensions/footer.ts
 | --- | --- |
 | `ctrl+alt+t` · `alt+t` | Cycle header tabs |
 | `ctrl+alt+r` · `alt+r` | Quick reload (`/reload`) |
-| `ctrl+alt+n` · `alt+n` | New session (`/new`) — requires keybinding below |
-| `ctrl+alt+m` · `alt+m` | Expand/collapse both sides of the Minimal footer |
-| `/usage` | Show session usage & token metrics |
-| `/arnative` | Settings menu — Themes, Headers, Footers |
-| Click tab | Open selected header tab |
+| `ctrl+alt+n` · `alt+n` | New session (`/new`) |
+| `ctrl+alt+m` · `alt+m` | Toggle Minimal footer |
+| `/usage` | Token & cost dashboard (or `/arnative` → **Usage**) |
+| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Usage) |
 | Click tool / `ctrl+o` | Toggle tool output box |
+| `←` | Back — step back from submenus/dashboard to menu |
 
-> **Notes:**
-> - **Windows / WSL:** Windows Terminal aliases `Ctrl+Alt` to AltGr; use `alt+…` (or set `"altGrAliasing": false` in WT profile).
-> - **macOS:** uses `ctrl+option+…` (plain Option composes special characters).
-> - **Herdr / tmux glitch:** if shortcuts feel delayed or type stray letters, set `PI_TUI_ESC_TIMEOUT=100` in your shell profile.
+<details>
+<summary><b>Keybindings & Platform Notes</b></summary>
 
-### Keybindings
-
-Add to `~/.pi/agent/keybindings.json` to bind `app.session.new`:
-
+To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 ```json
 {
   "app.session.new": ["ctrl+alt+n", "alt+n"]
 }
 ```
 
+- **Windows / WSL:** Windows Terminal aliases `Ctrl+Alt` to AltGr; use `alt+…` (or disable `altGrAliasing` in WT profile).
+- **macOS:** Uses `ctrl+option+…`.
+- **tmux / Herdr:** If Esc has delay, set `PI_TUI_ESC_TIMEOUT=100` in your environment.
+- **Navigation:** `←` navigates back to parent menus; `Esc` cancels or closes the active screen.
+
+</details>
+
 ## Architecture
 
 <details>
-<summary><b>Extensions</b></summary>
+<summary><b>Extensions & Components</b></summary>
 
 | File | Role |
 | --- | --- |
 | `extensions/tools.ts` | Rounded tool boxes, spinners, and duration |
 | `extensions/section-headers.ts` | Tabbed header and resource box (preset: `/arnative headers`) |
 | `extensions/footer.ts` | 3-row status grid footer and boxed editor (preset: `/arnative footers`) |
-| `extensions/arnative.ts` | `/arnative` settings menu — live-preview theme/header/footer pickers |
-| `extensions/timestamps.ts` | Message clock and bubble background fixes |
+| `extensions/animations.ts` | Working spinner presets and `/arnative` → Animations picker |
+| `lib/spinner.ts` | Spinner preset catalog: frames, cadence, and painters |
+| `extensions/arnative.ts` | Settings menu with live preview and navigation |
+| `extensions/timestamps.ts` | Message timestamps and bubble backgrounds |
 | `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection style, and UI polish |
-| `extensions/usage.ts` | `/usage` token dashboard |
+| `extensions/usage.ts` | Token and cost dashboard (`/usage`) |
 
 </details>
 
 <details>
-<summary><b>Themes</b></summary>
+<summary><b>Theme Variants</b></summary>
 
-- `themes/gen-themes.mjs` is the single source of truth: it **writes every** `themes/*.json`, including the base `arnative.json`.
-- Each theme is a few parameters (accent hue, chroma, canvas lightness, neutral tint) plus optional hue overrides for the strong palettes; all colors are derived as OKLCH from a shared ramp, so lightness/saturation stay consistent and no two `vars` collapse to the same value.
-- `lib/color.ts` holds the OKLCH↔sRGB math and WCAG contrast used by both the generator and the self-check.
+Theme definitions are generated via `themes/gen-themes.mjs` using OKLCH color math (`lib/color.ts`).
 
 **Variants:** `sun` · `zinc` · `violet` · `emerald` · `matrix` · `cyberpunk` · `synthwave` · `gruvbox` · `nord` · `dracula`
 
 </details>
 
 <details>
-<summary><b>Development</b></summary>
+<summary><b>Development & Verification</b></summary>
 
 ```bash
-npm test        # Run self-checks & theme generator check
+npm test        # Run unit tests and self-checks
 npm run themes  # Rebuild all theme variants
 ```
 
-**CI:** `.github/workflows/ci.yml` runs `npm install` + `npm test` on every push to `main` and every pull request, against Node 22.x (the floor the peer packages require) and 24.x (current LTS). No lockfile is committed, so the workflow installs without a cache key. The suite must pass in a clean checkout — a test that reads `process.cwd()` or a machine-local path will fail there.
+Pre-publish verification and tag validation are enforced via `scripts/release-check.mjs`.
 
-**Releasing:** `scripts/release-check.mjs` is a read-only preflight (never writes, tags, pushes or publishes) with one stage per step of the release:
-
-| Stage | Run before | Checks |
-| :--- | :--- | :--- |
-| `pre-tag` | `git tag` | clean tree on `main`, in sync, no open PRs, `CHANGELOG.md` entry, tag free, version unpublished |
-| `pre-publish` | `npm publish` | the above, plus the tag exists **and is pushed**, and points at `HEAD` |
-| `post-publish` | done | the above, plus the version is live on the registry, `latest` points at it and its tarball URL answers |
-
-`pre-publish` runs automatically through npm's `prepublishOnly` (after `npm test`), so a red build or a missing/unpushed tag aborts the publish (`npm error code 1`) instead of shipping a version whose tag was forgotten. The open-PR check uses `gh` when present and falls back to the public GitHub API otherwise. `npm run release:check` is the `pre-tag` shorthand. Exit codes: `0` pass, `1` a check failed, `2` bad usage.
 </details>
 
 ## License

@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import register from "../extensions/footer.ts";
+import register, { armIdleProbe, clock, formatDuration, isPointerOrFocusInput, repaintIdle, stopIdleProbe, wrapInputListener } from "../extensions/footer.ts";
 
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const EXPAND_KEY = Symbol.for("pi-arnative.minimalFooter.expanded");
@@ -25,13 +25,33 @@ const pi = {
 	getSettings: () => ({}),
 } as never;
 
-const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
+const fgCalls: Array<{ color: string; text: string }> = [];
+const theme = {
+	fg: (c: string, t: string) => {
+		fgCalls.push({ color: c, text: t });
+		return t;
+	},
+	bold: (t: string) => t,
+};
 const footerData = {
 	getExtensionStatuses: () => new Map([["mcp", "MCP: 3 servers enabled"]]),
 	onBranchChange: () => () => {},
 	getGitBranch: () => "main",
 };
-const tui = { requestRender: () => {} };
+// Shaped like the real TuiBase: input goes through handleTerminalInput, which listeners
+// only see until one of them consumes it. The footer wraps this method to count activity,
+// so the test drives the same entry point a terminal does.
+const tui = { requestRender: () => {}, handleTerminalInput: (_data: string) => {} };
+/** One keystroke in the editor, through the patched dispatch. */
+const type = () => tui.handleTerminalInput("a");
+
+// Two entries a short gap apart: a resume seeds that gap as active time.
+const T0 = Date.now();
+const SEED_GAP_MS = Math.min(25_000, Math.floor(clock.pauseMs / 2));
+const logged = [
+	{ type: "message", timestamp: new Date(T0 - SEED_GAP_MS - 25_000).toISOString() },
+	{ type: "message", timestamp: new Date(T0 - 25_000).toISOString() },
+];
 
 const ctx = {
 	// A fixed path, not `process.cwd()`: the renderer shortens the cwd (`shortenCwd`),
@@ -45,10 +65,12 @@ const ctx = {
 			if (typeof f === "function") footerFactory = f as never;
 		},
 		setEditorComponent: () => {},
+		setWorkingIndicator: (options?: Record<string, unknown>) => ui.calls.push(options),
 		theme,
 	},
 	sessionManager: {
 		getHeader: () => ({ timestamp: new Date().toISOString() }),
+		getEntries: () => logged,
 		// One assistant message so the metrics side has something to show.
 		getBranch: () => [{ type: "message", message: { role: "assistant", usage: { input: 1200, output: 500, cacheRead: 0 } } }],
 	},
@@ -57,6 +79,8 @@ const ctx = {
 
 register(pi);
 await handlers.get("session_start")!({ reason: "startup" }, ctx);
+// The wiring, not just the helper: session_start must seed the clock from the log.
+assert.equal(clock.active, SEED_GAP_MS, "session_start seeds active time from the session log");
 
 /** A footer component built for the given preset. */
 function footerFor(preset: string): Footer {
@@ -204,4 +228,186 @@ test("the full preset is unchanged: no arrows, statuses always visible", () => {
 	assert.ok(lines.length > 1, "statuses render without a click");
 	assert.ok(lines.some((l) => l.includes("MCP")), "statuses always visible");
 	assert.ok(lines.every((l) => !l.includes("▲")), "no disclosure arrow");
+});
+// ActiveClock behavior: active time tracking, idle freeze, and keystroke activity.
+const clockMs = (l: string) => {
+	const m = l.match(/\uf017 ([0-9hms -]+)/);
+	return m ? m[1]!.trim() : null;
+};
+
+test("the clock runs on its own, freezes when idle, and never rewinds", () => {
+	// The threshold is read from the clock, never hardcoded: raising `IDLE_PAUSE_MS` is a
+	// documented user choice (README), so a test that pinned 30s would break that choice.
+	const P = clock.pauseMs;
+	const t0 = Date.now();
+	clock.active = 0;
+	clock.runStarted = t0;
+	clock.lastSeen = t0;
+	fgCalls.length = 0;
+	const line = footerFor("Arnative (Full)").render(100)[0]!;
+	assert.equal(clockMs(line), "-", "a fresh session starts at zero, shown as -");
+	assert.ok(fgCalls.some((c) => c.color === "accentSoft" && c.text === "-"), "a running clock is soft, not dim");
+
+	assert.equal(clock.total(t0 + 5_000), 5_000, "the value advances with no event arriving");
+	assert.equal(clock.total(t0 + Math.floor(P / 2)), Math.floor(P / 2), "and keeps advancing while the run is live");
+
+	// A pause is worth at most the threshold, so a night away cannot inflate the total.
+	assert.equal(clock.total(t0 + P), P, "it counts up to the threshold");
+	assert.equal(clock.total(t0 + 8 * 3600_000), P, "past the threshold it freezes, it does not run forever");
+
+	const away = t0 + 8 * 3600_000;
+	clock.tick(away);
+	assert.equal(clock.total(away), P, "the away gap itself is never counted");
+	assert.equal(clock.total(away + 10_000), P + 10_000, "the new run counts from the resume");
+	// Monotonic: whatever order the render happens to observe, the value never drops.
+	assert.ok(clock.total(away + 10_000) >= clock.total(away) && clock.total(away) >= clock.total(t0 + P - 1_000), "the displayed value never rewinds");
+});
+
+test("an idle clock is dim and typing resumes it", () => {
+	const now = Date.now();
+	clock.active = 600_000;
+	clock.runStarted = now - clock.pauseMs - 30_000;
+	clock.lastSeen = clock.runStarted;
+	assert.ok(clock.idle(), "precondition: past the threshold the clock is idle");
+	const frozen = formatDuration(600_000 + clock.pauseMs);
+	fgCalls.length = 0;
+	const line = footerFor("Arnative (Full)").render(100)[0]!;
+	assert.equal(clockMs(line), frozen, "the frozen run keeps its value");
+	assert.ok(fgCalls.some((c) => c.color === "dim" && c.text === frozen), "a paused clock is drawn dim");
+
+	type(); // a keystroke in the editor
+	// `tick()` runs with a fresh Date.now(), so allow a millisecond of drift.
+	const seen = clock.total();
+	const expected = 600_000 + clock.pauseMs;
+	assert.ok(seen >= expected && seen < expected + 50, `the away gap itself is never counted (got ${seen}, expected ${expected})`);
+	assert.ok(!clock.idle(), "the keystroke unpauses the clock");
+	assert.equal(clock.total(clock.lastSeen + 2_000), clock.active + 2_000, "time counts again after the keystroke");
+});
+
+test("the idle watchdog fires by itself and the 1s tick stops with it", async () => {
+	const idleKey = Symbol.for("pi-arnative.idleTimer");
+	const clockKey = Symbol.for("pi-arnative.clockTimer");
+	const armed = () => (globalThis as Record<symbol, unknown>)[idleKey] != null;
+	const ticking = () => (globalThis as Record<symbol, unknown>)[clockKey] != null;
+	stopIdleProbe();
+
+	// Past the threshold: wait is 0, so the probe fires on the next macrotask and clears
+	// itself. The dim pause appears with no input and no render to trigger it.
+	clock.lastSeen = Date.now() - clock.pauseMs - 1_000;
+	assert.ok(clock.idle(), "precondition: the session is past the threshold");
+	armIdleProbe();
+	assert.ok(armed(), "activity arms the watchdog");
+	assert.ok(ticking(), "activity also starts the moving clock");
+	await new Promise((r) => setTimeout(r, 30));
+	assert.ok(!armed(), "the probe fired once and stopped (it does not spin while frozen)");
+	assert.ok(!ticking(), "the 1s clock tick stops with it");
+
+	// A live run instead keeps both alive until the threshold elapses.
+	clock.lastSeen = Date.now();
+	armIdleProbe();
+	await new Promise((r) => setTimeout(r, 30));
+	assert.ok(armed(), "while the run is live the watchdog is still waiting");
+	stopIdleProbe();
+	assert.ok(!armed(), "the watchdog is cleared on stop/shutdown");
+});
+
+test("the first keystroke after a resume unpauses immediately", () => {
+	// A session resumed after a night away is frozen at startup: its first keystroke must
+	// repaint the resumed (soft) value without waiting for the moving clock.
+	const now = Date.now();
+	clock.active = 720_000;
+	clock.runStarted = now - clock.pauseMs - 30_000;
+	clock.lastSeen = clock.runStarted;
+	assert.ok(clock.idle(), "precondition: the resumed session is frozen");
+	const frozen = formatDuration(720_000 + clock.pauseMs);
+	fgCalls.length = 0;
+	footerFor("Arnative (Full)").render(100);
+	assert.ok(fgCalls.some((c) => c.color === "dim" && c.text === frozen), "the first paint of a resumed session is dim");
+	type(); // the keystroke unpauses it
+	fgCalls.length = 0;
+	footerFor("Arnative (Full)").render(100);
+	assert.ok(fgCalls.some((c) => c.color === "accentSoft" && c.text === frozen), "after the keystroke the clock is soft again");
+	clock.lastSeen = Date.now();
+	clock.runStarted = clock.lastSeen;
+	repaintIdle(); // no-op while running
+	armIdleProbe();
+	stopIdleProbe();
+});
+
+test("the freeze paints itself, with no input and no manual render", async () => {
+	// The probe automatically triggers a render once the idle threshold is crossed.
+	let repaints = 0;
+	const saved = tui.requestRender;
+	tui.requestRender = () => { repaints++; };
+	footerFor("Arnative (Full)");
+	const savedPause = clock.pauseMs;
+	(clock as unknown as { pauseMs: number }).pauseMs = 60;
+	clock.active = 0;
+	clock.runStarted = Date.now();
+	clock.lastSeen = Date.now();
+	wrapInputListener(tui);
+	repaints = 0;
+	tui.handleTerminalInput("a");
+	assert.ok(repaints >= 1, "the keystroke repaints the running clock");
+	const afterKey = repaints;
+	await new Promise((r) => setTimeout(r, 250));
+	assert.ok(clock.idle(), "the run really did freeze");
+	assert.ok(repaints > afterKey, `the freeze repainted itself (repaints ${afterKey} -> ${repaints})`);
+	(clock as unknown as { pauseMs: number }).pauseMs = savedPause;
+	stopIdleProbe();
+	tui.requestRender = saved;
+});
+
+test("typing counts as activity, pointer and focus do not", () => {
+	const seen: string[] = [];
+	const fake = { handleTerminalInput(data: string) { seen.push(data); } };
+	const savedHook = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.activityHook")];
+	delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.inputDispatchWrapped")];
+	const detach = wrapInputListener(fake);
+	const freeze = () => {
+		clock.active = 0;
+		clock.runStarted = Date.now() - clock.pauseMs - 1_000;
+		clock.lastSeen = clock.runStarted;
+		assert.ok(clock.idle(), "precondition: frozen");
+	};
+
+	for (const noise of ["\u001b[<35;10;5M", "\u001b[<64;10;5M", "\u001b[M !!", "\u001b[I", "\u001b[O"]) {
+		freeze();
+		fake.handleTerminalInput(noise);
+		assert.ok(clock.idle(), `pointer/focus input stays frozen (${JSON.stringify(noise)})`);
+		assert.ok(seen.includes(noise), "the input still reaches the original dispatch");
+	}
+
+	freeze();
+	fake.handleTerminalInput("a");
+	assert.ok(!clock.idle(), "a keystroke resumes the clock");
+	assert.ok(seen.includes("a"), "the keystroke still reaches the original dispatch");
+	stopIdleProbe();
+	detach();
+	(globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.activityHook")] = savedHook;
+});
+
+// pi renders custom working-indicator frames verbatim, skipping `spinnerColorFn`
+// (`Loader.getRenderedIndicator`). The extension must clear that flag, or the spinner
+// silently loses its accent colour while the label keeps its own token.
+test("the spinner frame is coloured accent, the label keeps accentSoft", async () => {
+	const { Loader } = await import("@earendil-works/pi-tui");
+	const ui = { requestRender() {} };
+	const loader = new Loader(ui, (t: string) => `[ACCENT:${t}]`, (t: string) => `[SOFT:${t}]`, "Executing (3s)", {
+		frames: ["⬥"],
+		intervalMs: 200,
+	});
+	loader.updateDisplay();
+	assert.ok(loader.render(40)[1]!.includes("⬥"), "plain frame, no accent, while verbatim — the bug the fix targets");
+
+	// The extension's own seam, driven the way `/arnative` → Animations drives it: publish the
+	// editor, then let paintLiveIndicator install the preset's painter on the live Loader.
+	const { EDITOR_KEY, paintLiveIndicator } = await import("../extensions/animations.ts");
+	const { spinnerPainter } = await import("../lib/spinner.ts");
+	(globalThis as Record<symbol, any>)[EDITOR_KEY] = { workingStatusIndicator: loader };
+	paintLiveIndicator(spinnerPainter("Diamond Glow", { fg: (c: string, t: string) => `[${c}:${t}]` }));
+	delete (globalThis as Record<symbol, any>)[EDITOR_KEY];
+	const line = loader.render(40)[1]!;
+	assert.ok(line.includes("[accent:⬥]"), "the frame goes through the painted accent, verbatim cleared");
+	assert.ok(line.includes("[SOFT:Executing"), "the label keeps its own colour fn, not the spinner's");
 });

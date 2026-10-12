@@ -32,7 +32,7 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { BoxTheme } from "../lib/box.ts";
-import { renderBoxLines } from "../lib/box.ts";
+import { BRAND, renderBoxLines } from "../lib/box.ts";
 import { getActiveTheme, setActiveTheme, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { capitalize, expandKeyName, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
@@ -56,9 +56,8 @@ export const SECTION_ICONS: Record<TabKey, string> = {
 // nf-cod-warning, width 1 — prefixes a pi diagnostic block's compact header.
 const DIAGNOSTIC_ICON = "\uea6c";
 
-// Live brand for the header's info line: Braille cell U+2819, the same glyph as
-// `Settings - Arnative⠙` (single column wide, outside the Nerd Font PUA).
-export const HEADER_BRAND = "Arnative\u2819";
+// The header's brand line shares the one glyph with every `/arnative` screen title.
+export const HEADER_BRAND = `Arnative${BRAND}`;
 
 export type Themeish = { fg?(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 

@@ -49,7 +49,16 @@ type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record
 type Res = (r: TResult, th: Theme, soft: (s: string) => string, isErr: boolean, expanded: boolean) => string;
 
 const cwd = process.cwd();
-const TIMINGS = new Map<string, number>(); // duration ms per tool call (one run)
+const MAX_TIMINGS = 200;
+const TIMINGS = new Map<string, number>();
+
+export function recordTiming(toolCallId: string, durationMs: number): void {
+	if (TIMINGS.size >= MAX_TIMINGS) {
+		const oldest = TIMINGS.keys().next().value;
+		if (oldest !== undefined) TIMINGS.delete(oldest);
+	}
+	TIMINGS.set(toolCallId, durationMs);
+}
 
 // Running icon 󰔟 󱦠 󱦟: 500ms spin frames from a ticker that only runs while
 // a tool is active (idle = no wasteful re-renders).
@@ -586,7 +595,7 @@ function minimal(
 			try {
 				return await tool.execute(toolCallId, params, signal, onUpdate, ctx);
 			} finally {
-				TIMINGS.set(toolCallId, Math.round(performance.now() - start));
+				recordTiming(toolCallId, Math.round(performance.now() - start));
 				ACTIVE--;
 				syncTicker();
 			}
@@ -659,6 +668,7 @@ function arnativeTools(pi: ExtensionAPI) {
 
 	// Re-render source for the spinner + ticker cleanup when the session closes
 	pi.on("session_start", async (_event, ctx) => {
+		TIMINGS.clear();
 		requestRenderFn = () => {
 			try {
 				(ctx.ui as { requestRender?: () => void }).requestRender?.();
@@ -668,6 +678,7 @@ function arnativeTools(pi: ExtensionAPI) {
 		};
 	});
 	pi.on("session_shutdown", async () => {
+		TIMINGS.clear();
 		if (TICK) {
 			clearInterval(TICK);
 			TICK = null;
@@ -1369,5 +1380,11 @@ if (isMain(import.meta.url)) {
 	assert(cdpExpanded.some((l) => l.includes('"pageId": "p1"')), "chrome-devtools: expanded shows the full tool output");
 	assert(cdpCollapsed.some((l) => l.includes("navigated") && l.includes("to expand")), "chrome-devtools: collapsed shows the first line + hint");
 	assert([...cdpCollapsed, ...cdpExpanded].every((l) => visibleWidth(l) === 74), "chrome-devtools: box fills the given width");
+	// Capped timings map self-check
+	for (let i = 0; i < 250; i++) recordTiming(`call_${i}`, i);
+	assert(TIMINGS.size === MAX_TIMINGS, `TIMINGS size is bounded to ${MAX_TIMINGS}`);
+	assert(!TIMINGS.has("call_0") && TIMINGS.has("call_249"), "TIMINGS evicts oldest entries");
+	TIMINGS.clear();
+
 	console.log("OK");
 }

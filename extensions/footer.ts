@@ -1,13 +1,8 @@
 /**
- * Arnative footer (fixed 3-row grid, no click toggle).
- * Row 1: cwd | duration | branch/tag/status ...... model + thinking level.
- * Rows 2-3: extension status (mcp first) ......... tok/s · cache · token,
- * each side wrapped inside its half of the width and paired row by row.
- *
- * Preset (`/arnative footers`): "Arnative (Full)" (default) or "Pi (system)" (built-in footer), live.
- * Transcript clock & bubble bg: extensions/timestamps.ts
- * /new header: extensions/section-headers.ts
- * Selection + box reload: extensions/ui-render-tweaks.ts
+ * Arnative footer (fixed 3-row grid). Row 1: cwd | active time | branch — model + thinking;
+ * rows 2-3: extension status | tok/s · cache · token, each side wrapped in its half of the
+ * width. The clock counts active time, not wall-clock age — see {@link ActiveClock}.
+ * Preset (`/arnative footers`), live: "Arnative (Full)" (default) or "Pi (system)".
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -22,6 +17,8 @@ import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { EDITOR_KEY, activeSpinnerPreset } from "./animations.ts";
+import { spinnerPainter } from "../lib/spinner.ts";
 
 // ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
 // The TUI drops key-release events before handleInput, so press+release cannot
@@ -113,11 +110,78 @@ let lastPokeMs = 0;
  *  (mouse coordinates are component-local, so they must come from the same frame). */
 let minimalRanges: { left: [number, number]; right: [number, number] } | null = null;
 
-const SESSION_START_KEY = Symbol.for("pi-arnative.sessionStartMs");
-let sessionStartMs: number = (globalThis as Record<symbol, number>)[SESSION_START_KEY] || Date.now();
-(globalThis as Record<symbol, number>)[SESSION_START_KEY] = sessionStartMs;
+/** Maximum inactivity window before the session clock freezes (30 seconds). */
+export const IDLE_PAUSE_MS = 30_000;
+
+/**
+ * Tracks active session duration, freezing after inactivity periods.
+ * State is stored on globalThis to survive module reloads.
+ */
+export class ActiveClock {
+	active: number;
+	runStarted: number;
+	lastSeen: number;
+	readonly pauseMs: number;
+
+	constructor(startedAt: number, pauseMs: number = IDLE_PAUSE_MS) {
+		const saved = (globalThis as Record<symbol, unknown>)[ACTIVE_KEY] as
+			| { active?: number; runStarted?: number; lastSeen?: number }
+			| undefined;
+		this.pauseMs = pauseMs;
+		this.active = typeof saved?.active === "number" ? saved.active : 0;
+		this.runStarted = typeof saved?.runStarted === "number" ? saved.runStarted : startedAt;
+		this.lastSeen = typeof saved?.lastSeen === "number" ? saved.lastSeen : startedAt;
+	}
+
+	/** Committed runs plus the live one, the live part clamped at `lastSeen + pauseMs`. */
+	total(now: number = Date.now()): number {
+		return this.active + Math.max(0, Math.min(now, this.lastSeen + this.pauseMs) - this.runStarted);
+	}
+
+	/** Activity: commits a run left longer than `pauseMs`, else just moves `lastSeen`. */
+	tick(now: number = Date.now()): void {
+		if (now - this.lastSeen > this.pauseMs) {
+			this.active = this.total(now);
+			this.runStarted = now;
+		}
+		this.lastSeen = now;
+		(globalThis as Record<symbol, unknown>)[ACTIVE_KEY] = {
+			active: this.active,
+			runStarted: this.runStarted,
+			lastSeen: this.lastSeen,
+		};
+	}
+
+	idle(now: number = Date.now()): boolean {
+		return now - this.lastSeen > this.pauseMs;
+	}
+}
+
+/** Sums active duration from recorded session entries up to pause threshold. */
+export function seedActiveMs(entries: readonly unknown[], pauseMs: number = IDLE_PAUSE_MS, now: number = Date.now()): number {
+	const times: number[] = [];
+	for (const entry of entries) {
+		const ts = (entry as { timestamp?: string } | null)?.timestamp;
+		const parsed = ts ? Date.parse(ts) : NaN;
+		if (Number.isFinite(parsed) && parsed <= now) times.push(parsed);
+	}
+	times.sort((a, b) => a - b);
+	let ms = 0;
+	for (let i = 1; i < times.length; i++) {
+		const gap = times[i]! - times[i - 1]!;
+		if (gap > 0 && gap <= pauseMs) ms += gap;
+	}
+	return ms;
+}
+
+// One shared clock: a /reload re-imports this module, so a fresh instance would restart
+// a session that is already hours old. Exported so a test can drive the render path.
+const ACTIVE_KEY = Symbol.for("pi-arnative.activeClock");
+export let clock = new ActiveClock(Date.now());
 
 const MODEL_KEY = Symbol.for("pi-arnative.currentModel");
+const IDLE_TIMER_KEY = Symbol.for("pi-arnative.idleTimer");
+const CLOCK_TIMER_KEY = Symbol.for("pi-arnative.clockTimer");
 const THINKING_KEY = Symbol.for("pi-arnative.currentThinking");
 const CWD_KEY = Symbol.for("pi-arnative.lastCwd");
 const GIT_KEY = Symbol.for("pi-arnative.lastGit");
@@ -133,9 +197,10 @@ const WORK_TIMER_KEY = Symbol.for("pi-arnative.workTimer");
 const WORK_LABEL = "Working";
 let workVerb = WORK_LABEL;
 let workStartMs: number | null = null;
-let workUI: { setWorkingMessage?: (message?: string) => void } | null = null;
-// Verbs of tools still running (toolCallId -> verb): the label must not reset to
-// "Working" while a sibling tool is still going (pi executes tools in parallel).
+let workUI: { setWorkingMessage?: (message?: string) => void; setWorkingIndicator?: (options?: unknown) => void } | null =
+	null;
+// Verbs of tools still running (toolCallId -> verb): the label must not reset to "Working"
+// while a sibling tool is still going (pi executes tools in parallel).
 const activeToolVerbs = new Map<string, string>();
 
 /** Label while `active` tools remain: last started wins, empty -> default. */
@@ -356,12 +421,9 @@ export function shortenCwd(raw: string): string {
 	return head + parts.slice(-2).join("/");
 }
 
-// Session age must survive `/resume`: the header holds the moment the session was
-// created, so reopening it shows the real age instead of restarting at 0. `new` and
-// `fork` write a fresh header, so the same read yields "just now" there. `/reload`
-// keeps the in-memory value (the header would be identical anyway).
-export function resolveSessionStartMs(reason: string, headerTimestamp: string | undefined, now: number, prev: number): number {
-	if (reason === "reload") return prev;
+/** Resolves session start timestamp; reloads preserve state, startup/resume reads header. */
+export function resolveSessionStartMs(reason: string, headerTimestamp: string | undefined, now: number): number {
+	if (reason === "reload") return now;
 	const parsed = headerTimestamp ? Date.parse(headerTimestamp) : NaN;
 	return Number.isFinite(parsed) && parsed > 0 && parsed <= now ? parsed : now;
 }
@@ -381,7 +443,8 @@ export function sumNumstat(out: string): { added: number; removed: number } {
 }
 
 export function formatDuration(ms: number): string {
-	if (!ms || ms <= 0) return "-";
+	// Sub-second renders as "-" to avoid a "0s" flash on fresh session.
+	if (!ms || ms < 1000) return "-";
 	const totalSec = Math.floor(ms / 1000);
 	const h = Math.floor(totalSec / 3600);
 	const m = Math.floor((totalSec % 3600) / 60);
@@ -567,6 +630,13 @@ function mcpStatusOf(sub: string): string {
 	return "Executing";
 }
 
+/**
+ * The spinner is one preset out of `lib/spinner.ts`, chosen through `/arnative` →
+ * **Animations** and persisted in `arnative-config.json`. `Pi (system)` hands the slot back
+ * to pi's own Braille indicator; every other preset installs its own frames and painter.
+ * The frames are read fresh on each `session_start`, so a preset picked mid-session applies
+ * on the next reload without re-registering the handler.
+ */
 /** Loader label with the elapsed suffix; no suffix below 1s (avoids a "(0s)" flicker). */
 export function workingLabel(verb: string, elapsedMs: number): string {
 	return elapsedMs >= 1000 ? `${verb} (${formatDuration(elapsedMs)})` : verb;
@@ -586,7 +656,99 @@ function stopWorkingClock(): void {
 	if (t) clearInterval(t);
 	(globalThis as Record<symbol, any>)[WORK_TIMER_KEY] = null;
 	workStartMs = null;
+	workUI = null;
 	activeToolVerbs.clear();
+}
+
+let idleProbe: ReturnType<typeof setTimeout> | null = null;
+let idlePauseShown = false;
+let clockTick: ReturnType<typeof setInterval> | null = null;
+
+/** 1s repaint ticker while clock is active. Stops when idle. */
+function startClockTick(): void {
+	if (clockTick !== null) return;
+	clockTick = setInterval(() => {
+		if (clock.idle()) return stopClockTick();
+		poke();
+	}, 1000);
+	(globalThis as Record<symbol, any>)[CLOCK_TIMER_KEY] = clockTick;
+}
+
+function stopClockTick(): void {
+	if (clockTick) clearInterval(clockTick);
+	clockTick = null;
+	(globalThis as Record<symbol, any>)[CLOCK_TIMER_KEY] = null;
+}
+
+/** Repaint a frozen clock on the first activity, instead of waiting for the next tick. */
+export function repaintIdle(now: number = Date.now()): void {
+	if (!clock.idle(now) || idlePauseShown) return;
+	poke();
+}
+
+/** Pointer motion and terminal focus reports are not user activity. */
+export function isPointerOrFocusInput(data: string): boolean {
+	return data.startsWith("\x1b[<") || data.startsWith("\x1b[M") || data === "\x1b[I" || data === "\x1b[O";
+}
+
+/** Intercepts terminal input on TuiBase to register keystroke activity. */
+const WRAPPED_TUI_KEY = Symbol.for("pi-arnative.inputDispatchWrapped");
+const ACTIVITY_HOOK_KEY = Symbol.for("pi-arnative.activityHook");
+
+export function wrapInputListener(tui: unknown): () => void {
+	(globalThis as Record<symbol, any>)[ACTIVITY_HOOK_KEY] = (data: string) => {
+		if (isPointerOrFocusInput(data)) return;
+		clock.tick();
+		repaintIdle();
+		armIdleProbe();
+	};
+	const target = tui as { handleTerminalInput?: (data: string) => void };
+	if (!target || typeof target.handleTerminalInput !== "function") return () => {};
+	if (!(globalThis as Record<symbol, boolean>)[WRAPPED_TUI_KEY]) {
+		(globalThis as Record<symbol, boolean>)[WRAPPED_TUI_KEY] = true;
+		const original = target.handleTerminalInput;
+		target.handleTerminalInput = function (this: unknown, data: string): void {
+			// One keystroke, one activity. The wrapper runs before `original`, and `pi-tui`
+			// has a single caller for it (`terminal.start`), so there is nothing to dedupe.
+			try {
+				(globalThis as Record<symbol, any>)[ACTIVITY_HOOK_KEY]?.(data);
+			} catch {
+				// activity bookkeeping must never break input
+			}
+			original.call(this, data);
+		};
+	}
+	return () => {
+		// Only the hook is torn down; the wrapper stays, since a reload re-registers it.
+		(globalThis as Record<symbol, any>)[ACTIVITY_HOOK_KEY] = null;
+	};
+}
+
+/** Past the boundary, where `idle()` is still false because it is a strict `>` (~one frame). */
+const IDLE_PROBE_EPSILON_MS = 25;
+
+export function armIdleProbe(now: number = Date.now()): void {
+	startClockTick();
+	if (idleProbe) clearTimeout(idleProbe);
+	const wait = Math.max(0, clock.pauseMs - (now - clock.lastSeen)) + IDLE_PROBE_EPSILON_MS;
+	idleProbe = setTimeout(() => {
+		idleProbe = null;
+		(globalThis as Record<symbol, any>)[IDLE_TIMER_KEY] = null;
+		if (!clock.idle()) return; // activity raced the probe: it re-armed itself
+		idlePauseShown = true;
+		stopClockTick();
+		poke();
+	}, wait);
+	(globalThis as Record<symbol, any>)[IDLE_TIMER_KEY] = idleProbe;
+	poke();
+}
+
+/** Stop the idle machinery: the one-shot probe and the moving clock tick. */
+export function stopIdleProbe(): void {
+	if (idleProbe) clearTimeout(idleProbe);
+	idleProbe = null;
+	stopClockTick();
+	(globalThis as Record<symbol, any>)[IDLE_TIMER_KEY] = null;
 }
 
 /** Start (or restart) the 1s tick from a fresh turn. */
@@ -669,8 +831,19 @@ export default function (pi: ExtensionAPI) {
 		// ctx.ui closures) may still be alive; clear it before starting a new one.
 		stopWorkingClock();
 		if (event.reason !== "reload") {
-			sessionStartMs = resolveSessionStartMs(event.reason, ctx.sessionManager.getHeader()?.timestamp, Date.now(), sessionStartMs);
-			(globalThis as Record<symbol, number>)[SESSION_START_KEY] = sessionStartMs;
+			delete (globalThis as Record<symbol, unknown>)[ACTIVE_KEY];
+			clock = new ActiveClock(resolveSessionStartMs(event.reason, ctx.sessionManager.getHeader()?.timestamp, Date.now()));
+			try {
+				const now = Date.now();
+				clock.active = seedActiveMs(ctx.sessionManager.getEntries(), IDLE_PAUSE_MS, now);
+				clock.runStarted = now;
+				clock.lastSeen = now;
+			} catch {
+				// unreadable log -> start from now
+			}
+			stopIdleProbe();
+			stopClockTick();
+			idlePauseShown = false;
 			currentModel = ctx.model;
 			currentThinkingLevel = ctx.thinkingLevel;
 			git = null;
@@ -693,9 +866,13 @@ export default function (pi: ExtensionAPI) {
 		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
 
 		try {
+			armIdleProbe();
 			const registerArnative = (c: ExtensionContext) => {
 				c.ui.setFooter((tui, theme, footerData) => {
 					activeThemeProxy = theme;
+					// Wraps the dispatch (see `wrapInputListener`): the TUI's own viewport
+					// listener runs first and would swallow the keys an `addInputListener` waits for.
+					const dot = wrapInputListener(tui);
 					rerender = () => tui.requestRender();
 					const unsub = footerData.onBranchChange(() => {
 						void refreshGit(cwd).then(() => tui.requestRender());
@@ -703,6 +880,7 @@ export default function (pi: ExtensionAPI) {
 					return {
 						dispose() {
 							rerender = null;
+							dot();
 							unsub();
 						},
 						invalidate() {},
@@ -731,9 +909,13 @@ export default function (pi: ExtensionAPI) {
 							const diffDel = colorOr("toolDiffRemoved", soft);
 							const sep = dim(" | ");
 
-							const durationStr = formatDuration(Date.now() - sessionStartMs);
+							const durationStr = formatDuration(clock.total());
 							const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
-							const pDuration = `${acc("\uf017")} ${soft(durationStr)}${diffStat ? `${sep}${diffStat}` : ""}`;
+							const paused = clock.idle();
+							idlePauseShown = paused;
+							const clockIcon = paused ? dim("\uf017") : acc("\uf017");
+							const clockText = paused ? dim(durationStr) : soft(durationStr);
+							const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
 							const cwdShort = shortenCwd(cwd);
 							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
 							const open = minimalExpanded();
@@ -842,6 +1024,9 @@ export default function (pi: ExtensionAPI) {
 			class ArnativeEditor extends CustomEditor {
 				constructor(tui: any, editorTheme: any, keybindings: any, options?: any) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
+					// Published so `/arnative` → Animations can repaint the live spinner without
+					// waiting for the next session, and so workUI has a handle to the Loader.
+					(globalThis as Record<symbol, any>)[EDITOR_KEY] = this;
 				}
 
 				private getActiveTheme() {
@@ -850,14 +1035,9 @@ export default function (pi: ExtensionAPI) {
 
 				private applyFixedIndicatorColors(indicator: any) {
 					if (!indicator) return;
-					indicator.spinnerColorFn = (text: string) => {
-						try {
-							const th = this.getActiveTheme();
-							return th ? th.fg("accent", text) : text;
-						} catch {
-							return text;
-						}
-					};
+					// Clear renderIndicatorVerbatim so custom frames pass through spinnerColorFn.
+					indicator.renderIndicatorVerbatim = false;
+					indicator.spinnerColorFn = spinnerPainter(activeSpinnerPreset(), this.getActiveTheme());
 					indicator.messageColorFn = (text: string) => {
 						try {
 							const th = this.getActiveTheme();
@@ -917,6 +1097,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
+		clock.tick();
+		armIdleProbe();
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
 		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
@@ -927,17 +1109,23 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {
+		clock.tick();
+		armIdleProbe();
 		const verb = getToolWorkingMessage(event.toolName, event.args);
 		activeToolVerbs.set(event.toolCallId, verb);
 		setWorkingVerb(ctx, verb);
 	});
 
 	pi.on("tool_execution_end", async (event, ctx) => {
+		clock.tick();
+		armIdleProbe();
 		activeToolVerbs.delete(event.toolCallId);
 		setWorkingVerb(ctx, currentToolVerb(activeToolVerbs));
 	});
 
 	pi.on("message_update", async (event) => {
+		clock.tick();
+		armIdleProbe();
 		if (event.message.role === "assistant") {
 			// Timer starts lazily if message_start never fired (fragile event pairing)
 			if (assistantStartMs === null) assistantStartMs = Date.now();
@@ -962,6 +1150,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("message_end", async (event) => {
+		clock.tick();
+		armIdleProbe();
 		if (event.message.role === "assistant") {
 			const start = assistantStartMs ?? Date.now();
 			const elapsed = (Date.now() - start) / 1000;
@@ -976,6 +1166,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
+		clock.tick();
+		armIdleProbe();
 		stopWorkingClock();
 		try {
 			ctx.ui?.setWorkingMessage?.();
@@ -999,6 +1191,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		stopWorkingClock();
+		stopIdleProbe();
+		stopClockTick();
+		try {
+			ctx.ui?.setWorkingIndicator?.();
+		} catch {
+			// ignore
+		}
 		rerender = null;
 		const cur = ((globalThis as Record<symbol, number>)[GEN_KEY] ?? 0);
 		if (cur !== runtimeGen) return;
@@ -1021,6 +1220,8 @@ if (isMain(import.meta.url)) {
 	assert(shortenCwd("/a/x/y/z") === "\u2026/y/z", "long path -> tail");
 	assert(shortenCwd("") === "", "empty cwd");
 	assert(formatDuration(0) === "-", "empty duration = -");
+	assert(formatDuration(1) === "-" && formatDuration(999) === "-", "sub-second is '-' too: no 0s flicker on a fresh clock");
+	assert(formatDuration(1_000) === "1s", "a full second reads as 1s");
 	assert(formatDuration(5_000) === "5s", "seconds only");
 	assert(formatDuration(65_000) === "1m 5s", "minutes + seconds");
 	assert(formatDuration(3_700_000) === "1h 1m", "hours + minutes");
@@ -1079,6 +1280,7 @@ if (isMain(import.meta.url)) {
 	assert(workingLabel("Working", 999) === "Working", "no elapsed suffix at 999ms");
 	assert(workingLabel("Working", 50_000) === "Working (50s)", "elapsed seconds suffix");
 	assert(workingLabel("Executing", 65_000) === "Executing (1m 5s)", "elapsed minutes suffix");
+
 	assert(currentToolVerb(new Map()) === WORK_LABEL, "no active tool -> default label");
 	assert(currentToolVerb(new Map([["a", "Reading"], ["b", "Writing"]])) === "Writing", "parallel tools: last started wins");
 	assert(currentToolVerb(new Map([["a", "Reading"]])) === "Reading", "after one ends, the remaining tool's label shows");
@@ -1239,12 +1441,74 @@ if (isMain(import.meta.url)) {
 
 	// Self-check: session age survives /resume (header timestamp wins over now).
 	const NOW = Date.parse("2026-10-08T12:00:00.000Z");
-	assert(resolveSessionStartMs("resume", "2026-10-08T09:00:00.000Z", NOW, NOW) === Date.parse("2026-10-08T09:00:00.000Z"), "resume restores the session age from the header");
-	assert(resolveSessionStartMs("startup", "2026-10-08T11:59:59.000Z", NOW, NOW) === Date.parse("2026-10-08T11:59:59.000Z"), "startup reads the freshly written header");
-	assert(resolveSessionStartMs("reload", undefined, NOW, 1234) === 1234, "reload keeps the in-memory start");
-	assert(resolveSessionStartMs("resume", undefined, NOW, 1234) === NOW, "a missing header falls back to now");
-	assert(resolveSessionStartMs("resume", "not-a-date", NOW, 1234) === NOW, "an unparsable header falls back to now");
-	assert(resolveSessionStartMs("resume", "2026-10-08T13:00:00.000Z", NOW, 1234) === NOW, "a future header is clamped to now, never a negative age");
+	assert(resolveSessionStartMs("resume", "2026-10-08T09:00:00.000Z", NOW) === Date.parse("2026-10-08T09:00:00.000Z"), "resume restores the session age from the header");
+	assert(resolveSessionStartMs("startup", "2026-10-08T11:59:59.000Z", NOW) === Date.parse("2026-10-08T11:59:59.000Z"), "startup reads the freshly written header");
+	assert(resolveSessionStartMs("resume", undefined, NOW) === NOW, "a missing header falls back to now");
+	assert(resolveSessionStartMs("resume", "not-a-date", NOW) === NOW, "an unparsable header falls back to now");
+	assert(resolveSessionStartMs("resume", "2026-10-08T13:00:00.000Z", NOW) === NOW, "a future header is clamped to now, never a negative age");
+
+	// Self-check: the active clock. The run keeps counting after the last event and then
+	// freezes at the threshold, so the display runs on its own and a pause costs at most
+	// `pauseMs` — but the value never goes backwards.
+	const ACTIVE_SYM = Symbol.for("pi-arnative.activeClock");
+	const t0 = 1_000_000;
+	const P = 180_000;
+	delete (globalThis as Record<symbol, unknown>)[ACTIVE_SYM];
+	const c = new ActiveClock(t0, P);
+	assert(c.total(t0) === 0, "a fresh clock starts at zero");
+	assert(c.total(t0 + 60_000) === 60_000, "the clock runs on its own, with no event arriving");
+	assert(c.total(t0 + P) === P, "it keeps counting until the threshold");
+	assert(c.total(t0 + P + 100_000) === P, "past the threshold the display freezes, it does not run forever");
+	assert(c.total(t0 + 30_000) === 30_000 && c.total(t0 + 60_000) === 60_000, "an earlier read never rewinds the value");
+	assert(c.total(t0 - 5_000) === 0, "a read before the run started is zero, never negative");
+	assert(c.idle(t0) === false, "idle() is false at the start of a run");
+	assert(c.idle(t0 + P) === false, "idle() at exactly the threshold is not idle");
+	assert(c.idle(t0 + P + 1) === true, "idle() turns true past the threshold");
+	// Activity after being away: the old run is committed at its frozen value and a new
+	// run starts here, so a night away adds exactly `pauseMs`, never the away time.
+	const away = t0 + P + 12 * 3600_000;
+	c.tick(away);
+	assert(c.total(away) === P, "an away gap commits the frozen run, not the away time");
+	assert(c.idle(away) === false, "the tick resumes the clock");
+	assert(c.total(away + 30_000) === P + 30_000, "the new run counts from the tick");
+	const restored = new ActiveClock(away, P);
+	assert(restored.active === c.active, "/reload reads the committed total back from globalThis");
+	assert(restored.total(away) === P, "/reload does not restart the session at zero");
+	delete (globalThis as Record<symbol, unknown>)[ACTIVE_SYM];
+
+	// Self-check: seedActiveMs reconstructs the active time already on disk. Sorted by
+	// time first (a fork keeps the parent's older timestamps), unparsable and future
+	// entries ignored, empty log -> zero.
+	const at = (ms: number) => ({ timestamp: new Date(t0 + ms).toISOString() });
+	const SEED_NOW = t0 + 86_400_000; // a day later: every fixture timestamp is in the past
+	assert(seedActiveMs([], 180_000, SEED_NOW) === 0, "empty log seeds zero");
+	assert(seedActiveMs([at(0), at(60_000), at(120_000)], 180_000, SEED_NOW) === 120_000, "short gaps all count");
+	assert(seedActiveMs([at(0), at(5 * 3600_000), at(5 * 3600_000 + 30_000)], 180_000, SEED_NOW) === 30_000, "a long gap is dropped, the tail still counts");
+	assert(seedActiveMs([at(120_000), at(0), at(60_000)], 180_000, SEED_NOW) === 120_000, "out-of-order entries are sorted before summing");
+	assert(seedActiveMs([at(0), at(0), at(60_000)], 180_000, SEED_NOW) === 60_000, "duplicate timestamps add nothing");
+	assert(seedActiveMs([{ timestamp: "not-a-date" }, at(0), at(60_000)], 180_000, SEED_NOW) === 60_000, "unparsable timestamps are ignored");
+	assert(seedActiveMs([at(2 * 86_400_000)], 180_000, SEED_NOW) === 0, "a future timestamp is ignored");
+
+	// The watchdog: activity arms it, it paints the freeze once, then stops. The epsilon keeps
+	// it off the boundary, where `idle()` is still false (strict `>`). `IDLE_PAUSE_MS` itself is
+	// not pinned: it is a documented knob and the behaviour tests read `pauseMs` from the clock.
+	assert(IDLE_PROBE_EPSILON_MS > 0, "the probe must fire past the boundary, not on it");
+	const idleKey = Symbol.for("pi-arnative.idleTimer");
+	clock.lastSeen = Date.now();
+	armIdleProbe();
+	assert((globalThis as Record<symbol, unknown>)[idleKey] != null, "activity arms the idle watchdog");
+	stopIdleProbe();
+	assert((globalThis as Record<symbol, unknown>)[idleKey] == null, "the watchdog is cleared on stop/shutdown");
+
+	// Only keyboard input is activity. Mouse motion is sent continuously by the terminal
+	// (it asks for all-motion mode), so counting it kept the clock open for as long as
+	// the terminal had focus and the dim freeze never appeared.
+	assert(isPointerOrFocusInput("\u001b[<35;10;5M"), "SGR mouse motion is not activity");
+	assert(isPointerOrFocusInput("\u001b[<64;10;5M"), "SGR wheel is not activity");
+	assert(isPointerOrFocusInput("\u001b[M !!"), "legacy X10 mouse is not activity");
+	assert(isPointerOrFocusInput("\u001b[I") && isPointerOrFocusInput("\u001b[O"), "terminal focus is not activity");
+	assert(!isPointerOrFocusInput("a") && !isPointerOrFocusInput("\r"), "keystrokes are activity");
+	assert(!isPointerOrFocusInput("\u001b[A") && !isPointerOrFocusInput("\u001b[5~"), "arrow and page keys are activity");
 
 	console.log("footer.ts self-check OK");
 }

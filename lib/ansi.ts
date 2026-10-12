@@ -50,6 +50,39 @@ export function accentSoftOf(th: { fg?(c: string, t: string): string } | null): 
 	}
 }
 
+/** pi defines one theme slot per thinking level (`thinkingOff`…`thinkingMax`), so a box
+ *  can follow the model instead of a hardcoded palette — switching theme keeps the
+ *  meaning of the color. Shared by `usage.ts` and `arnative.ts`. */
+const THINKING_SLOTS: Record<string, string> = {
+	minimal: "thinkingMinimal",
+	low: "thinkingLow",
+	medium: "thinkingMedium",
+	high: "thinkingHigh",
+	xhigh: "thinkingXhigh",
+	max: "thinkingMax",
+};
+
+function thinkingColorSlot(level: string | undefined): string {
+	return THINKING_SLOTS[(level ?? "off").toLowerCase()] ?? "thinkingOff";
+}
+
+/** Painter for a thinking level, probed once; falls back to `dim` when the theme lacks
+ *  the slot, so a non-arnative theme draws a plain border instead of throwing. */
+export function thinkingColorOf(
+	th: { fg?(c: string, t: string): string } | null,
+	level: string | undefined,
+): (s: string) => string {
+	const fg = th?.fg?.bind(th);
+	if (!fg) return (s) => s;
+	const slot = thinkingColorSlot(level);
+	try {
+		fg(slot, "");
+		return (s) => fg(slot, s);
+	} catch {
+		return (s) => fg("dim", s);
+	}
+}
+
 // Self-check: `node lib/ansi.ts`
 if (isMain(import.meta.url)) {
 	assert(ansiBgOpen(null, "selectedBg") === "", "no theme: empty");
@@ -74,5 +107,22 @@ if (isMain(import.meta.url)) {
 	};
 	assert(accentSoftOf(noSoft)("x") === "<accent>x</accent>", "accentSoftOf falls back to accent without the token");
 	assert(accentSoftOf(null)("x") === "x", "accentSoftOf without a theme is identity");
+
+	assert(thinkingColorSlot("off") === "thinkingOff", "thinking off maps to thinkingOff");
+	assert(thinkingColorSlot(undefined) === "thinkingOff", "missing level falls back to thinkingOff");
+	assert(thinkingColorSlot("HIGH") === "thinkingHigh", "matching is case-insensitive");
+	assert(thinkingColorSlot("xhigh") === "thinkingXhigh", "xhigh has its own slot");
+	assert(thinkingColorSlot("max") === "thinkingMax", "max maps to thinkingMax");
+	assert(thinkingColorSlot("nonsense") === "thinkingOff", "an unknown level degrades to thinkingOff");
+	assert(thinkingColorOf(tag, "high")("x") === "<thinkingHigh>x</thinkingHigh>", "thinkingColorOf paints the level's slot");
+	assert(thinkingColorOf(tag, undefined)("x") === "<thinkingOff>x</thinkingOff>", "thinkingColorOf defaults to thinkingOff");
+	assert(thinkingColorOf(null, "high")("x") === "x", "thinkingColorOf without a theme is identity");
+	const noThinking = {
+		fg: (c: string, t: string) => {
+			if (c.startsWith("thinking")) throw new Error(`Unknown theme color: ${c}`);
+			return `<${c}>${t}</${c}>`;
+		},
+	};
+	assert(thinkingColorOf(noThinking, "max")("x") === "<dim>x</dim>", "thinkingColorOf falls back to dim without the slot");
 	console.log("lib/ansi.ts OK");
 }

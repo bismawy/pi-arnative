@@ -1,16 +1,6 @@
-// Platform-correct key ids for the package's single-letter shortcuts (t / n / r).
-//
-// Windows Terminal >= 1.24 aliases every Ctrl+Alt combo to AltGr (microsoft/terminal
-// PR #20052), so the legacy "ESC + control byte" pair (ctrl+alt+r = \x1b\x12) that
-// matchesKey() looks for is never emitted — the keystroke dies inside the terminal.
-// A WSL pane inherits that same input translation, so it counts as Windows-like too,
-// mirroring pi's own useWindowsKeybindings() (not exported from the package root).
-// pi falls back to alt+<letter> for this class of problem (app.clipboard.pasteImage ->
-// alt+v, app.model.cycleBackward -> alt+p) and every Windows terminal prefixes
-// alt+<letter> with ESC (libuv win/tty.c), so do the same here. macOS keeps ctrl+alt
-// only: plain Option there composes characters (Option+r = ®) unless "Use Option as
-// Meta key" is enabled, while ctrl+alt transmits in every macOS terminal.
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+// Platform-aware single-letter shortcuts. Windows/WSL uses Alt+<char> to avoid AltGr
+// aliasing; macOS displays Option; other platforms use Ctrl+Alt.
+import { Key, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { assert, isMain } from "./check.ts";
 
 /** Windows Terminal's AltGr aliasing hits native Windows and WSL panes alike. */
@@ -46,6 +36,44 @@ export const SHORTCUT_RELOAD = build("r");
  *  (same platform split as the shortcuts above). */
 export const SHORTCUT_TOGGLE_FOOTER = build("m");
 
+/** The one "go back" key: `←` leaves a screen for its parent, while Esc closes or reverts
+ *  it. Defined here so no screen can advertise a key another screen does not handle. */
+export const BACK_KEY_LABEL = "←";
+export function matchesBack(data: string): boolean {
+	return matchesKey(data, "left");
+}
+
+/** A key a screen advertises: its label plus the matcher the handler acts on. A legend
+ *  built from these cannot drift from the handler — the same `matches` decides both. */
+export interface KeySet {
+	label: string;
+	matches: (data: string) => boolean;
+}
+
+const keySet = (label: string, ...keyIds: string[]): KeySet => ({
+	label,
+	matches: (data) => keyIds.some((keyId) => matchesKey(data, keyId)),
+});
+
+/** One label for the pair — the handler moves on either arrow. */
+const MOVE = keySet("↑↓", "up", "down");
+const CHOOSE = keySet("Enter", "enter");
+const BACK = keySet(BACK_KEY_LABEL, "left");
+const CANCEL = keySet("Esc", "escape");
+const QUIT = keySet("q/Esc", "q", "escape");
+
+const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
+
+/** Root menu: move and open. No `[←]` — the menu has no screen behind it. */
+export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
+/** Live-preview list: moving applies, Enter keeps, `←` steps out, Esc reverts. */
+export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [BACK.label, "Back"], [CANCEL.label, "Revert"]);
+/** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
+export function legendUsage(width: number): string {
+	const full = legend([MOVE.label, "Move"], ["Click", "Open/close"], [BACK.label, "Back"], [QUIT.label, "Exit"]);
+	return width >= visibleWidth(full) ? full : legend([QUIT.label, "Exit"]);
+}
+
 if (isMain(import.meta.url)) {
 	assert(SHORTCUT_RELOAD.keys[0] === Key.ctrlAlt("r"), "ctrl+alt+r is registered on every platform");
 	assert(
@@ -72,5 +100,26 @@ if (isMain(import.meta.url)) {
 		"alt+m is registered only where Ctrl+Alt is aliased away",
 	);
 	assert(!SHORTCUT_TOGGLE_FOOTER.matches("\x1b\x12"), "ctrl+alt+r does not match the footer toggle");
+	assert(matchesBack("\x1b[D"), "← (CSI) matches the back key");
+	assert(matchesBack("\x1bOD"), "← (SS3, application cursor mode) matches the back key");
+	assert(!matchesBack("\x1b[C"), "→ is not the back key");
+	assert(!matchesBack("\x1b"), "Esc is not the back key: Esc closes, ← steps back");
+	assert(!matchesBack("h"), "a bare letter is not the back key");
+	// The legends are built from the same keys the handlers match, so a key cannot be
+	// advertised on one screen and handled on none.
+	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", `root menu legend pinned, got ${LEGEND_MOVE}`);
+	assert(!LEGEND_MOVE.includes(BACK_KEY_LABEL), "the root menu does not advertise ←");
+	assert(
+		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
+		`live legend pinned, got ${LEGEND_LIVE}`,
+	);
+	assert(MOVE.matches("\x1b[A") && MOVE.matches("\x1b[B"), "the ↑↓ key matches both arrows");
+	assert(CHOOSE.matches("\r"), "[Enter] matches carriage return");
+	assert(BACK.matches("\x1b[D"), "[←] in the legend is the same key matchesBack accepts");
+	assert(CANCEL.matches("\x1b"), "[Esc] matches escape");
+	assert(!CANCEL.matches("\x1b[D"), "[Esc] is not the back key");
+	assert(legendUsage(120).includes(`[${BACK_KEY_LABEL}] Back`), "a wide usage legend advertises back");
+	assert(legendUsage(120).includes("[Click] Open/close"), "a wide usage legend advertises the mouse");
+	assert(legendUsage(20) === "[q/Esc] Exit", "a narrow usage legend degrades to the one key that still fits");
 	console.log("shortcuts.ts self-check OK");
 }
