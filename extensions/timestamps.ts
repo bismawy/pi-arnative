@@ -79,7 +79,7 @@ export function formatTimeBadge(timeStr: string, th: { fg(color: string, text: s
 // dark for the rest of the line. Re-apply the bubble bg after every reset and close
 // it at end of line so it cannot leak. Same pattern as InputBgEditor below.
 export function repairBubbleBg(line: string, bgOpen: string): string {
-	if (!bgOpen) return line;
+	if (!bgOpen || (!line.includes("\x1b[0m") && !line.includes("\x1b[49m"))) return line;
 	const patched = line.split("\x1b[0m").join(`\x1b[0m${bgOpen}`).split("\x1b[49m").join(`\x1b[49m${bgOpen}`);
 	return patched.endsWith(bgOpen) ? `${patched}\x1b[49m` : patched;
 }

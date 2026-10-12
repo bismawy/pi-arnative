@@ -87,6 +87,8 @@ interface UsageModelStats {
 	cacheRead: number;
 	totalTokens: number;
 	cost: number;
+	/** Cost reconstructed from the price table, only when `cost` is 0. Never folded into `cost`. */
+	estimatedCost: number;
 }
 
 interface UsageProviderStats {
@@ -98,6 +100,8 @@ interface UsageProviderStats {
 	cacheRead: number;
 	totalTokens: number;
 	cost: number;
+	/** Sum of the models' `estimatedCost`, for the same rows this provider could not price. */
+	estimatedCost: number;
 	models: UsageModelStats[];
 }
 
@@ -111,7 +115,80 @@ export interface UsageSummary {
 		cacheRead: number;
 		totalTokens: number;
 		cost: number;
+		/** Provider-reported cost only (never includes the estimate). */
+		reportedCost: number;
+		/** Cost reconstructed from `prices.json`. Shown with a `~`, never folded into `cost`. */
+		estimatedCost: number;
 	};
+}
+
+export type ModelPrices = Record<string, { input?: number; output?: number; cacheRead?: number }>;
+export type PriceTable = Record<string, ModelPrices>;
+
+const modelsFilePath = (): string => join(getAgentDir(), "models.json");
+
+type ModelsJsonCost = { input?: number; output?: number; cacheRead?: number };
+
+/**
+ * Rates declared automatically in pi's `models.json` (`providers.<name>.models[].cost`).
+ * Keyed by provider to reconstruct estimates for historical or 0-cost rows.
+ */
+export function loadPriceTable(): PriceTable {
+	const table: PriceTable = {};
+	try {
+		const raw = JSON.parse(readFileSync(modelsFilePath(), "utf8")) as {
+			providers?: Record<string, { models?: { id?: string; cost?: ModelsJsonCost }[] }>;
+		};
+		for (const [provider, cfg] of Object.entries(raw.providers ?? {})) {
+			const models: ModelPrices = {};
+			for (const m of cfg?.models ?? []) {
+				const c = m?.cost;
+				if (!m?.id || !c || typeof c.input !== "number" || typeof c.output !== "number") continue;
+				models[m.id] = { input: c.input, output: c.output, cacheRead: typeof c.cacheRead === "number" ? c.cacheRead : 0 };
+			}
+			if (Object.keys(models).length > 0) table[provider] = models;
+		}
+	} catch {
+		// Malformed or absent models.json means no declared rates.
+	}
+	return table;
+}
+
+/** True when this provider+model has a usable input+output price (cacheRead is optional). */
+export function hasPrice(provider: string, modelId: string, table: PriceTable = loadPriceTable()): boolean {
+	return findPrice(provider, modelId, table) !== null;
+}
+
+/** Rates for one provider+model. The provider's own entry wins over the `*` fallback. */
+function findPrice(provider: string, modelId: string, table: PriceTable): { input: number; output: number; cacheRead: number } | null {
+	return rateFor(table[provider], modelId) ?? rateFor(table["*"], modelId);
+}
+
+function rateFor(entries: ModelPrices | undefined, modelId: string): { input: number; output: number; cacheRead: number } | null {
+	if (!entries || typeof entries !== "object") return null;
+	const lower = modelId.toLowerCase();
+	const keys = Object.keys(entries).filter((k) => !k.startsWith("_"));
+	const key =
+		keys.find((k) => k.toLowerCase() === lower) ??
+		keys.find((k) => lower.endsWith("/" + k.toLowerCase()) || k.toLowerCase().endsWith("/" + lower));
+	if (!key) return null;
+	const p = entries[key]!;
+	if (typeof p.input !== "number" || typeof p.output !== "number") return null;
+	return { input: p.input, output: p.output, cacheRead: typeof p.cacheRead === "number" ? p.cacheRead : 0 };
+}
+
+/** Cost of one provider+model's token counts from the price table, or null when unpriced. */
+export function estimateCost(
+	input: number,
+	output: number,
+	cacheRead: number,
+	modelId: string,
+	provider: string,
+	table: PriceTable = loadPriceTable(),
+): number | null {
+	const p = findPrice(provider, modelId, table);
+	if (!p) return null;
+	return (input / 1e6) * p.input + (output / 1e6) * p.output + (cacheRead / 1e6) * p.cacheRead;
 }
 
 /** Scaled value with 1 decimal ("2.5k"); a value that rounds up to the next unit is promoted (999,999 -> "1M", not "1000k"). */
@@ -208,10 +285,9 @@ function entryOfLine(line: string): UsageEntry | null {
 }
 
 /**
- * Parse newline-terminated lines from a buffer. Byte granularity, so the returned offset can be
- * fed back to `readSync`. A trailing segment with no newline is parsed (the last record of a file
- * not ending in `\n`) but only consumed when it is valid JSON — a write caught mid-flight is left
- * for the next scan instead of being dropped or truncated into a bad entry.
+ * Parse newline-terminated lines from a buffer. The returned offset is byte-granular, so it can
+ * be fed back to `readSync`; a trailing segment without a newline counts only when it parses, so
+ * a write caught mid-flight is left for the next scan rather than dropped.
  */
 function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number } {
 	const entries: UsageEntry[] = [];
@@ -428,6 +504,20 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 
 	providers.sort((a, b) => b.totalTokens - a.totalTokens);
 
+	// Estimate unpriced pairs from price table. Kept separate in estimatedCost.
+	const priceTable = loadPriceTable();
+	let estimatedCost = 0;
+	for (const p of providers) {
+		let providerEstimate = 0;
+		for (const m of p.models) {
+			const est = m.cost > 0 ? null : estimateCost(m.input, m.output, m.cacheRead, m.name, p.name, priceTable);
+			m.estimatedCost = est ?? 0;
+			providerEstimate += m.estimatedCost;
+		}
+		p.estimatedCost = providerEstimate;
+		estimatedCost += providerEstimate;
+	}
+
 	cachedSummary = {
 		providers,
 		totals: {
@@ -438,6 +528,8 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			cacheRead: totalCache,
 			totalTokens: totalInp + totalOut,
 			cost: totalCost,
+			reportedCost: totalCost,
+			estimatedCost,
 		},
 	};
 	lastScanMs = now;

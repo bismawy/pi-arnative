@@ -1,5 +1,32 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `/arnative` → **Animations** picker and working-spinner presets (`lib/spinner.ts`, `extensions/animations.ts`): Diamond Glow (default), Diamond Pulse, Circle Pulse, Circle Wave, Shade Wave, Braille Column, Braille Level, Kanji Count, Suzhou Tally, Pi (system), Gemini (Google brand gradient), and Claude (pulsing mark loop).
+- Automatic token cost estimation for unpriced models via pi's `models.json` declared rates (`lib/usage-store.ts`, `extensions/usage.ts`).
+- Usage dashboard integration into `/arnative` → **Usage** alongside standalone `/usage` command (`extensions/arnative.ts`, `extensions/usage.ts`).
+
+### Changed
+- Active session clock tracks duration while active and freezes after inactivity (`IDLE_PAUSE_MS`), ignoring non-keystroke inputs (`extensions/footer.ts`, `test/footer-minimal.test.ts`).
+- Working spinner frames clear `renderIndicatorVerbatim` to apply theme `accent` color while preserving `accentSoft` for labels (`extensions/footer.ts`, `extensions/animations.ts`).
+- Unified screen chrome and title format via `renderScreen` and `screenTitle` in `lib/box.ts`, with adaptive thinking-level border colors across all `/arnative` screens (`lib/box.ts`, `lib/ansi.ts`, `extensions/arnative.ts`, `extensions/usage.ts`).
+- Back key `←` (`matchesBack`) standard across `/arnative` submenus and usage dashboard, stepping back without losing selection context (`lib/shortcuts.ts`, `extensions/arnative.ts`, `extensions/usage.ts`).
+- Compact usage dashboard layout: removed `↑In`/`↓Out`/`Cache` columns from main table (moved to selected row detail line) and added mouse click toggle for provider rows (`extensions/usage.ts`).
+- Aligned list picker layout to standard `Label · note` format, removing redundant `●` indicator column (`extensions/arnative.ts`).
+- Header brand updated to `Arnative⠙ vX.Y.Z` using shared `BRAND` constant (`extensions/section-headers.ts`).
+
+### Fixed
+- Fixed spinner preset selection in `/arnative` → **Animations** by sharing active UI and theme references across extension module instances via `globalThis` (`extensions/animations.ts`).
+- Fixed missing `animations.ts` in `scripts/preview.mjs` extension launch list (`scripts/preview.mjs`).
+- Fixed box row truncation in `boxRow` to prevent right wall clipping on lines narrower than content (`lib/box.ts`).
+- Fixed `boxRow` zero-column overflow when width is below 4 columns (`lib/box.ts`).
+- Avoided repeated synchronous disk reads during usage summary collection by passing memoized price table (`lib/usage-store.ts`).
+- Cleaned up active clock state initialization on fresh sessions (`extensions/footer.ts`).
+- Bounded tool duration cache (`TIMINGS`) to 200 entries with FIFO eviction and cleared on session boundaries to prevent memory growth (`extensions/tools.ts`).
+- Added short-circuit in `repairBubbleBg` to avoid string split/join allocations on lines without ANSI reset sequences (`extensions/timestamps.ts`).
+- Added fast substring check in `shouldHideReloadBox` to bypass `stripAnsi` and array mapping across general containers (`extensions/ui-render-tweaks.ts`).
+
 ## [0.3.10] - 2026-10-11
 
 ### Fixed

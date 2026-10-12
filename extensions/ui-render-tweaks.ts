@@ -57,8 +57,9 @@ const RELOAD_TEXT = "Reloading keybindings, extensions, skills, prompts, themes,
  * whole chat the moment a transcript line mentioned the phrase.
  */
 export function shouldHideReloadBox(lines: readonly string[]): boolean {
+	if (!lines.some((l) => l.includes("Reloading keybindings"))) return false;
 	const rows = lines.map((l) => stripAnsi(l).trim());
-	return rows.some((r) => r.includes("Reloading keybindings")) && rows.every((r) => r === "" || /^[─-]+$/.test(r) || RELOAD_TEXT.includes(r));
+	return rows.every((r) => r === "" || /^[─-]+$/.test(r) || RELOAD_TEXT.includes(r));
 }
 const RELOAD_BOX_KEY = Symbol.for("pi-arnative.reloadBoxHidden");
 if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[RELOAD_BOX_KEY]) {

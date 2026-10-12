@@ -22,6 +22,7 @@ import {
 	extensionIssuesLines,
 	extractItemsFromBody,
 	formatModelDisplayName,
+	HEADER_BRAND,
 	HEADER_PRESETS,
 	installedVersion,
 	packageNameOf,
@@ -191,7 +192,11 @@ test("section-headers visual suite", () => {
 	// Left column: the pi version sits directly under the mark (no gap).
 	assert(stripAnsi(lines100[5]!).slice(2, 12).includes("pi v"), "pi version sits under the mark in the left column");
 	// Info column: brand + greeting, then the tab box straight away (no blank line).
-	assert(/Arnative v\d+\.\d+\.\d+ · Welcome back, \S/.test(stripAnsi(lines100[1]!)), "info line 1: Arnative version · Welcome back, user");
+	assert(
+		stripAnsi(lines100[1]!).includes(HEADER_BRAND) && HEADER_BRAND === "Arnative\u2819",
+		"info line 1: brand carries the Braille glyph (U+2819)",
+	);
+	assert(new RegExp(`Arnative\u2819 v\\d+\\.\\d+\\.\\d+ · Welcome back, \\S`).test(stripAnsi(lines100[1]!)), "info line 1: Arnative⠙ version · Welcome back, user");
 	assert(!stripAnsi(lines100[2]!).includes("Menu"), "tab box border carries no label");
 	// Tab box separators join its borders: ┬ above and ┴ below each "│". Compare by display
 	// column, not string index: the tab icons are astral (2 code units, 1 column).
@@ -313,7 +318,7 @@ test("section-headers visual suite", () => {
 		scContent.includes(`[${SHORTCUT_RELOAD.label}] Reload`),
 		`Shortcut tab: reload shortcut present in the content (${SHORTCUT_RELOAD.label})`,
 	);
-	assert(stripAnsi(linesShortcut[1]!).includes("Arnative v"), "the Arnative brand stays on line 1 while the Shortcut tab is active");
+	assert(stripAnsi(linesShortcut[1]!).includes(HEADER_BRAND), "the Arnative brand stays on line 1 while the Shortcut tab is active");
 	hdr.activeTab = "Model";
 	hdr.render(140);
 
@@ -321,7 +326,7 @@ test("section-headers visual suite", () => {
 	const narrow = hdr.render(60);
 	assert(narrow.every((l) => visibleWidth(l) === 60), "lines at 60 columns stay 60");
 	assert(stripAnsi(narrow[1]!).includes("Welcome back,"), "greeting stays intact at 60 columns");
-	assert(stripAnsi(narrow[1]!).includes("Arnative v"), "Arnative brand intact at 60 columns");
+	assert(stripAnsi(narrow[1]!).includes(HEADER_BRAND), "Arnative brand intact at 60 columns");
 	assert(stripAnsi(narrow[1]!).includes("Interrupt") === false, "legend does not come back to the top line");
 	assert(
 		!((hdr as any).renderedTabRegions as Array<{ key: TabKey }>).some((r) => r.key === "Shortcut"),

@@ -1,8 +1,9 @@
 /**
  * Arnative header box & horizontal tab system:
  * - Round-corner box: left column = the pi block mark (4x8, P accent / i soft) with
- *   "pi vX" under it; a vertical divider; then the info column = "Arnative vY
- *   · Welcome back, <User>", the tab menu, the tab data.
+ *   "pi vX" under it; a vertical divider; then the info column = "Arnative⠙ vY
+ *   · Welcome back, <User>", the tab menu, the tab data. The Braille cell (U+2819)
+ *   marks the live brand, matching `Settings - Arnative⠙`.
  * - Greeting = OS account name (first letter capitalized). The tab box has no label;
  *   its column dividers join the borders with ┬/┴ (full height).
  * - Interactive tab menu (mouse click): Model + Context/Skills/Extensions/Shortcut
@@ -31,7 +32,7 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { BoxTheme } from "../lib/box.ts";
-import { renderBoxLines } from "../lib/box.ts";
+import { BRAND, renderBoxLines } from "../lib/box.ts";
 import { getActiveTheme, setActiveTheme, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { capitalize, expandKeyName, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
@@ -54,6 +55,9 @@ export const SECTION_ICONS: Record<TabKey, string> = {
 
 // nf-cod-warning, width 1 — prefixes a pi diagnostic block's compact header.
 const DIAGNOSTIC_ICON = "\uea6c";
+
+// The header's brand line shares the one glyph with every `/arnative` screen title.
+export const HEADER_BRAND = `Arnative${BRAND}`;
 
 export type Themeish = { fg?(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 
@@ -507,10 +511,11 @@ export class ArnativeHeader implements Component {
 			fgFirst(th, ["dim"], `${l}${"─".repeat(jx - 1)}${mid}${"─".repeat(Math.max(0, width - jx - 2))}${r}`);
 		const out: string[] = [border("╭", "┬", "╮")];
 
-		// 1. Brand + greeting on one line ("Arnative vX · Welcome back, <User>"; the username
-		// is capitalized), then a blank line before the tab box.
+		// 1. Brand + greeting on one line ("Arnative⠙ vX · Welcome back, <User>"; the username
+		// is capitalized), then a blank line before the tab box. The Braille cell marks the
+		// live brand, same glyph as `Settings - Arnative⠙`.
 		const arnVer = ARNATIVE_VERSION ? ` ${dim(`v${ARNATIVE_VERSION}`)}` : "";
-		infoLines.push(`${brand("Arnative")}${arnVer}${dim(" · ")}${dim("Welcome back,")} ${brand(capitalize(deviceUser()))}`);
+		infoLines.push(`${brand(HEADER_BRAND)}${arnVer}${dim(" · ")}${dim("Welcome back,")} ${brand(capitalize(deviceUser()))}`);
 
 		// 2. Tab menu: icon = accent, text = soft (bold when active)
 		const tabs = this.getTabsData(width);
