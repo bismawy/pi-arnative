@@ -233,15 +233,17 @@ const hasOwnRendererDef = (self: { toolDefinition?: { renderCall?: unknown; rend
 // sequence. Not exported by pi-tui, so match both prefixes.
 export const isImageLine = (line: string): boolean => line.includes("\x1b_G") || line.includes("\x1b]1337;File=");
 
-/** Drop the leading Spacer only when an image preview follows: its blank tail rows
- *  are the image's vertical space, and deleting them made the terminal draw the
- *  image over the rows below (chat text, editor, footer). */
+/** Drop the leading Spacer and the gap between box and image preview:
+ *  its blank tail rows are kept as the image's vertical space so the
+ *  terminal draws the image with balanced spacing above and below. */
 export function stripEdgesKeepingImages(lines: string[]): string[] {
 	const firstImage = lines.findIndex(isImageLine);
 	if (firstImage < 0) return stripBlankEdges(lines);
 	let s = 0;
 	while (s < firstImage && isBlankLine(lines[s])) s++;
-	return lines.slice(s);
+	const head = lines.slice(s, firstImage);
+	while (head.length > 0 && isBlankLine(head[head.length - 1]!)) head.pop();
+	return [...head, ...lines.slice(firstImage)];
 }
 
 const GAP_KEY = Symbol.for("pi-arnative.toolGapStripped");
@@ -893,9 +895,9 @@ if (isMain(import.meta.url)) {
 	const itermSeq = "\x1b]1337;File=inline=1:AAAA\x07";
 	const withImage = ["", "╭─╮", "│ ✓ read form_crop.png │", "╰─╯", "", kittySeq, "", ""];
 	const kept = stripEdgesKeepingImages(withImage);
-	assert(kept.length === 7, "image: only the leading gap dropped, blank tail kept");
+	assert(kept.length === 6, "image: leading gap and box-image spacer dropped, blank tail kept");
 	assert(kept[0] === "╭─╮", "image: leading Spacer removed");
-	assert(kept.indexOf(kittySeq) === 4 && kept.length - 5 === 2, "image: rows after the sequence intact");
+	assert(kept.indexOf(kittySeq) === 3 && kept.length - 4 === 2, "image: rows after the sequence intact");
 	assert(
 		stripEdgesKeepingImages(["", "a", "", "b", "  ", ""]).join() === "a,,b",
 		"no image: falls back to plain edge stripping",

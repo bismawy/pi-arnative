@@ -398,6 +398,7 @@ function formatModelName(
 	thinkingLevel: string | undefined,
 	acc: (t: string) => string,
 	soft: (t: string) => string,
+	primary: (t: string) => string,
 	dim: (t: string) => string,
 ): string {
 	if (!model) return dim("No Model");
@@ -405,7 +406,7 @@ function formatModelName(
 	const provStr = provider ? ` ${dim(`(${provider})`)}` : "";
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? capitalize(thinkingLevel) : "";
 	const thinkStr = capThinking ? `${acc("\uee9c")} ${soft(capThinking)} ${dim("·")} ` : "";
-	return `${thinkStr}${acc(name)}${provStr}`;
+	return `${thinkStr}${primary(name)}${provStr}`;
 }
 
 // Footer is a single line: a deep cwd (`/Users/x/Workspace/personal/proj`)
@@ -905,6 +906,10 @@ export default function (pi: ExtensionAPI) {
 									return fallback(t);
 								}
 							};
+							const primary = colorOr("primary", colorOr("mdHeading", acc));
+							const primarySoft = colorOr("primarySoft", soft);
+							const secondary = colorOr("secondary", colorOr("borderAccent", soft));
+							const secondarySoft = colorOr("secondarySoft", colorOr("borderAccent", soft));
 							const diffAdd = colorOr("toolDiffAdded", soft);
 							const diffDel = colorOr("toolDiffRemoved", soft);
 							const sep = dim(" | ");
@@ -914,7 +919,7 @@ export default function (pi: ExtensionAPI) {
 							const paused = clock.idle();
 							idlePauseShown = paused;
 							const clockIcon = paused ? dim("\uf017") : acc("\uf017");
-							const clockText = paused ? dim(durationStr) : soft(durationStr);
+							const clockText = paused ? dim(durationStr) : secondarySoft(durationStr);
 							const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
 							const cwdShort = shortenCwd(cwd);
 							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
@@ -922,10 +927,10 @@ export default function (pi: ExtensionAPI) {
 							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
 							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
 							if (git) {
-								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, soft).map((p) => `${sep}${p}`).join("")}`;
+								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("")}`;
 							}
 							if (isMinimal) left1 += arrow(open.left);
-							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, soft, dim) + (isMinimal ? arrow(open.right) : "");
+							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim) + (isMinimal ? arrow(open.right) : "");
 
 							const statuses: ReadonlyMap<string, string> = (() => {
 								try {
@@ -942,9 +947,9 @@ export default function (pi: ExtensionAPI) {
 									let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
 									rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
 									const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-									return `${acc("\uf233")} ${soft(m ? m[0] : rest || "MCP")}`;
+									return `${acc("\uf233")} ${secondarySoft(m ? m[0] : rest || "MCP")}`;
 								}
-								if (s.includes("ponytail")) return ponytailStatusLine(s, acc, dim, soft);
+								if (s.includes("ponytail")) return ponytailStatusLine(s, acc, dim, secondarySoft);
 								if (s.includes("jev-eye")) {
 									const isOff = s.includes("OFF") || s.includes("○");
 									const isReview = /REVIEW/i.test(s);
@@ -959,11 +964,11 @@ export default function (pi: ExtensionAPI) {
 									const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
 									// Two spaces: \uedcf's ink is wider than MCP's \uf233 or ponytail's \uef04,
 									// so it needs the extra cell to clear the label.
-									return `${acc("\uedcf")}  ${soft("Jev:")} ${bullet} ${soft(label)}`;
+									return `${acc("\uedcf")}  ${secondarySoft("Jev:")} ${bullet} ${secondarySoft(label)}`;
 								}
 								let clean = stripAnsi(s);
 								clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-								return soft(clean.trim());
+								return secondarySoft(clean.trim());
 							};
 
 							const groups: string[] = [];
@@ -976,12 +981,12 @@ export default function (pi: ExtensionAPI) {
 							const opt = parseOptimizer(rawCache);
 							let usageStr = "";
 							try {
-								usageStr = getUsage(ctx, acc, soft);
+								usageStr = getUsage(ctx, acc, secondarySoft);
 							} catch {
 								// fallback
 							}
-							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${soft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${soft(opt)}` : "", usageStr].filter(Boolean);
+							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${secondarySoft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${secondarySoft(opt)}` : "", usageStr].filter(Boolean);
 
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
 							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
@@ -1428,7 +1433,7 @@ if (isMain(import.meta.url)) {
 	resetPresetCache();
 
 	// Self-check: formatModelName thinking icon
-	const fmnRes = formatModelName({ id: "claude-3-7-sonnet", name: "Sonnet" }, "low", (s) => s, (s) => s, (s) => s);
+	const fmnRes = formatModelName({ id: "claude-3-7-sonnet", name: "Sonnet" }, "low", (s) => s, (s) => s, (s) => s, (s) => s);
 	assert(fmnRes.includes("\uee9c Low"), "formatModelName includes \\uee9c Low thinking indicator");
 
 	// Self-check: the ponytail glyph. \uef51 carries no outline in the Windows Nerd Font

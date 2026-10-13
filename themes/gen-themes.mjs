@@ -38,16 +38,26 @@ const THINKING = { off: 0.4, minimal: 0.47, low: 0.55, medium: 0.63, high: 0.71,
 const SEMANTIC = { success: 145, error: 25, warning: 85 };
 const SYNTAX_OFFSET = { keyword: 0, func: 45, variable: -45, string: 120, number: 180, type: 90 };
 
-/** Default hue for a role used outside `syntax*` (heading/link/label). */
-const ACCENT_OFFSET = { heading: 0, link: 0, label: 60 };
+/** Default hue for a role used outside `syntax*` (heading/link/label/code/bullet/border). */
+const ACCENT_OFFSET = {
+	heading: 0,
+	link: 0,
+	label: 60,
+	code: 0,
+	bullet: 0,
+	border: 0,
+	selected: 0,
+	searchMatch: 0,
+};
 
 // --- theme parameters ------------------------------------------------------
 
 /**
- * `accent` is the seed color (OKLCH, hue + reference lightness/chroma) — a short
- * vector, not a styling value; `chroma` is the normalized accent chroma.
- * `hues` overrides the derived hue per role (keyword/func/… /heading/link/label)
- * to keep the strong palettes recognisable.
+ * `accent` is the seed/focus color (OKLCH, hue + reference lightness/chroma);
+ * `primary` and `secondary` define the theme's core signature and dual-tone balance;
+ * `chroma` is the normalized accent chroma.
+ * `hues` overrides the derived hue per role (keyword/func/… /heading/link/label/code/…)
+ * to keep rich multi-colored palettes (cyberpunk, synthwave, dracula, etc.) authentic.
  */
 const THEMES = {
 	arnative: {
@@ -56,6 +66,8 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 232,
 		neutralChroma: 0.012,
+		primary: "oklch(82% 0.14 218)",
+		secondary: "oklch(78% 0.11 282)",
 		hues: { heading: 75, label: 282 },
 	},
 	"arnative-sun": {
@@ -64,6 +76,8 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 70,
 		neutralChroma: 0.012,
+		primary: "oklch(84% 0.15 70)",
+		secondary: "oklch(78% 0.12 35)",
 		hues: { heading: 60, label: 330 },
 	},
 	"arnative-zinc": {
@@ -72,6 +86,8 @@ const THEMES = {
 		canvasL: 0.26,
 		neutralHue: 285,
 		neutralChroma: 0.005,
+		primary: "oklch(86% 0.015 285)",
+		secondary: "oklch(72% 0.025 240)",
 		hues: { heading: 285, label: 285 },
 	},
 	"arnative-violet": {
@@ -80,6 +96,8 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 295,
 		neutralChroma: 0.012,
+		primary: "oklch(82% 0.15 294)",
+		secondary: "oklch(78% 0.11 215)",
 		hues: { heading: 295, label: 330 },
 	},
 	"arnative-emerald": {
@@ -88,72 +106,107 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 165,
 		neutralChroma: 0.012,
+		primary: "oklch(84% 0.13 165)",
+		secondary: "oklch(78% 0.10 195)",
 		hues: { heading: 165, label: 200 },
 	},
 	"arnative-matrix": {
 		accent: "oklch(86.9% 0.2776 144.466116)",
 		chroma: 0.22,
-		canvasL: 0.15,
+		canvasL: 0.24,
 		neutralHue: 145,
 		neutralChroma: 0.02,
+		primary: "oklch(88% 0.24 145)",
+		secondary: "oklch(76% 0.16 165)",
+		surfaceMsg: "oklch(24% 0.035 145)",
 		hues: {
 			heading: 145, link: 145, label: 145,
 			keyword: 145, func: 145, variable: 145, string: 145, number: 145, type: 145,
 		},
 	},
 	"arnative-cyberpunk": {
-		accent: "oklch(66.7% 0.2492 356.749230)",
+		accent: "oklch(76% 0.22 355)",
 		chroma: 0.2,
-		canvasL: 0.16,
+		canvasL: 0.24,
 		neutralHue: 275,
 		neutralChroma: 0.02,
+		primary: "oklch(88% 0.18 95)",
+		secondary: "oklch(82% 0.16 200)",
+		surfaceMsg: "oklch(24% 0.035 200)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		codeColor: "secondary",
+		bulletColor: "primary",
+		keywordColor: "secondary",
 		hues: {
-			heading: 60, link: 190, label: 190,
-			keyword: 190, func: 60, variable: 320, string: 320, number: 30, type: 150,
+			heading: 95, link: 200, label: 200, code: 200, bullet: 95, border: 200, selected: 200, searchMatch: 95,
+			keyword: 200, func: 95, variable: 355, string: 140, number: 45, type: 200,
 		},
 	},
 	"arnative-synthwave": {
-		accent: "oklch(76.9% 0.1889 339.113944)",
+		accent: "oklch(80% 0.18 50)",
 		chroma: 0.17,
-		canvasL: 0.22,
+		canvasL: 0.24,
 		neutralHue: 300,
 		neutralChroma: 0.015,
+		primary: "oklch(78% 0.19 339)",
+		secondary: "oklch(82% 0.16 185)",
+		surfaceMsg: "oklch(24% 0.03 300)",
+		borderAccent: "secondary",
+		codeColor: "secondary",
+		bulletColor: "primary",
 		hues: {
-			heading: 55, link: 180, label: 180,
-			keyword: 55, func: 180, variable: 280, string: 30, number: 350, type: 320,
+			heading: 50, link: 185, label: 185, code: 185, bullet: 339, border: 185, selected: 185, searchMatch: 50,
+			keyword: 185, func: 50, variable: 339, string: 45, number: 339, type: 290,
 		},
 	},
 	"arnative-gruvbox": {
-		accent: "oklch(83.3% 0.1595 82.986608)",
+		accent: "oklch(76% 0.15 45)",
 		chroma: 0.14,
 		canvasL: 0.24,
 		neutralHue: 70,
 		neutralChroma: 0.015,
+		primary: "oklch(84% 0.14 83)",
+		secondary: "oklch(78% 0.10 175)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		codeColor: "secondary",
+		bulletColor: "accent",
 		hues: {
-			heading: 45, link: 200, label: 330,
-			keyword: 25, func: 70, variable: 200, string: 70, number: 330, type: 45,
+			heading: 83, link: 175, label: 175, code: 175, bullet: 45, border: 83, selected: 83, searchMatch: 83,
+			keyword: 45, func: 83, variable: 175, string: 145, number: 45, type: 83,
 		},
 	},
 	"arnative-nord": {
-		accent: "oklch(77.5% 0.0622 217.469017)",
+		accent: "oklch(74% 0.09 310)",
 		chroma: 0.07,
 		canvasL: 0.3,
 		neutralHue: 240,
 		neutralChroma: 0.01,
+		primary: "oklch(78% 0.08 217)",
+		secondary: "oklch(82% 0.09 195)",
+		borderAccent: "secondary",
+		codeColor: "secondary",
+		bulletColor: "primary",
 		hues: {
-			heading: 40, link: 195, label: 310,
-			keyword: 220, func: 195, variable: 220, string: 95, number: 310, type: 195,
+			heading: 75, link: 195, label: 195, code: 195, bullet: 217, border: 217, selected: 217, searchMatch: 75,
+			keyword: 217, func: 195, variable: 217, string: 145, number: 310, type: 195,
 		},
 	},
 	"arnative-dracula": {
-		accent: "oklch(74.2% 0.1485 301.883095)",
+		accent: "oklch(76% 0.18 330)",
 		chroma: 0.14,
 		canvasL: 0.29,
 		neutralHue: 285,
 		neutralChroma: 0.012,
+		primary: "oklch(78% 0.15 295)",
+		secondary: "oklch(82% 0.13 190)",
+		borderAccent: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
 		hues: {
-			heading: 60, link: 190, label: 330,
-			keyword: 330, func: 135, variable: 190, string: 60, number: 265, type: 190,
+			heading: 85, link: 190, label: 190, code: 190, bullet: 330, border: 295, selected: 295, searchMatch: 85,
+			keyword: 330, func: 140, variable: 190, string: 85, number: 295, type: 190,
 		},
 	},
 };
@@ -189,26 +242,41 @@ function derive(spec) {
 	const roleHue = (role) => hue(H[role]);
 	const sem = (role) => hue(SEMANTIC[role]);
 
+	const primarySeed = spec.primary ? parseOklch(spec.primary) : null;
+	const secondarySeed = spec.secondary ? parseOklch(spec.secondary) : null;
+	const primaryVal = primarySeed ? oklch(primarySeed.L, primarySeed.C, primarySeed.H) : oklch(0.82, c, h);
+	const primaryChroma = primarySeed ? primarySeed.C : c;
+	const primaryHue = primarySeed ? primarySeed.H : h;
+	const primarySoft = oklch(0.82, Math.max(0.015, primaryChroma * 0.18), primaryHue);
+	const secondaryVal = secondarySeed ? oklch(secondarySeed.L, secondarySeed.C, secondarySeed.H) : oklch(0.78, Math.min(c * 0.8, 0.12), roleHue("label"));
+	const secondaryChroma = secondarySeed ? secondarySeed.C : (c * 0.8);
+	const secondaryHue = secondarySeed ? secondarySeed.H : roleHue("label");
+	const secondarySoft = oklch(0.82, Math.max(0.015, secondaryChroma * 0.18), secondaryHue);
+
 	const vars = {
 		fg: oklch(NEUTRAL.fg, nc, nh),
 		fgMuted: oklch(NEUTRAL.fgMuted, nc, nh),
 		fgDim: oklch(NEUTRAL.fgDim, nc, nh),
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
+		primary: primaryVal,
+		primarySoft: primarySoft,
+		secondary: secondaryVal,
+		secondarySoft: secondarySoft,
 		accent: oklch(0.78, c, h),
 		accentSoft: oklch(0.82, c * 0.18, h),
 		accentBorder: oklch(0.82, c * 0.6, h),
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
 		warning: oklch(0.86, Math.min(c, 0.14), sem("warning")),
-		surfaceMsg: oklch(base, nc * 0.5, nh),
+		surfaceMsg: spec.surfaceMsg ?? oklch(base, nc * 0.5, nh),
 	};
 
-	const accentLiteral = oklch(0.8, c * 0.7, h);
+	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
 	const roles = {
 		accent: "accent",
 		accentSoft: "accentSoft",
-		border: oklch(0.55, c * 0.35, h),
-		borderAccent: "accentBorder",
+		border: oklch(0.55, Math.min(c * 0.35, 0.08), roleHue("border")),
+		borderAccent: spec.borderAccent ?? "accentBorder",
 		borderMuted: "fgFaint",
 		success: "success",
 		error: "error",
@@ -218,45 +286,45 @@ function derive(spec) {
 		text: "fg",
 		thinkingText: "fgMuted",
 
-		selectedBg: oklch(base + 0.07, c * 0.25, h),
+		selectedBg: oklch(base + 0.07, Math.min(c * 0.25, 0.06), roleHue("selected")),
 		scrollbarTrack: "fgFaint",
 		scrollbarThumb: "accentSoft",
-		searchMatchBg: oklch(base + 0.14, c * 0.45, h),
+		searchMatchBg: oklch(base + 0.14, Math.min(c * 0.45, 0.10), roleHue("searchMatch")),
 		searchMatchText: "fg",
 		userMessageBg: "surfaceMsg",
 		userMessageText: "fg",
-		customMessageBg: oklch(base + 0.01, c * 0.4, roleHue("label")),
+		customMessageBg: oklch(base + 0.01, Math.min(c * 0.4, 0.05), roleHue("label")),
 		customMessageText: "fg",
-		customMessageLabel: oklch(0.78, c * 0.7, roleHue("label")),
+		customMessageLabel: spec.labelColor ?? oklch(0.78, Math.min(c * 0.7, 0.14), roleHue("label")),
 
-		toolPendingBg: oklch(base - 0.02, c * 0.3, h),
-		toolSuccessBg: oklch(base - 0.03, c * 0.4, sem("success")),
-		toolErrorBg: oklch(base - 0.03, c * 0.4, sem("error")),
+		toolPendingBg: oklch(base - 0.02, Math.min(c * 0.3, 0.05), h),
+		toolSuccessBg: oklch(base - 0.03, Math.min(c * 0.4, 0.06), sem("success")),
+		toolErrorBg: oklch(base - 0.03, Math.min(c * 0.4, 0.06), sem("error")),
 		toolTitle: "fg",
 		toolOutput: "fgMuted",
 
-		mdHeading: oklch(0.88, c * 0.6, roleHue("heading")),
-		mdLink: oklch(0.8, c * 0.7, roleHue("link")),
+		mdHeading: spec.headingColor ?? oklch(0.88, Math.min(c * 0.6, 0.14), roleHue("heading")),
+		mdLink: spec.linkColor ?? oklch(0.8, Math.min(c * 0.7, 0.14), roleHue("link")),
 		mdLinkUrl: "fgDim",
-		mdCode: accentLiteral,
+		mdCode: spec.codeColor ?? accentLiteral,
 		mdCodeBlock: "success",
 		mdCodeBlockBorder: "fgMuted",
 		mdQuote: "fgMuted",
 		mdQuoteBorder: "fgMuted",
 		mdHr: "fgFaint",
-		mdListBullet: accentLiteral,
+		mdListBullet: spec.bulletColor ?? accentLiteral,
 
 		toolDiffAdded: "success",
 		toolDiffRemoved: "error",
 		toolDiffContext: "fgMuted",
 
 		syntaxComment: "fgDim",
-		syntaxKeyword: accentLiteral,
-		syntaxFunction: oklch(0.86, c * 0.8, roleHue("func")),
-		syntaxVariable: oklch(0.84, c * 0.55, roleHue("variable")),
-		syntaxString: oklch(0.82, c * 0.7, roleHue("string")),
-		syntaxNumber: oklch(0.8, c * 0.7, roleHue("number")),
-		syntaxType: oklch(0.8, c * 0.8, roleHue("type")),
+		syntaxKeyword: spec.keywordColor ?? accentLiteral,
+		syntaxFunction: oklch(0.86, Math.min(c * 0.8, 0.16), roleHue("func")),
+		syntaxVariable: oklch(0.84, Math.min(c * 0.55, 0.14), roleHue("variable")),
+		syntaxString: oklch(0.82, Math.min(c * 0.7, 0.16), roleHue("string")),
+		syntaxNumber: oklch(0.8, Math.min(c * 0.7, 0.15), roleHue("number")),
+		syntaxType: oklch(0.8, Math.min(c * 0.8, 0.16), roleHue("type")),
 		syntaxOperator: "fg",
 		syntaxPunctuation: "fgMuted",
 
@@ -274,7 +342,7 @@ function derive(spec) {
 	const exp = {
 		pageBg: oklch(base - 0.06, nc, nh),
 		cardBg: oklch(base - 0.03, nc, nh),
-		infoBg: oklch(base + 0.05, c * 0.25, h),
+		infoBg: oklch(base + 0.05, Math.min(c * 0.25, 0.06), h),
 	};
 
 	// Roles must match ROLE_ORDER exactly and each value must be a var name or a literal.
