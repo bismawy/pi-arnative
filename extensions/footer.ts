@@ -906,10 +906,10 @@ export default function (pi: ExtensionAPI) {
 									return fallback(t);
 								}
 							};
-							const primary = colorOr("primary", acc);
+							const primary = colorOr("primary", colorOr("mdHeading", acc));
 							const primarySoft = colorOr("primarySoft", soft);
-							const secondary = colorOr("secondary", soft);
-							const secondarySoft = colorOr("secondarySoft", soft);
+							const secondary = colorOr("secondary", colorOr("borderAccent", soft));
+							const secondarySoft = colorOr("secondarySoft", colorOr("borderAccent", soft));
 							const diffAdd = colorOr("toolDiffAdded", soft);
 							const diffDel = colorOr("toolDiffRemoved", soft);
 							const sep = dim(" | ");

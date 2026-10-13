@@ -22,10 +22,6 @@
 	"colors": {
 		"accent": "accent",
 		"accentSoft": "accentSoft",
-		"primary": "primary",
-		"primarySoft": "primarySoft",
-		"secondary": "secondary",
-		"secondarySoft": "secondarySoft",
 		"border": "oklch(55% 0.059 185)",
 		"borderAccent": "secondary",
 		"borderMuted": "fgFaint",

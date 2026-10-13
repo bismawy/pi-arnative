@@ -214,8 +214,7 @@ const THEMES = {
 // --- role order (matches the pi theme schema) ------------------------------
 
 const ROLE_ORDER = [
-	"accent", "accentSoft", "primary", "primarySoft", "secondary", "secondarySoft",
-	"border", "borderAccent", "borderMuted", "success", "error", "warning",
+	"accent", "accentSoft", "border", "borderAccent", "borderMuted", "success", "error", "warning",
 	"muted", "dim", "text", "thinkingText",
 	"selectedBg", "scrollbarTrack", "scrollbarThumb", "searchMatchBg", "searchMatchText",
 	"userMessageBg", "userMessageText", "customMessageBg", "customMessageText", "customMessageLabel",
@@ -276,10 +275,6 @@ function derive(spec) {
 	const roles = {
 		accent: "accent",
 		accentSoft: "accentSoft",
-		primary: "primary",
-		primarySoft: "primarySoft",
-		secondary: "secondary",
-		secondarySoft: "secondarySoft",
 		border: oklch(0.55, Math.min(c * 0.35, 0.08), roleHue("border")),
 		borderAccent: spec.borderAccent ?? "accentBorder",
 		borderMuted: "fgFaint",
