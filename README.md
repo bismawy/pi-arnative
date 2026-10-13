@@ -113,9 +113,17 @@ Theme definitions are generated via `themes/gen-themes.mjs` using OKLCH color ma
 ```bash
 npm test        # Run unit tests and self-checks
 npm run themes  # Rebuild all theme variants
+npm run preview # Live preview the working tree in your own Pi (stamps a pushable commit)
 ```
 
 Pre-publish verification and tag validation are enforced via `scripts/release-check.mjs`.
+
+**Local-first push gate:** the global pre-push hook rejects any branch push whose commit
+carries no live-preview stamp, so a fix cannot reach GitHub unseen. `npm run preview`
+launches Pi with this working tree and writes `.git/arnative-preview` for the exact commit
+that was shown; editing `extensions/`, `lib/`, `themes/`, or `package.json` afterwards
+invalidates it and the hook asks for a fresh preview. The preview must run on a clean tree
+— commit or stash first.
 
 </details>
 
