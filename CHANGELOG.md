@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.2] - 2026-10-13
+
+### Fixed
+- Restored the footer's two-tone labels. `0.5.1` moved the label colour onto `softOf(accent)`, which softens the *accent* hue, so cwd/branch/clock/status text inherited the accent (pink) instead of the border-accent (blue) tier and the footer collapsed into a single hue (`extensions/footer.ts`).
+- Added `vars.secondarySoft` to all 11 themes, softened from the same value the `borderAccent` token resolves to (L 0.82, chroma × 0.18, hue kept), and `softSecondaryOf` in `lib/ansi.ts` to derive the identical value at runtime — `vars` names are not addressable via `fg()`, and Pi 1.2 rejects custom `colors` keys, so the declared and derived values must be produced by one recipe.
+- Routed the header's model/thinking/token text, tool bodies, list rows and the usage dashboard onto the label tier. Icons, marks and the logo's second tone stay on the accent tier, so each line keeps its two tones (`extensions/section-headers.ts`, `extensions/tools.ts`, `extensions/usage.ts`, `extensions/arnative.ts`, `extensions/ui-render-tweaks.ts`).
+
+### Added
+- `soften()` is now shared by the generator and the runtime, and `extensions/ui-render-tweaks.ts` asserts every declared `*Soft` var equals its derived value — a drifting or rogue soft colour fails `npm test` instead of shipping (`themes/gen-themes.mjs`, `lib/ansi.ts`).
+- Behavioral test pinning the two-tone rule: labels take the border-accent hue, icons keep the accent hue (`test/footer-minimal.test.ts`).
+
+### Notes
+- Label colour is deliberately softer than the pre-0.5.1 `#05dee7`. `SOFT_CHROMA_SCALE` in `lib/ansi.ts` is the single knob: `0.18` gives `#b2c9ca` on cyberpunk, `0.30` gives `#b2dadc`, `0.50` gives `#9adfe3`. Changing it regenerates all 11 themes and the guard forces them to stay in sync.
+
 ## [0.5.1] - 2026-10-13
 
 ### Fixed
