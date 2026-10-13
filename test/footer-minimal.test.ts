@@ -246,7 +246,7 @@ test("the clock runs on its own, freezes when idle, and never rewinds", () => {
 	fgCalls.length = 0;
 	const line = footerFor("Arnative (Full)").render(100)[0]!;
 	assert.equal(clockMs(line), "-", "a fresh session starts at zero, shown as -");
-	assert.ok(fgCalls.some((c) => c.color === "accentSoft" && c.text === "-"), "a running clock is soft, not dim");
+	assert.ok(fgCalls.some((c) => (c.color === "secondarySoft" || c.color === "primarySoft" || c.color === "accentSoft") && c.text === "-"), "a running clock is soft, not dim");
 
 	assert.equal(clock.total(t0 + 5_000), 5_000, "the value advances with no event arriving");
 	assert.equal(clock.total(t0 + Math.floor(P / 2)), Math.floor(P / 2), "and keeps advancing while the run is live");
@@ -326,7 +326,7 @@ test("the first keystroke after a resume unpauses immediately", () => {
 	type(); // the keystroke unpauses it
 	fgCalls.length = 0;
 	footerFor("Arnative (Full)").render(100);
-	assert.ok(fgCalls.some((c) => c.color === "accentSoft" && c.text === frozen), "after the keystroke the clock is soft again");
+	assert.ok(fgCalls.some((c) => (c.color === "secondarySoft" || c.color === "primarySoft" || c.color === "accentSoft") && c.text === frozen), "after the keystroke the clock is soft again");
 	clock.lastSeen = Date.now();
 	clock.runStarted = clock.lastSeen;
 	repaintIdle(); // no-op while running

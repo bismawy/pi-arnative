@@ -183,7 +183,7 @@ export class ListPicker implements Component {
 			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
 			const note = item.note ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", item.note)}` : "";
 			// Extract parenthetical suffix to render softly
-			const suffix = item.note ? "" : /(\(.*\))$/.exec(item.label)?.[1] ?? "";
+			const suffix = /(\(.*\))$/.exec(item.label)?.[1] ?? "";
 			const head = suffix ? item.label.slice(0, item.label.length - suffix.length) : item.label;
 			const tail = suffix ? th.fg("dim", suffix) : "";
 			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${paint(head)}${tail}${pad}${note}`;
@@ -672,6 +672,17 @@ if (isMain(import.meta.url)) {
 	assert(footerLines.some((l) => l.includes("→ Pi (system)")), "footers picker cursors the active preset");
 	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
 	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
+
+	// Animations picker: "Pi (system)" carries a note AND renders "(system)" in dim
+	const animPicker = new ListPicker(
+		{ fg: (c, t) => `<${c}>${t}</${c}>`, bold: (t) => `<bold>${t}</bold>` },
+		animationRows(),
+		"Pi (system)",
+		{ preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} },
+		ANIMATIONS_PICKER_TEXT,
+	);
+	const animLines = animPicker.render(120);
+	assert(animLines.some((l) => l.includes("Pi ") && l.includes("<dim>(system)</dim>")), "animations picker dims (system)");
 
 	console.log("arnative.ts self-check OK");
 }

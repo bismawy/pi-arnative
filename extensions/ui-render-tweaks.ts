@@ -479,6 +479,8 @@ if (isMain(import.meta.url)) {
 		// Accent pill: accent bg + toolPendingBg colored text.
 		assert(contrast(hex("accent"), hex("toolPendingBg")) >= 4.5, `theme ${f}: accent vs toolPendingBg contrast >= 4.5`);
 		assert(isColor(d.vars.accentSoft ?? ""), `theme ${f}: vars.accentSoft is a color`);
+		assert(isColor(d.vars.primarySoft ?? ""), `theme ${f}: vars.primarySoft is a color`);
+		assert(isColor(d.vars.secondarySoft ?? ""), `theme ${f}: vars.secondarySoft is a color`);
 		const canvas = hex("userMessageBg");
 		for (const tok of Object.keys(d.colors)) {
 			if (nonText.has(tok) || tok === "thinkingMax") continue;
