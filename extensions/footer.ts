@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { stripAnsi } from "../lib/ansi.ts";
+import { softOf, stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
@@ -889,14 +889,9 @@ export default function (pi: ExtensionAPI) {
 							const acc = (text: string) => theme.fg("accent", text);
 							const dim = (text: string) => theme.fg("dim", text);
 							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-							let softName = "accent";
-							try {
-								fgAny("accentSoft", "");
-								softName = "accentSoft";
-							} catch {
-								// fallback
-							}
-							const soft = (text: string) => fgAny(softName, text);
+							// `accentSoft` is a vars-only token on Pi 1.2+, so the soft tier is resolved
+							// through the shared painter instead of a raw fg() probe.
+							const soft = softOf(theme as never);
 							// Diff colors: the same theme slots pi uses for a diff body, with the
 							// plain soft color as fallback for a theme that omits them.
 							const colorOr = (name: string, fallback: (t: string) => string) => (t: string) => {
@@ -906,10 +901,12 @@ export default function (pi: ExtensionAPI) {
 									return fallback(t);
 								}
 							};
-							const primary = colorOr("primary", colorOr("mdHeading", acc));
-							const primarySoft = colorOr("primarySoft", soft);
-							const secondary = colorOr("secondary", colorOr("borderAccent", soft));
-							const secondarySoft = colorOr("secondarySoft", colorOr("borderAccent", soft));
+							// `primary`/`secondary` are vars, not tokens (Pi 1.2+ rejects custom `colors`
+							// keys). Their arnative carriers are the official tokens they map to.
+							const primary = colorOr("mdHeading", acc);
+							const primarySoft = soft;
+							const secondary = colorOr("borderAccent", soft);
+							const secondarySoft = soft;
 							const diffAdd = colorOr("toolDiffAdded", soft);
 							const diffDel = colorOr("toolDiffRemoved", soft);
 							const sep = dim(" | ");
@@ -1047,11 +1044,7 @@ export default function (pi: ExtensionAPI) {
 						try {
 							const th = this.getActiveTheme();
 							if (!th) return text;
-							try {
-								return th.fg("accentSoft", text);
-							} catch {
-								return th.fg("muted", text);
-							}
+							return softOf(th as never)(text);
 						} catch {
 							return text;
 						}

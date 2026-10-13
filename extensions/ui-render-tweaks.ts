@@ -39,7 +39,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
-import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, accentSoftOf } from "../lib/ansi.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { contrast, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
@@ -174,7 +174,7 @@ const SELECT_ROW_KEY = Symbol.for("pi-arnative.selectRowColors");
 
 /** Selected row body: `·` separators accent, the text around them soft. */
 export function selectRowText(row: string, th: { fg(c: string, t: string): string }): string {
-	const soft = accentSoftOf(th);
+	const soft = softOf(th);
 	return row
 		.split("·")
 		.map((part) => soft(part))
@@ -449,13 +449,38 @@ if (isMain(import.meta.url)) {
 		thinkingMedium: 2.7, thinkingHigh: 3.6, thinkingXhigh: 4.0,
 	};
 	const isColor = (v: string) => /^#[0-9a-f]{6}$/i.test(v) || parseOklch(v) !== null;
+	// The tokens pi's published theme schema allows as keys in `colors`. Pi 1.2.0 validates
+	// with `additionalProperties: false`, so ANY other key (arnative's `accentSoft` was the
+	// offender) fails the whole theme at startup with "must not have additional properties"
+	// and "Theme not found". Arnative's own colors belong in `vars`, referenced from these.
+	const SCHEMA_TOKENS = new Set([
+		"accent", "border", "borderAccent", "borderMuted", "success", "error", "warning",
+		"muted", "dim", "text", "thinkingText", "scrollbarTrack", "scrollbarThumb",
+		"selectedBg", "searchMatchBg", "searchMatchText", "userMessageBg", "userMessageText",
+		"customMessageBg", "customMessageText", "customMessageLabel", "toolPendingBg",
+		"toolSuccessBg", "toolErrorBg", "toolTitle", "toolOutput", "mdHeading", "mdLink",
+		"mdLinkUrl", "mdCode", "mdCodeBlock", "mdCodeBlockBorder", "mdQuote", "mdQuoteBorder",
+		"mdHr", "mdListBullet", "toolDiffAdded", "toolDiffRemoved", "toolDiffContext",
+		"syntaxComment", "syntaxKeyword", "syntaxFunction", "syntaxVariable", "syntaxString",
+		"syntaxNumber", "syntaxType", "syntaxOperator", "syntaxPunctuation", "thinkingOff",
+		"thinkingMinimal", "thinkingLow", "thinkingMedium", "thinkingHigh", "thinkingXhigh",
+		"thinkingMax", "bashMode",
+	]);
 	for (const f of readdirSync(themesDir).filter((n) => n.endsWith(".json")).sort()) {
 		const d = JSON.parse(readFileSync(new URL(f, themesDir), "utf8")) as {
+			$schema?: string;
 			name: string;
 			vars: Record<string, string>;
 			colors: Record<string, string>;
 		};
 		assert(d.name === f.replace(/\.json$/, ""), `theme ${f}: name = file name`);
+		// Pi 1.2.0 validates `colors` strictly; an extra key rejects the theme at startup.
+		const rogue = Object.keys(d.colors).filter((k) => !SCHEMA_TOKENS.has(k));
+		assert(rogue.length === 0, `theme ${f}: colors has non-schema keys [${rogue.join(", ")}] — move them to vars`);
+		assert(
+			d.$schema === "https://pi.dev/schemas/theme.schema.json",
+			`theme ${f}: $schema must be the published pi.dev theme schema (got ${d.$schema})`,
+		);
 		const missing = required.filter((k) => !(k in d.colors));
 		assert(missing.length === 0, `theme ${f}: required colors complete (missing ${missing.join(",")})`);
 		// colors values may only be: hex, oklch, 256-index, empty, or a REAL variable name —
@@ -483,8 +508,8 @@ if (isMain(import.meta.url)) {
 		// Accent pill: accent bg + toolPendingBg colored text.
 		assert(contrast(hex("accent"), hex("toolPendingBg")) >= 4.5, `theme ${f}: accent vs toolPendingBg contrast >= 4.5`);
 		assert(isColor(d.vars.accentSoft ?? ""), `theme ${f}: vars.accentSoft is a color`);
-		assert(isColor(d.vars.primarySoft ?? ""), `theme ${f}: vars.primarySoft is a color`);
-		assert(isColor(d.vars.secondarySoft ?? ""), `theme ${f}: vars.secondarySoft is a color`);
+		assert(isColor(d.vars.primary ?? ""), `theme ${f}: vars.primary is a color`);
+		assert(isColor(d.vars.secondary ?? ""), `theme ${f}: vars.secondary is a color`);
 		const canvas = hex("userMessageBg");
 		for (const tok of Object.keys(d.colors)) {
 			if (nonText.has(tok) || tok === "thinkingMax") continue;

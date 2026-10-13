@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative-cyberpunk",
 	"appearance": "dark",
 	"vars": {
@@ -8,11 +8,9 @@
 		"fgDim": "oklch(61% 0.02 275)",
 		"fgFaint": "oklch(49% 0.02 275)",
 		"primary": "oklch(88% 0.18 95)",
-		"primarySoft": "oklch(82% 0.032 95)",
 		"secondary": "oklch(82% 0.139 200)",
-		"secondarySoft": "oklch(82% 0.029 200)",
 		"accent": "oklch(78% 0.146 355)",
-		"accentSoft": "oklch(82% 0.036 355)",
+		"accentSoft": "oklch(82% 0.026 355)",
 		"accentBorder": "oklch(82% 0.114 355)",
 		"success": "oklch(78% 0.15 145)",
 		"error": "oklch(76% 0.143 25)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.07 200)",
 		"borderAccent": "secondary",
 		"borderMuted": "fgFaint",

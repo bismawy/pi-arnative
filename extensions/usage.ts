@@ -11,7 +11,7 @@ import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, ty
 import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
-import { thinkingColorOf } from "../lib/ansi.ts";
+import { thinkingColorOf, softOf } from "../lib/ansi.ts";
 import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
 import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, type UsageSummary } from "../lib/usage-store.ts";
 
@@ -196,7 +196,11 @@ export class UsageModalComponent implements Component {
 		// dashboard reads as belonging to the model that produced the usage.
 		const edge = (t: string) => this.edgeOf(t);
 		const boxW = width;
-		const soft = (s: string) => th.fg("accentSoft", s);
+		// `accentSoft` is a vars-only token on Pi 1.2+; softOf resolves the soft accent either way.
+		const soft = softOf(th);
+		const acc = (s: string) => th.fg("accent", s);
+		const dim = (s: string) => th.fg("dim", s);
+		const plain = (s: string) => th.fg("text", s);
 
 		const rows = this.buildFlatRows();
 		if (this.selectedIndex >= rows.length) {
@@ -255,21 +259,21 @@ export class UsageModalComponent implements Component {
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			const nameColor = isSelected ? "accent" : item.type === "provider" ? "accentSoft" : "text";
-			const valColor = isSelected ? "accent" : "dim";
+			const paintName = isSelected ? acc : item.type === "provider" ? soft : plain;
+			const paintVal = isSelected ? acc : dim;
 
-			const cName = formatCol(th.fg(nameColor, isSelected ? bold(item.label) : item.label), rowNameW, false);
-			const cSess = formatCol(th.fg(valColor, formatCount(item.sessions)), sessionW);
-			const cMsgs = formatCol(th.fg(valColor, formatCount(item.msgs)), messagesW);
-			const cToks = formatCol(th.fg(valColor, formatTokens(item.tokens)), colW.tokens);
+			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), rowNameW, false);
+			const cSess = formatCol(paintVal(formatCount(item.sessions)), sessionW);
+			const cMsgs = formatCol(paintVal(formatCount(item.msgs)), messagesW);
+			const cToks = formatCol(paintVal(formatTokens(item.tokens)), colW.tokens);
 			// A row with no reported cost but a rate shows `~$x` in place of `-`, so the guess is
 			// visible exactly where it is one; the report line still keeps it out of the headline.
 			const costCell = item.cost > 0 ? formatCost(item.cost) : item.estimatedCost > 0 ? `~${formatCost(item.estimatedCost)}` : "-";
-			const cCost = formatCol(th.fg(valColor, costCell), colW.cost);
+			const cCost = formatCol(paintVal(costCell), colW.cost);
 
 			// Gutter: expand arrow for provider or blank indent for model.
 			const gutterText =
-				item.type === "provider" ? th.fg(item.expanded ? "accentSoft" : "dim", item.expanded ? "▾" : "▸") : " ";
+				item.type === "provider" ? (item.expanded ? soft("▾") : dim("▸")) : " ";
 			const line = gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
@@ -277,7 +281,7 @@ export class UsageModalComponent implements Component {
 
 		// The selected row's detail sits under the table, where the eye lands after scanning it.
 		body.push("");
-		body.push(this.selectedDetail(rows[this.selectedIndex], (t) => th.fg("accent", t), (t) => th.fg("accentSoft", t)));
+		body.push(this.selectedDetail(rows[this.selectedIndex], acc, soft));
 
 		// Table-width separator above Total band (skill arnative-pi §6 rule 7).
 		const tableW = colW.name + sessionW + messagesW + colW.tokens + colW.cost;
@@ -285,11 +289,11 @@ export class UsageModalComponent implements Component {
 
 		// Total row
 		const t = this.summary.totals;
-		const totalName = formatCol(th.fg("accentSoft", bold("Total")), colW.name, false);
-		const totalSess = formatCol(th.fg("accentSoft", bold(formatCount(t.sessions))), sessionW);
-		const totalMsgs = formatCol(th.fg("accentSoft", bold(formatCount(t.msgs))), messagesW);
-		const totalToks = formatCol(th.fg("accentSoft", bold(formatTokens(t.totalTokens))), colW.tokens);
-		const totalCost = formatCol(th.fg("accentSoft", bold(formatCost(t.cost))), colW.cost);
+		const totalName = formatCol(soft(bold("Total")), colW.name, false);
+		const totalSess = formatCol(soft(bold(formatCount(t.sessions))), sessionW);
+		const totalMsgs = formatCol(soft(bold(formatCount(t.msgs))), messagesW);
+		const totalToks = formatCol(soft(bold(formatTokens(t.totalTokens))), colW.tokens);
+		const totalCost = formatCol(soft(bold(formatCost(t.cost))), colW.cost);
 
 		// Same left edge as the header: one table, three bands, one column grid.
 		body.push(totalName + totalSess + totalMsgs + totalToks + totalCost);

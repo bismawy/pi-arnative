@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative-dracula",
 	"appearance": "dark",
 	"vars": {
@@ -8,9 +8,7 @@
 		"fgDim": "oklch(61% 0.012 285)",
 		"fgFaint": "oklch(49% 0.012 285)",
 		"primary": "oklch(78% 0.125 295)",
-		"primarySoft": "oklch(82% 0.027 295)",
 		"secondary": "oklch(82% 0.13 190)",
-		"secondarySoft": "oklch(82% 0.023 190)",
 		"accent": "oklch(78% 0.14 330)",
 		"accentSoft": "oklch(82% 0.025 330)",
 		"accentBorder": "oklch(82% 0.084 330)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.049 295)",
 		"borderAccent": "secondary",
 		"borderMuted": "fgFaint",

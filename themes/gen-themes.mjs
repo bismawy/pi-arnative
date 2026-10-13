@@ -17,8 +17,9 @@ import { parseOklch, oklchToRgb } from "../lib/color.ts";
 import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCHEMA =
-	"https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json";
+// Pi 1.2.0 moved the published schema to pi.dev; older releases validated this
+// reference only as a string, so the new URL is safe on both.
+const SCHEMA = "https://pi.dev/schemas/theme.schema.json";
 
 // --- color helpers ---------------------------------------------------------
 
@@ -212,9 +213,13 @@ const THEMES = {
 };
 
 // --- role order (matches the pi theme schema) ------------------------------
-
+//
+// Only tokens pi's schema declares may appear as keys here: since 1.2.0 the
+// `colors` object is validated with `additionalProperties: false`, and an extra
+// key rejects the whole theme at startup. Arnative's own colors (`accentSoft`,
+// `primary`, `secondary`, …) live in `vars` and are referenced from these roles.
 const ROLE_ORDER = [
-	"accent", "accentSoft", "border", "borderAccent", "borderMuted", "success", "error", "warning",
+	"accent", "border", "borderAccent", "borderMuted", "success", "error", "warning",
 	"muted", "dim", "text", "thinkingText",
 	"selectedBg", "scrollbarTrack", "scrollbarThumb", "searchMatchBg", "searchMatchText",
 	"userMessageBg", "userMessageText", "customMessageBg", "customMessageText", "customMessageLabel",
@@ -245,13 +250,7 @@ function derive(spec) {
 	const primarySeed = spec.primary ? parseOklch(spec.primary) : null;
 	const secondarySeed = spec.secondary ? parseOklch(spec.secondary) : null;
 	const primaryVal = primarySeed ? oklch(primarySeed.L, primarySeed.C, primarySeed.H) : oklch(0.82, c, h);
-	const primaryChroma = primarySeed ? primarySeed.C : c;
-	const primaryHue = primarySeed ? primarySeed.H : h;
-	const primarySoft = oklch(0.82, Math.max(0.015, primaryChroma * 0.18), primaryHue);
 	const secondaryVal = secondarySeed ? oklch(secondarySeed.L, secondarySeed.C, secondarySeed.H) : oklch(0.78, Math.min(c * 0.8, 0.12), roleHue("label"));
-	const secondaryChroma = secondarySeed ? secondarySeed.C : (c * 0.8);
-	const secondaryHue = secondarySeed ? secondarySeed.H : roleHue("label");
-	const secondarySoft = oklch(0.82, Math.max(0.015, secondaryChroma * 0.18), secondaryHue);
 
 	const vars = {
 		fg: oklch(NEUTRAL.fg, nc, nh),
@@ -259,11 +258,14 @@ function derive(spec) {
 		fgDim: oklch(NEUTRAL.fgDim, nc, nh),
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
 		primary: primaryVal,
-		primarySoft: primarySoft,
 		secondary: secondaryVal,
-		secondarySoft: secondarySoft,
 		accent: oklch(0.78, c, h),
-		accentSoft: oklch(0.82, c * 0.18, h),
+		// Derived from the accent's GAMUT-CLAMPED chroma, not the raw spec chroma. Pi's schema
+		// forbids custom keys in `colors`, so extensions resolve the soft tier at runtime by
+		// softening the resolved `accent` (see `softOf` in lib/ansi.ts). Building it from the
+		// same clamped chroma makes the declared value and the runtime one agree; using `c`
+		// drifts wherever the raw chroma is out of gamut at the accent's lightness.
+		accentSoft: oklch(0.82, oklchToRgb(0.78, c, h).chroma * 0.18, h),
 		accentBorder: oklch(0.82, c * 0.6, h),
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
@@ -274,7 +276,6 @@ function derive(spec) {
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
 	const roles = {
 		accent: "accent",
-		accentSoft: "accentSoft",
 		border: oklch(0.55, Math.min(c * 0.35, 0.08), roleHue("border")),
 		borderAccent: spec.borderAccent ?? "accentBorder",
 		borderMuted: "fgFaint",

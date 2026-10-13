@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative-zinc",
 	"appearance": "dark",
 	"vars": {
@@ -8,9 +8,7 @@
 		"fgDim": "oklch(61% 0.005 285)",
 		"fgFaint": "oklch(49% 0.005 285)",
 		"primary": "oklch(86% 0.015 285)",
-		"primarySoft": "oklch(82% 0.015 285)",
 		"secondary": "oklch(72% 0.025 240)",
-		"secondarySoft": "oklch(82% 0.015 240)",
 		"accent": "oklch(78% 0.02 286)",
 		"accentSoft": "oklch(82% 0.004 286)",
 		"accentBorder": "oklch(82% 0.012 286)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.007 0)",
 		"borderAccent": "accentBorder",
 		"borderMuted": "fgFaint",

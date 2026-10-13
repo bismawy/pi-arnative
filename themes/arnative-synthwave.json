@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative-synthwave",
 	"appearance": "dark",
 	"vars": {
@@ -8,11 +8,9 @@
 		"fgDim": "oklch(61% 0.015 300)",
 		"fgFaint": "oklch(49% 0.015 300)",
 		"primary": "oklch(78% 0.178 339)",
-		"primarySoft": "oklch(82% 0.034 339)",
 		"secondary": "oklch(82% 0.145 185)",
-		"secondarySoft": "oklch(82% 0.029 185)",
 		"accent": "oklch(78% 0.142 50)",
-		"accentSoft": "oklch(82% 0.031 50)",
+		"accentSoft": "oklch(82% 0.026 50)",
 		"accentBorder": "oklch(82% 0.102 50)",
 		"success": "oklch(78% 0.15 145)",
 		"error": "oklch(76% 0.143 25)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.059 185)",
 		"borderAccent": "secondary",
 		"borderMuted": "fgFaint",

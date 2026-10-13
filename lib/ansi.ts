@@ -38,16 +38,38 @@ export function setActiveTheme<T>(th: T | null): void {
 	else delete (globalThis as Record<symbol, T>)[THEME_PROXY_KEY];
 }
 
-/** Painter for the `accentSoft` token, which only arnative themes define; other themes fall back to accent (probed once). */
-export function accentSoftOf(th: { fg?(c: string, t: string): string } | null): (s: string) => string {
+/**
+ * Painter for arnative's soft accent (`accentSoft`).
+ *
+ * Pi <=1.1.0 let a theme declare extra tokens in `colors`, so `accentSoft` was
+ * addressable directly. 1.2.0 validates `colors` with `additionalProperties: false`
+ * and rejects the whole theme if it carries one, so the token now lives only in
+ * `vars` and `fg("accentSoft")` throws. The soft accent stays available through the
+ * resolved `accent` color (1.2.0 exposes `theme.colors`): its hue and chroma are
+ * softened to the generator's `*Soft` recipe, which keeps the two-tone look instead
+ * of collapsing to grey. Falls back to `muted`, then `accent`, on any older theme.
+ */
+export function softOf(th: {
+	fg?(c: string, t: string): string;
+	style?(t: string, o: { fg: unknown }): string;
+	colors?: Record<string, { kind?: string; c?: number; h?: number }>;
+} | null): (s: string) => string {
 	const fg = th?.fg?.bind(th);
 	if (!fg) return (s) => s;
 	try {
 		fg("accentSoft", "");
 		return (s) => fg("accentSoft", s);
 	} catch {
-		return (s) => fg("accent", s);
+		// 1.2.0+ rejects `accentSoft`: derive the soft tint from the resolved accent.
 	}
+	const accent = th?.colors?.accent;
+	const style = th?.style?.bind(th);
+	if (accent?.kind === "oklch" && style) {
+		// The generator's `*Soft` recipe: lightness 0.82, a fifth of the accent chroma.
+		const soft = { kind: "oklch" as const, l: 0.82, c: (accent.c ?? 0) * 0.18, h: accent.h ?? 0 };
+		return (s) => style(s, { fg: soft });
+	}
+	return (s) => fg("muted", s);
 }
 
 /** pi defines one theme slot per thinking level (`thinkingOff`…`thinkingMax`), so a box
@@ -98,15 +120,26 @@ if (isMain(import.meta.url)) {
 	assert(getActiveTheme<object>() === null, "clearing the active theme leaves no stale slot");
 
 	const tag = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
-	assert(accentSoftOf(tag)("x") === "<accentSoft>x</accentSoft>", "accentSoftOf uses accentSoft when the theme defines it");
+	assert(softOf(tag)("x") === "<accentSoft>x</accentSoft>", "softOf uses accentSoft when the theme defines it");
 	const noSoft = {
 		fg: (c: string, t: string) => {
 			if (c === "accentSoft") throw new Error("Unknown theme color: accentSoft");
 			return `<${c}>${t}</${c}>`;
 		},
 	};
-	assert(accentSoftOf(noSoft)("x") === "<accent>x</accent>", "accentSoftOf falls back to accent without the token");
-	assert(accentSoftOf(null)("x") === "x", "accentSoftOf without a theme is identity");
+	assert(softOf(noSoft)("x") === "<muted>x</muted>", "softOf falls back to muted without the token or colors");
+	assert(softOf(null)("x") === "x", "softOf without a theme is identity");
+	// Pi 1.2.0: acentSoft is rejected, so the soft tint is derived from `colors.accent`.
+	const modern = {
+		fg: (c: string, t: string) => {
+			throw new Error(`Unknown theme color: ${c}`);
+		},
+		style: (t: string, o: { fg: unknown }) => `<soft:${JSON.stringify(o.fg)}>${t}</soft>`,
+		colors: { accent: { kind: "oklch", c: 0.2, h: 355 } },
+	};
+	const modernOut = softOf(modern)("x");
+	assert(modernOut.includes('"l":0.82') && modernOut.includes('"c":0.036'), "softOf derives the soft tint from accent (l=0.82, c=accent*0.18)");
+	assert(modernOut.includes("x"), "softOf keeps the text");
 
 	assert(thinkingColorSlot("off") === "thinkingOff", "thinking off maps to thinkingOff");
 	assert(thinkingColorSlot(undefined) === "thinkingOff", "missing level falls back to thinkingOff");
