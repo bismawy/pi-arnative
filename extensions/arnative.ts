@@ -7,7 +7,7 @@
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type Component } from "@earendil-works/pi-tui";
-import { accentSoftOf, stripAnsi, thinkingColorOf } from "../lib/ansi.ts";
+import { softOf, stripAnsi, thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markedLabels } from "../lib/format.ts";
@@ -172,7 +172,7 @@ export class ListPicker implements Component {
 	render(width: number): string[] {
 		const th = this.theme;
 		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		const soft = accentSoftOf(th);
+		const soft = softOf(th);
 		const edge = (text: string) => this.edge(text);
 		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
 		const body: string[] = [];

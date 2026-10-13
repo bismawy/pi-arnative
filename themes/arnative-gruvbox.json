@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative-gruvbox",
 	"appearance": "dark",
 	"vars": {
@@ -8,9 +8,7 @@
 		"fgDim": "oklch(61% 0.015 70)",
 		"fgFaint": "oklch(49% 0.015 70)",
 		"primary": "oklch(84% 0.14 83)",
-		"primarySoft": "oklch(82% 0.025 83)",
 		"secondary": "oklch(78% 0.1 175)",
-		"secondarySoft": "oklch(82% 0.018 175)",
 		"accent": "oklch(78% 0.137 45)",
 		"accentSoft": "oklch(82% 0.025 45)",
 		"accentBorder": "oklch(82% 0.084 45)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.049 83)",
 		"borderAccent": "secondary",
 		"borderMuted": "fgFaint",

@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative-nord",
 	"appearance": "dark",
 	"vars": {
@@ -8,9 +8,7 @@
 		"fgDim": "oklch(61% 0.01 240)",
 		"fgFaint": "oklch(49% 0.01 240)",
 		"primary": "oklch(78% 0.08 217)",
-		"primarySoft": "oklch(82% 0.015 217)",
 		"secondary": "oklch(82% 0.09 195)",
-		"secondarySoft": "oklch(82% 0.016 195)",
 		"accent": "oklch(78% 0.07 310)",
 		"accentSoft": "oklch(82% 0.013 310)",
 		"accentBorder": "oklch(82% 0.042 310)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.025 217)",
 		"borderAccent": "secondary",
 		"borderMuted": "fgFaint",

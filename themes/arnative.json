@@ -1,5 +1,5 @@
 {
-	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
+	"$schema": "https://pi.dev/schemas/theme.schema.json",
 	"name": "arnative",
 	"appearance": "dark",
 	"vars": {
@@ -8,9 +8,7 @@
 		"fgDim": "oklch(61% 0.012 232)",
 		"fgFaint": "oklch(49% 0.012 232)",
 		"primary": "oklch(82% 0.138 218)",
-		"primarySoft": "oklch(82% 0.025 218)",
 		"secondary": "oklch(78% 0.11 282)",
-		"secondarySoft": "oklch(82% 0.02 282)",
 		"accent": "oklch(78% 0.13 218)",
 		"accentSoft": "oklch(82% 0.023 218)",
 		"accentBorder": "oklch(82% 0.078 218)",
@@ -21,7 +19,6 @@
 	},
 	"colors": {
 		"accent": "accent",
-		"accentSoft": "accentSoft",
 		"border": "oklch(55% 0.045 0)",
 		"borderAccent": "accentBorder",
 		"borderMuted": "fgFaint",
