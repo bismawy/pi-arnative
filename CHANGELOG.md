@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1] - 2026-10-13
+
+### Fixed
+- Restored all 11 arnative themes on Pi 1.2.0, which validates the `colors` object with `additionalProperties: false` and rejected the whole theme — "must not have additional properties" followed by "Theme not found" (`lib/ansi.ts`, `themes/gen-themes.mjs`, `themes/*.json`, `extensions/ui-render-tweaks.ts`). Arnative's own colors (`accentSoft`, `primary`, `secondary`, `primarySoft`, `secondarySoft`) moved from `colors` to `vars`.
+- Kept the two-tone soft tier instead of collapsing it to grey: `softOf` replaces `accentSoftOf` and derives the soft accent from the resolved `accent` color when `fg("accentSoft")` throws, so the header logo, tab labels, model line, footer labels, tool titles and the usage dashboard keep their tint (`lib/ansi.ts`).
+- Updated `$schema` in every theme and the generator from the raw GitHub `theme-schema.json` path to the published `https://pi.dev/schemas/theme.schema.json` (`themes/gen-themes.mjs`, `themes/*.json`).
+- Replaced the footer's raw `fg("accentSoft")` probe with the shared painter and mapped `primary`/`secondary` onto the official tokens they carry (`mdHeading`, `borderAccent`), since Pi 1.2 rejects custom `colors` keys (`extensions/footer.ts`).
+- Mapped the usage dashboard's name/value/arrow colors off `accentSoft` onto the shared soft painter and plain `dim`/`text`, keeping provider rows distinguishable (`extensions/usage.ts`).
+- Added a self-check that fails when a theme puts a non-schema key in `colors`, so a rogue token breaks `npm test` instead of the user's startup (`extensions/ui-render-tweaks.ts`).
+
 ## [0.5.0] - 2026-10-13
 
 ### Added
