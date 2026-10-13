@@ -10,6 +10,9 @@
 - Mapped the usage dashboard's name/value/arrow colors off `accentSoft` onto the shared soft painter and plain `dim`/`text`, keeping provider rows distinguishable (`extensions/usage.ts`).
 - Added a self-check that fails when a theme puts a non-schema key in `colors`, so a rogue token breaks `npm test` instead of the user's startup (`extensions/ui-render-tweaks.ts`).
 
+### Notes
+- `0.5.0` is intentionally skipped on the npm registry. It was tagged and merged, but never published, and its themes are the ones Pi 1.2.0 rejects. `0.5.1` carries everything from v0.5.0 plus this fix. The tag stays in the history; install from npm and you get `0.5.1`.
+
 ## [0.5.0] - 2026-10-13
 
 ### Added
