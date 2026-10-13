@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0] - 2026-10-13
+
+### Added
+- Extended theme token hierarchy in `vars` with `primary`, `primarySoft`, `secondary`, and `secondarySoft` across all 11 themes (`themes/gen-themes.mjs`), ensuring unique hex mappings and full perceptual OKLCH color space discipline.
+- Tri-color multi-palette overhauls for expressive themes (`arnative-cyberpunk`, `arnative-synthwave`, `arnative-dracula`, `arnative-gruvbox`, and `arnative-nord`), mapping `mdHeading` to `primary` and `borderAccent`/`mdCode` to `secondary`.
+- Footer multi-color pairing (`extensions/footer.ts`): paired vibrant `accent` icons with readable `secondarySoft` labels and highlighted the model name with `primary`.
+
+### Changed
+- Increased message bubble background lightness (`surfaceMsg` / `userMessageBg`) on `arnative-cyberpunk`, `arnative-matrix`, and `arnative-synthwave` to 24% (`oklch(24% 0.035 ...)`) to ensure container boundaries remain clearly defined against pitch-black terminal canvases.
+
+### Fixed
+- Fixed parenthetical suffix per-row dimming in `/arnative` → **Animations** so `(system)` on `Pi (system)` renders softly in `dim` even when descriptive frame notes are present (`extensions/arnative.ts`).
+- Fixed inline image preview layout spacing by dropping the redundant spacer gap between the tool execution box and the image payload (`extensions/tools.ts`).
+
 ## [0.4.0] - 2026-10-12
 
 ### Added
