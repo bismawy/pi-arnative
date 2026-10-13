@@ -411,3 +411,25 @@ test("the spinner frame is coloured accent, the label keeps accentSoft", async (
 	assert.ok(line.includes("[accent:⬥]"), "the frame goes through the painted accent, verbatim cleared");
 	assert.ok(line.includes("[SOFT:Executing"), "the label keeps its own colour fn, not the spinner's");
 });
+
+// The footer's two-tone look: icons on `accent`, their text on the soft border-accent
+// tier. `secondarySoft` lives in `vars` only (Pi 1.2.0 forbids custom `colors` keys), so
+// the text colour must be *derived* from `borderAccent`, not read from a token. Before
+// this, the label fell back to softOf(accent) and the footer went monochrome-pink.
+test("footer labels take the soft border-accent tier, icons keep accent", async () => {
+	const { softOf, softSecondaryOf } = await import("../lib/ansi.ts");
+	// Shaped like the real 1.2.0 Theme: no accentSoft/secondarySoft token, `colors` present.
+	const modern = {
+		fg: (c: string) => {
+			throw new Error(`Unknown theme color: ${c}`);
+		},
+		style: (t: string, o: { fg: unknown }) => `<${JSON.stringify(o.fg)}>${t}`,
+		colors: { accent: { kind: "oklch", l: 0.78, c: 0.146, h: 355 }, borderAccent: { kind: "oklch", l: 0.82, c: 0.139, h: 200 } },
+	};
+	const label = softSecondaryOf(modern as never)("main");
+	const icon = softOf(modern as never)("main");
+	assert.ok(label.includes('"h":200'), "the label keeps the border-accent hue (blue), not the accent hue");
+	assert.ok(icon.includes('"h":355'), "the accent tier keeps its own hue (pink)");
+	assert.ok(label.includes('"c":0.02502'), "the label chroma is the border accent softened by 0.18");
+	assert.ok(label.includes('"l":0.82'), "the soft tier always sits at L 0.82");
+});

@@ -11,7 +11,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { softOf, stripAnsi } from "../lib/ansi.ts";
+import { softOf, softSecondaryOf, stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
@@ -889,9 +889,12 @@ export default function (pi: ExtensionAPI) {
 							const acc = (text: string) => theme.fg("accent", text);
 							const dim = (text: string) => theme.fg("dim", text);
 							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-							// `accentSoft` is a vars-only token on Pi 1.2+, so the soft tier is resolved
-							// through the shared painter instead of a raw fg() probe.
+							// `accentSoft`/`secondarySoft` are vars-only tokens on Pi 1.2+, so both soft tiers
+							// are resolved through the shared painters instead of a raw fg() probe. Icons keep
+							// `accent`; the cwd/branch/clock/status text takes the border-accent tier, so the
+							// footer stays two-toned instead of the text inheriting the accent hue.
 							const soft = softOf(theme as never);
+							const softLabel = softSecondaryOf(theme as never);
 							// Diff colors: the same theme slots pi uses for a diff body, with the
 							// plain soft color as fallback for a theme that omits them.
 							const colorOr = (name: string, fallback: (t: string) => string) => (t: string) => {
@@ -901,12 +904,10 @@ export default function (pi: ExtensionAPI) {
 									return fallback(t);
 								}
 							};
-							// `primary`/`secondary` are vars, not tokens (Pi 1.2+ rejects custom `colors`
-							// keys). Their arnative carriers are the official tokens they map to.
+							// `primary` is a var, not a token (Pi 1.2+ rejects custom `colors` keys); its
+							// arnative carrier is the official token it maps to.
 							const primary = colorOr("mdHeading", acc);
-							const primarySoft = soft;
-							const secondary = colorOr("borderAccent", soft);
-							const secondarySoft = soft;
+							const secondarySoft = softLabel;
 							const diffAdd = colorOr("toolDiffAdded", soft);
 							const diffDel = colorOr("toolDiffRemoved", soft);
 							const sep = dim(" | ");
@@ -1044,7 +1045,7 @@ export default function (pi: ExtensionAPI) {
 						try {
 							const th = this.getActiveTheme();
 							if (!th) return text;
-							return softOf(th as never)(text);
+							return softSecondaryOf(th as never)(text);
 						} catch {
 							return text;
 						}

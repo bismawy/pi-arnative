@@ -39,7 +39,7 @@ import {
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { renderBoxLines as box } from "../lib/box.ts";
-import { stripAnsi, softOf } from "../lib/ansi.ts";
+import { stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { expandKeyName } from "../lib/format.ts";
 
@@ -443,7 +443,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 					? safeCall(() => own.call(this, { content: result.content, details: result.details }, opts, th, ctx))
 					: null;
 			return new Lines((width) => {
-				const soft = softOf(th);
+				const soft = softSecondaryOf(th);
 				const inner = Math.max(8, width - 4);
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
 				const boxed2 = componentLines(theirs, width - 6);
@@ -606,7 +606,7 @@ function minimal(
 			return new Lines((width) => {
 				// Read context.state live (never capture): renderResult may create it after renderCall.
 				if (context.state?.hasResult) return [];
-				const soft = softOf(theme);
+				const soft = softSecondaryOf(theme);
 				const inner = Math.max(8, width - 4);
 				const rows = titleRow(
 					theme,
@@ -635,7 +635,7 @@ function minimal(
 			const dur = fmtMs(context.toolCallId ? TIMINGS.get(context.toolCallId) : undefined);
 			const icon = isErr ? theme.fg("error", "x") : theme.fg("success", "✓");
 			return new Lines((width) => {
-				const soft = softOf(theme);
+				const soft = softSecondaryOf(theme);
 				const inner = Math.max(8, width - 4);
 				const rows = titleRow(
 					theme,

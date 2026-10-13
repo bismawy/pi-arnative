@@ -39,9 +39,9 @@ import {
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
-import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../lib/ansi.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softSecondaryOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { contrast, parseOklch, toHex } from "../lib/color.ts";
+import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
 
 type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
@@ -174,7 +174,7 @@ const SELECT_ROW_KEY = Symbol.for("pi-arnative.selectRowColors");
 
 /** Selected row body: `·` separators accent, the text around them soft. */
 export function selectRowText(row: string, th: { fg(c: string, t: string): string }): string {
-	const soft = softOf(th);
+	const soft = softSecondaryOf(th);
 	return row
 		.split("·")
 		.map((part) => soft(part))
@@ -396,6 +396,14 @@ if (isMain(import.meta.url)) {
 	// hex, so resolve every token through lib/color before constructing it.
 	const resolve = (value: string) => toHex(themeJson.vars[value] ?? value);
 	const hex = (tok: string) => resolve(themeJson.colors[tok] ?? tok);
+	// Mirrors `soften()` (themes/gen-themes.mjs) and `softenColor` (lib/ansi.ts): the soft
+	// tier is the base color at L 0.82 with a fifth of its chroma. Both sides read the
+	// declared OKLCH string (not the 8-bit hex), so the comparison is not rounded twice.
+	const softenToHex = (base: string) => {
+		const o = parseOklch(base);
+		assert(o !== null, `cannot soften a non-oklch color: ${base}`);
+		return toHex(`oklch(82% ${oklchToRgb(0.82, o.C * 0.18, o.H).chroma} ${o.H})`);
+	};
 	// The built-in theme adds fallbacks (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
 	// so the fg map must be complete; take the whole palette like pi's loader does.
 	const fgPalette = Object.fromEntries(
@@ -508,8 +516,18 @@ if (isMain(import.meta.url)) {
 		// Accent pill: accent bg + toolPendingBg colored text.
 		assert(contrast(hex("accent"), hex("toolPendingBg")) >= 4.5, `theme ${f}: accent vs toolPendingBg contrast >= 4.5`);
 		assert(isColor(d.vars.accentSoft ?? ""), `theme ${f}: vars.accentSoft is a color`);
+		assert(isColor(d.vars.secondarySoft ?? ""), `theme ${f}: vars.secondarySoft is a color`);
 		assert(isColor(d.vars.primary ?? ""), `theme ${f}: vars.primary is a color`);
 		assert(isColor(d.vars.secondary ?? ""), `theme ${f}: vars.secondary is a color`);
+		// The declared soft vars must equal what the extensions derive at runtime, or the
+		// footer label colour drifts from the theme file. `softenToHex` mirrors
+		// `soften()` in gen-themes.mjs and `softenColor` in lib/ansi.ts.
+		for (const [softName, baseName] of [["accentSoft", "accent"], ["secondarySoft", "borderAccent"]] as const) {
+			const base = d.vars[d.colors[baseName] ?? baseName]!;
+			const declared = toHex(d.vars[softName]!);
+			const derived = softenToHex(base);
+			assert(declared === derived, `theme ${f}: vars.${softName} ${declared} != runtime ${derived} (derived from ${baseName})`);
+		}
 		const canvas = hex("userMessageBg");
 		for (const tok of Object.keys(d.colors)) {
 			if (nonText.has(tok) || tok === "thinkingMax") continue;

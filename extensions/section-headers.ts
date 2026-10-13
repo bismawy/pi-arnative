@@ -33,7 +33,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { BoxTheme } from "../lib/box.ts";
 import { BRAND, renderBoxLines } from "../lib/box.ts";
-import { getActiveTheme, setActiveTheme, softOf, stripAnsi, themeOf } from "../lib/ansi.ts";
+import { getActiveTheme, setActiveTheme, softOf, softSecondaryOf, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { capitalize, expandKeyName, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, loadChoice, saveChoice } from "../lib/preset-store.ts";
@@ -79,16 +79,31 @@ export function fgFirst(th: Themeish, names: string[], text: string): string {
 }
 
 /**
- * Painter for the header's soft tier. Pi 1.2.0 rejects a custom `accentSoft` key in
- * `colors`, so `fgFirst(["accentSoft", …])` silently degrades to plain text there and
- * the two-tone logo/header look flattens. `softOf` derives the same tint from the
- * resolved accent; a theme that genuinely defines `accentSoft` still wins first.
+ * Painter for the header's soft *accent* tier — the logo mark's second tone, paired with
+ * the accent `P`. Keeps the mark in one hue family instead of blue.
+ *
+ * Pi 1.2.0 rejects a custom `accentSoft` key in `colors`, so `fgFirst(["accentSoft", …])`
+ * silently degrades to plain text there and the two-tone look flattens. `softOf` derives
+ * the same tint from the resolved accent; a theme that genuinely defines `accentSoft`
+ * still wins first.
  */
 export function softFirst(th: Themeish, fallbacks: string[], text: string): string {
-	const soft = softOf(th as never);
-	const out = soft(text);
-	if (out !== text) return out;
-	return fgFirst(th, fallbacks, text);
+	return softOnTier(softOf(th as never), th, fallbacks, text);
+}
+
+/**
+ * Painter for the soft *label* tier of header text (model name, thinking level, token
+ * counts). Same colour language as the footer: marks take `accent`, their text takes the
+ * soft border-accent tier, so a header line and the footer under it agree.
+ */
+export function softLabelFirst(th: Themeish, fallbacks: string[], text: string): string {
+	return softOnTier(softSecondaryOf(th as never), th, fallbacks, text);
+}
+
+/** Shared tail of the two soft painters: use the resolved soft tone, else the fallback tokens. */
+function softOnTier(paint: (s: string) => string, th: Themeish, fallbacks: string[], text: string): string {
+	const out = paint(text);
+	return out !== text ? out : fgFirst(th, fallbacks, text);
 }
 
 /**
@@ -542,7 +557,7 @@ export class ArnativeHeader implements Component {
 			const isActive = t.key === this.activeTab;
 			const iconStyled = isActive ? fgFirst(th, ["accent"], t.icon) : fgFirst(th, ["dim"], t.icon);
 			const labelStyled = isActive
-				? softFirst(th, ["accentSoft", "text"], `\x1b[1m${label}\x1b[22m`)
+				? softLabelFirst(th, ["accentSoft", "text"], `\x1b[1m${label}\x1b[22m`)
 				: fgFirst(th, ["dim"], label);
 			return { key: t.key, plain, formatted: `${iconStyled} ${labelStyled}` };
 		};
@@ -606,19 +621,19 @@ export class ArnativeHeader implements Component {
 			// Model name in soft, its "(Provider)" tail dim.
 			const provSuffix = fullName.match(/(\s*\([^()]*\))$/)?.[1] ?? "";
 			const nameMain = provSuffix ? fullName.slice(0, -provSuffix.length) : fullName;
-			let line = `${softFirst(th, ["accentSoft", "text"], nameMain)}${provSuffix ? fgFirst(th, ["dim"], provSuffix) : ""}${sep}${softFirst(th, ["accentSoft", "text"], `Thinking: ${thinkLevel}`)}`;
+			let line = `${softLabelFirst(th, ["accentSoft", "text"], nameMain)}${provSuffix ? fgFirst(th, ["dim"], provSuffix) : ""}${sep}${softLabelFirst(th, ["accentSoft", "text"], `Thinking: ${thinkLevel}`)}`;
 
 			// All-time usage of that model (same as /usage): ↑... ↓...  ...
 			const usage = getModelAllTimeUsage(modelObj?.id);
 			const tokenParts: string[] = [];
 			if (usage.input > 0) {
-				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${softFirst(th, ["accentSoft", "text"], formatTokens(usage.input))}`);
+				tokenParts.push(`${fgFirst(th, ["accent"], "↑")}${softLabelFirst(th, ["accentSoft", "text"], formatTokens(usage.input))}`);
 			}
 			if (usage.output > 0) {
-				tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${softFirst(th, ["accentSoft", "text"], formatTokens(usage.output))}`);
+				tokenParts.push(`${fgFirst(th, ["accent"], "↓")}${softLabelFirst(th, ["accentSoft", "text"], formatTokens(usage.output))}`);
 			}
 			if (usage.cacheRead > 0) {
-				tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${softFirst(th, ["accentSoft", "text"], formatTokens(usage.cacheRead))}`);
+				tokenParts.push(`${fgFirst(th, ["accent"], "\uf49b ")}${softLabelFirst(th, ["accentSoft", "text"], formatTokens(usage.cacheRead))}`);
 			}
 			if (tokenParts.length > 0) {
 				line += `${sep}${tokenParts.join(" ")}`;
@@ -631,11 +646,11 @@ export class ArnativeHeader implements Component {
 
 		if (this.activeTab === "Directory") {
 			for (const line of wrapPath(getCwd(this.ctx), infoW)) {
-				infoLines.push(softFirst(th, ["accentSoft", "text"], line));
+				infoLines.push(softLabelFirst(th, ["accentSoft", "text"], line));
 			}
 		} else if (this.activeTab === "Shortcut") {
 			for (const line of wrapTokens(SHORTCUTS, infoW)) {
-				infoLines.push(softFirst(th, ["accentSoft", "text"], line));
+				infoLines.push(softLabelFirst(th, ["accentSoft", "text"], line));
 			}
 		} else if (activeItems.length === 0) {
 			infoLines.push(
@@ -647,7 +662,7 @@ export class ArnativeHeader implements Component {
 		} else {
 			for (const line of wrapCommaItems(activeItems, infoW)) {
 				// Point 5: selected menu data uses soft only
-				infoLines.push(softFirst(th, ["accentSoft", "text"], line));
+				infoLines.push(softLabelFirst(th, ["accentSoft", "text"], line));
 			}
 		}
 
