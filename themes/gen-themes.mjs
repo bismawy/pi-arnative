@@ -32,6 +32,23 @@ function oklch(L, C, H) {
 	return `oklch(${+(L * 100).toFixed(1)}% ${round3(chroma)} ${Math.round(hue(H))})`;
 }
 
+/**
+ * Soft tier of a color: clone at L 0.82 with a fifth of the GAMUT-CLAMPED chroma, hue
+ * kept. `lib/ansi.ts` softens the resolved token with this same recipe at runtime, so a
+ * `*Soft` var declared here and the extension's derived value agree. Grey-collapse is
+ * avoided because the hue is carried, not dropped.
+ *
+ * The chroma keeps five decimals (not the usual three): the soft tier multiplies it by
+ * 0.18, so a coarser round-trip shifts the last hex digit and the `declare == derive`
+ * guard in ui-render-tweaks.ts fails.
+ */
+function soften(value) {
+	const o = parseOklch(value);
+	assert(o !== null, `cannot soften a non-oklch color: ${value}`);
+	const { chroma } = oklchToRgb(0.82, o.C * 0.18, o.H);
+	return `oklch(82% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
+}
+
 // --- shared ramps ----------------------------------------------------------
 
 const NEUTRAL = { fg: 0.88, fgMuted: 0.72, fgDim: 0.61, fgFaint: 0.49 };
@@ -252,6 +269,15 @@ function derive(spec) {
 	const primaryVal = primarySeed ? oklch(primarySeed.L, primarySeed.C, primarySeed.H) : oklch(0.82, c, h);
 	const secondaryVal = secondarySeed ? oklch(secondarySeed.L, secondarySeed.C, secondarySeed.H) : oklch(0.78, Math.min(c * 0.8, 0.12), roleHue("label"));
 
+	// Soft counterpart of the border-accent tier — the footer's label, clock and status
+	// colour. Softened from the SAME value the `borderAccent` token resolves to, because
+	// that token is what extensions read back at runtime (`softSecondaryOf` in
+	// lib/ansi.ts). One source keeps the declared value and the runtime one identical.
+	const accentBorderVal = oklch(0.82, c * 0.6, h);
+	const accentVal = oklch(0.78, c, h);
+	const borderAccentRole = spec.borderAccent ?? "accentBorder";
+	const borderAccentVal = { accentBorder: accentBorderVal, secondary: secondaryVal }[borderAccentRole] ?? borderAccentRole;
+
 	const vars = {
 		fg: oklch(NEUTRAL.fg, nc, nh),
 		fgMuted: oklch(NEUTRAL.fgMuted, nc, nh),
@@ -259,14 +285,10 @@ function derive(spec) {
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
 		primary: primaryVal,
 		secondary: secondaryVal,
-		accent: oklch(0.78, c, h),
-		// Derived from the accent's GAMUT-CLAMPED chroma, not the raw spec chroma. Pi's schema
-		// forbids custom keys in `colors`, so extensions resolve the soft tier at runtime by
-		// softening the resolved `accent` (see `softOf` in lib/ansi.ts). Building it from the
-		// same clamped chroma makes the declared value and the runtime one agree; using `c`
-		// drifts wherever the raw chroma is out of gamut at the accent's lightness.
-		accentSoft: oklch(0.82, oklchToRgb(0.78, c, h).chroma * 0.18, h),
-		accentBorder: oklch(0.82, c * 0.6, h),
+		secondarySoft: soften(borderAccentVal),
+		accent: accentVal,
+		accentSoft: soften(accentVal),
+		accentBorder: accentBorderVal,
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
 		warning: oklch(0.86, Math.min(c, 0.14), sem("warning")),

@@ -11,7 +11,7 @@ import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, ty
 import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
-import { thinkingColorOf, softOf } from "../lib/ansi.ts";
+import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
 import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
 import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, type UsageSummary } from "../lib/usage-store.ts";
 
@@ -196,8 +196,9 @@ export class UsageModalComponent implements Component {
 		// dashboard reads as belonging to the model that produced the usage.
 		const edge = (t: string) => this.edgeOf(t);
 		const boxW = width;
-		// `accentSoft` is a vars-only token on Pi 1.2+; softOf resolves the soft accent either way.
-		const soft = softOf(th);
+		// `secondarySoft` is a vars-only token on Pi 1.2+; softSecondaryOf resolves the soft
+		// label tier (the border-accent hue) and falls back to the accent tier.
+		const soft = softSecondaryOf(th);
 		const acc = (s: string) => th.fg("accent", s);
 		const dim = (s: string) => th.fg("dim", s);
 		const plain = (s: string) => th.fg("text", s);
