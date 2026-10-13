@@ -398,7 +398,11 @@ if (isMain(import.meta.url)) {
 	const hex = (tok: string) => resolve(themeJson.colors[tok] ?? tok);
 	// The built-in theme adds fallbacks (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
 	// so the fg map must be complete; take the whole palette like pi's loader does.
-	const fgPalette = Object.fromEntries(Object.entries(themeJson.colors).map(([k, v]) => [k, resolve(v)]));
+	const fgPalette = Object.fromEntries(
+		Object.entries(themeJson.colors)
+			.filter(([k]) => k !== "accentSoft")
+			.map(([k, v]) => [k, resolve(v)]),
+	);
 	const thPill = new Theme(fgPalette, { toolPendingBg: hex("toolPendingBg"), selectedBg: hex("selectedBg") }, "truecolor");
 	const pillOriginal = thPill.bg("selectedBg", thPill.fg("text", " ↓ Jump to latest message · End "));
 	const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(";");
