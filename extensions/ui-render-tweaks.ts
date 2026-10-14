@@ -16,7 +16,6 @@
  */
 import {
 	CompactionSummaryMessageComponent,
-	CustomMessageComponent,
 	ExtensionSelectorComponent,
 	getMarkdownTheme,
 	initTheme,

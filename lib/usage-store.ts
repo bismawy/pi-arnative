@@ -117,7 +117,7 @@ export interface UsageSummary {
 		cost: number;
 		/** Provider-reported cost only (never includes the estimate). */
 		reportedCost: number;
-		/** Cost reconstructed from `prices.json`. Shown with a `~`, never folded into `cost`. */
+		/** Cost reconstructed from `models.json` rates. Shown with a `~`, never folded into `cost`. */
 		estimatedCost: number;
 	};
 }

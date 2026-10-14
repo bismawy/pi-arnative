@@ -2,7 +2,8 @@
  * Arnative footer (fixed 3-row grid). Row 1: cwd | active time | branch — model + thinking;
  * rows 2-3: extension status | tok/s · cache · token, each side wrapped in its half of the
  * width. The clock counts active time, not wall-clock age — see {@link ActiveClock}.
- * Preset (`/arnative footers`), live: "Arnative (Full)" (default) or "Pi (system)".
+ * Preset (`/arnative footers`), live: "Arnative (Full)" (default), "Arnative (Minimal)"
+ * or "Pi (system)".
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -897,6 +898,10 @@ export default function (pi: ExtensionAPI) {
 			currentModel = ctx.model;
 			currentThinkingLevel = ctx.thinkingLevel;
 			git = null;
+			// A new session reuses this module (no re-import), so the 2s cache would serve the
+			// previous session's sums whenever the fresh branch happens to be the same length.
+			usageScanAt = 0;
+			usageScanLen = -1;
 		} else {
 			currentModel = (globalThis as Record<symbol, any>)[MODEL_KEY] ?? ctx.model;
 			currentThinkingLevel = (globalThis as Record<symbol, any>)[THINKING_KEY] ?? ctx.thinkingLevel;
