@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.3] - 2026-10-14
 
 ### Fixed
 - A new session showed the previous session's token counts. The footer's 2s `getUsage` cache is keyed on branch length, and the module is not re-imported by `/new`, so a fresh session whose branch happened to reach the same length read the cached sums instead of its own. The cache is now cleared in the non-reload `session_start` branch (`extensions/footer.ts`).
