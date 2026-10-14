@@ -211,6 +211,55 @@ export function currentToolVerb(active: ReadonlyMap<string, string>): string {
 }
 
 /**
+ * The pi-jev-eye status cell: `Eye: ● MODE (Backend)`. pi-jev-eye writes the value plain because a status
+ * is a fact, not a layout; this decides the painting.
+ *
+ * The trailing parenthesised backend is a modifier, so it takes `dim` while the `Eye:` label and the state
+ * keep the soft and state tiers — that is what makes `(Clef Flash)` recede and `Eye: ● ON` stay readable
+ * at a glance. The backend name itself is read out of the value, never hardcoded here: the extension
+ * reports the active backend from `/jev-eye models`, so the footer cannot know it in advance.
+ */
+/**
+ * Is this status value pi-jev-eye's own cell? It is matched on the LABEL the value carries (`Eye:`), not on
+ * the internal key name: the value is `Eye: ● ON (Clef Flash)` and contains no `jev-eye` anywhere, so the
+ * old `value.includes("jev-eye")` test went false and the whole cell fell through to the generic path —
+ * which is exactly how it silently lost its icon and its dim backend suffix.
+ *
+ * Recognising the label keeps the rule honest: if pi-jev-eye renames its label, this test fails loudly in
+ * the self-check below instead of degrading to a plain grey cell.
+ */
+export const isJevEyeStatus = (status: string): boolean => /^\s*Eye\s*:/i.test(stripAnsi(status));
+
+export function jevEyeStatusLine(
+	status: string,
+	acc: (text: string) => string,
+	dim: (text: string) => string,
+	soft: (text: string) => string,
+	theme?: { fg?: (color: string, text: string) => string },
+): string {
+	const clean = stripAnsi(status);
+	const isOff = clean.includes("OFF") || clean.includes("\u25CB");
+	const isReview = /REVIEW/i.test(clean);
+	let bullet = isOff ? dim("\u25CB") : acc("\u25CF");
+	if (isReview && typeof theme?.fg === "function") {
+		try {
+			bullet = theme.fg("warning", "\u25CF");
+		} catch {
+			bullet = acc("\u25CF");
+		}
+	}
+	const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
+	// `Eye: ● ON (Clef Flash)` -> the base before the first colon, the backend in the trailing parentheses.
+	const base = clean.split(":")[0]!.trim() || "Eye";
+	const at = clean.lastIndexOf("(");
+	const backend = at >= 0 && clean.trimEnd().endsWith(")") ? clean.slice(at, clean.lastIndexOf(")") + 1).trim() : "";
+	// One space, not the two the previous glyph needed: \uf21b's ink fits its own cell, so the label sits
+	// right after it. The space before the backend stays outside the dim run, so the modifier does not
+	// start with a painted blank.
+	return `${acc("\uf21b")} ${soft(`${base}:`)} ${bullet} ${soft(label)}${backend ? ` ${dim(backend)}` : ""}`;
+}
+
+/**
  * The ponytail status cell. The horse lives at U+EF04 (fa-horse). U+EF51
  * (fa-circle_radiation) carries no outline in the Windows Nerd Font build, so it
  * renders as a blank cell there and the status silently loses its icon; U+EF04 does
@@ -948,22 +997,7 @@ export default function (pi: ExtensionAPI) {
 									return `${acc("\uf233")} ${secondarySoft(m ? m[0] : rest || "MCP")}`;
 								}
 								if (s.includes("ponytail")) return ponytailStatusLine(s, acc, dim, secondarySoft);
-								if (s.includes("jev-eye")) {
-									const isOff = s.includes("OFF") || s.includes("○");
-									const isReview = /REVIEW/i.test(s);
-									let bullet = isOff ? dim("○") : acc("●");
-									if (isReview) {
-										try {
-											bullet = theme.fg("warning", "●");
-										} catch {
-											bullet = acc("●");
-										}
-									}
-									const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
-									// Two spaces: \uedcf's ink is wider than MCP's \uf233 or ponytail's \uef04,
-									// so it needs the extra cell to clear the label.
-									return `${acc("\uedcf")}  ${secondarySoft("Jev:")} ${bullet} ${secondarySoft(label)}`;
-								}
+								if (isJevEyeStatus(s)) return jevEyeStatusLine(s, acc, dim, secondarySoft, theme);
 								let clean = stripAnsi(s);
 								clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
 								return secondarySoft(clean.trim());
@@ -1437,6 +1471,58 @@ if (isMain(import.meta.url)) {
 	assert(ponyLine.includes("\uef04"), "the ponytail status renders the \\uef04 horse, not the blank \\uef51");
 	assert(!ponyLine.includes("\uef51"), "the blank \\uef51 glyph must never come back");
 	assert(ponytailStatusLine("ponytail: LITE", (s) => s, (s) => s, (s) => s).includes("LITE"), "the ponytail mode is read from the status text");
+
+	// Self-check: the status router must recognise the pi-jev-eye cell by the label its VALUE carries.
+	// The old test was `value.includes("jev-eye")`, and the value is `Eye: ● ON (Clef Flash)` — no
+	// `jev-eye` anywhere — so the branch went false and the cell silently lost its icon and dim suffix.
+	// This pins the recognition rule itself, at the same place the router uses it.
+	assert(isJevEyeStatus("Eye: ● ON (Clef Flash)"), "the value pi-jev-eye publishes is recognised as its own cell");
+	assert(isJevEyeStatus("Eye: ○ OFF (Jev)"), "and so is every other mode's value");
+	assert(!isJevEyeStatus("Jev: ● ON"), "the previous format is not claimed as this cell");
+	assert(!isJevEyeStatus("MCP: 2 servers enabled"), "and neither is another extension's status");
+	assert(
+		!stripAnsi("Eye: ● ON (Clef Flash)").includes("jev-eye"),
+		"the value carries no internal key name, which is what broke the old matcher",
+	);
+
+	// Self-check: the pi-jev-eye status cell. The value is `Eye: ● MODE (Backend)`; the backend is read out
+	// of that string rather than hardcoded, and it takes `dim` while the base label and the state stay
+	// readable — a backend painted like the label would bury `Eye: ● ON`, which is the case this cell
+	// exists for. Both footer formats the operator asked for are pinned here.
+	const jevPlain = (s: string) => s;
+	const jevDim = (s: string) => `[dim]${s}[/dim]`;
+	assert(
+		jevEyeStatusLine("Eye: ● ON (Clef Flash)", jevPlain, jevDim, jevPlain, undefined) ===
+			"\uf21b" + " Eye: ● ON [dim](Clef Flash)[/dim]",
+		"Clef Flash is dim while `Eye:` and the state are not",
+	);
+	assert(
+		jevEyeStatusLine("Eye: ● ON (Jev)", jevPlain, jevDim, jevPlain, undefined) === "\uf21b" + " Eye: ● ON [dim](Jev)[/dim]",
+		"TypeSafe and OpenRouter both read as (Jev)",
+	);
+	assert(
+		jevEyeStatusLine("Eye: ● ON (Clef)", jevPlain, jevDim, jevPlain, undefined) === "\uf21b" + " Eye: ● ON [dim](Clef)[/dim]",
+		"the untiered Clef model draws no tier word",
+	);
+	assert(
+		jevEyeStatusLine("Eye: ● ON (Clef Omni)", jevPlain, jevDim, jevPlain, undefined) === "\uf21b" + " Eye: ● ON [dim](Clef Omni)[/dim]",
+		"a model added upstream draws its own tier",
+	);
+	assert(
+		jevEyeStatusLine("Eye: ○ OFF (Jev)", jevPlain, jevDim, jevPlain, undefined) === "\uf21b" + " Eye: [dim]○[/dim] OFF [dim](Jev)[/dim]",
+		"OFF takes the dim bullet",
+	);
+	assert(
+		jevEyeStatusLine("Eye: ● REVIEW (Clef Flash)", jevPlain, jevDim, jevPlain, { fg: (color, text) => `<${color}>${text}</${color}>` }) ===
+			"\uf21b" + " Eye: <warning>●</warning> REVIEW [dim](Clef Flash)[/dim]",
+		"REVIEW keeps the warning bullet",
+	);
+	// A value with no parenthesised backend (an older pi-jev-eye) must not gain a stray `(`: the suffix is
+	// drawn only when the value actually carries one.
+	assert(
+		jevEyeStatusLine("Eye: ● ON", jevPlain, jevDim, jevPlain, undefined) === "\uf21b" + " Eye: ● ON",
+		"no backend suffix means no parenthesis, never a guessed one",
+	);
 
 	// Self-check: session age survives /resume (header timestamp wins over now).
 	const NOW = Date.parse("2026-10-08T12:00:00.000Z");

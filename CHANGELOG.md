@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **The cell was invisible: the footer still matched the value on `jev-eye`.** The value became `Eye: ● ON (Clef Flash)`, which contains no `jev-eye` anywhere, so `value.includes("jev-eye")` went false and the whole cell fell through to the generic path — no icon, no dim backend suffix, just grey text. The router now recognises the cell by the label its value carries (`isJevEyeStatus`, `^\s*Eye\s*:`), and the self-check pins that rule from both sides: every mode's real value is recognised, `Jev: ● ON` and `MCP: 2 servers enabled` are not, and the value is asserted to contain no internal key name. Proved negative: reverting the rule to the substring test makes both `node extensions/footer.ts` and pi-jev-eye's `render-check` fail.
+- **One space after the glyph, not two.** The two spaces existed because the previous glyph's ink overran its cell (`\uedcf`); with `\uf21b` in place they read as a gap in `  Eye: ● ON (Clef Flash)`. Pinned in pi-jev-eye's render check as one space, with an explicit assert that the glyph is not followed by two.
+- **The cell glyph is U+F21B (`fa-user_secret`), chosen by the operator.** U+EDCF (`fa-user_shield`) was the previous one; both exist in JetBrainsMono Nerd Font, and the codepoint is pinned by number in pi-jev-eye's render check because a Nerd glyph that renders blank on another platform is the bug the ponytail cell had (`\uf51` -> `\uef04`).
+- **The pi-jev-eye status cell renders `Eye: ● ON (Backend)`, parsed from the value instead of hardcoded.** The format is `Eye: ● ON (Clef Flash)` when a Clef model answers and `Eye: ● ON (Jev)` when TypeSafe or OpenRouter does. `jevEyeStatusLine()` reads the label before the first colon and the backend from the trailing parentheses — so nothing about the cell is a literal in this repo, and an older pi-jev-eye value with no suffix gains no guessed one.
+- **The backend suffix takes `dim`, while `Eye:` and the state keep their tiers.** A backend painted like the label would bury `Eye: ● ON`, which is the case this cell exists for; the spaced `Clef Flash` (not a nested `clef (flash)`) reads as one label on a single line.
+- **The status line moved out of the render closure**, next to `ponytailStatusLine`, so the self-check in `node extensions/footer.ts` drives the exact path the footer uses instead of a copy of it.
+
+### Added
+- Self-check for the pi-jev-eye cell: both requested forms (`Eye: ● ON (Clef Flash)`, `Eye: ● ON (Jev)`), the tierless `(Clef)`, an upstream `(Clef Omni)`, `OFF` taking the dim bullet, `REVIEW` keeping its warning bullet, and a suffix-less value drawing no parenthesis.
+
 ## [0.5.2] - 2026-10-13
 
 ### Fixed
