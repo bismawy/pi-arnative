@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import register, { armIdleProbe, clock, formatDuration, isPointerOrFocusInput, repaintIdle, stopIdleProbe, wrapInputListener } from "../extensions/footer.ts";
+import register, { armIdleProbe, clock, formatDuration, repaintIdle, stopIdleProbe, wrapInputListener } from "../extensions/footer.ts";
 
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const EXPAND_KEY = Symbol.for("pi-arnative.minimalFooter.expanded");

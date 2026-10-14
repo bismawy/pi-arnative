@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- A new session showed the previous session's token counts. The footer's 2s `getUsage` cache is keyed on branch length, and the module is not re-imported by `/new`, so a fresh session whose branch happened to reach the same length read the cached sums instead of its own. The cache is now cleared in the non-reload `session_start` branch (`extensions/footer.ts`).
+
+### Changed
+- Dropped two unused imports (`CustomMessageComponent`, `isPointerOrFocusInput`) and corrected three stale statements: the usage estimate comment named `prices.json` where the code reads `models.json`, the footer header listed two of the three footer presets, and the README's local-test snippet ran one extension where `npm run dev` runs all eight (`extensions/ui-render-tweaks.ts`, `lib/usage-store.ts`, `extensions/footer.ts`, `test/footer-minimal.test.ts`, `README.md`).
+
 ## [0.5.2] - 2026-10-13
 
 ### Fixed

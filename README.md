@@ -46,7 +46,7 @@ Apply a theme via `/settings` → **Theme** → `arnative` (or variant). Require
 
 To test locally:
 ```bash
-pi --extension ./extensions/footer.ts
+npm run dev
 ```
 
 ## Shortcuts
