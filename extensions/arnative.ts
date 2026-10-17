@@ -83,10 +83,6 @@ interface ListPickerHooks {
 	/** `g`: toggle a screen-level switch (Animations → gradient). Only a screen that passes
 	 *  this hook reacts to the key, so `g` stays a plain letter everywhere else. */
 	toggleGradient?: () => void;
-	/** Note re-read on every render, so a row can animate (Animations → a moving frame). */
-	note?: (label: string) => string | undefined;
-	/** Repaint cadence for an animated note; the frame itself is read from the clock. */
-	tickMs?: number;
 	/** Note re-read on every render, so a row can animate (Animations → a moving frame).
 	 *  Returning undefined keeps the row's static note. */
 	note?: (label: string) => string | undefined;
