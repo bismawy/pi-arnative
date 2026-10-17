@@ -18,7 +18,7 @@ import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
-import { EDITOR_KEY, activeSpinnerPreset } from "./animations.ts";
+import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../lib/spinner.ts";
 
 // ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
@@ -212,15 +212,6 @@ export function currentToolVerb(active: ReadonlyMap<string, string>): string {
 }
 
 /**
- * The pi-jev-eye status cell: `Eye: ● MODE (Backend)`. pi-jev-eye writes the value plain because a status
- * is a fact, not a layout; this decides the painting.
- *
- * The trailing parenthesised backend is a modifier, so it takes `dim` while the `Eye:` label and the state
- * keep the soft and state tiers — that is what makes `(Clef Flash)` recede and `Eye: ● ON` stay readable
- * at a glance. The backend name itself is read out of the value, never hardcoded here: the extension
- * reports the active backend from `/jev-eye models`, so the footer cannot know it in advance.
- */
-/**
  * Is this status value pi-jev-eye's own cell? It is matched on the LABEL the value carries (`Eye:`), not on
  * the internal key name: the value is `Eye: ● ON (Clef Flash)` and contains no `jev-eye` anywhere, so the
  * old `value.includes("jev-eye")` test went false and the whole cell fell through to the generic path —
@@ -231,6 +222,15 @@ export function currentToolVerb(active: ReadonlyMap<string, string>): string {
  */
 export const isJevEyeStatus = (status: string): boolean => /^\s*Eye\s*:/i.test(stripAnsi(status));
 
+/**
+ * The pi-jev-eye status cell: `Eye: ● MODE (Backend)`. pi-jev-eye writes the value plain because a status
+ * is a fact, not a layout; this decides the painting.
+ *
+ * The trailing parenthesised backend is a modifier, so it takes `dim` while the `Eye:` label and the state
+ * keep the soft and state tiers — that is what makes `(Clef Flash)` recede and `Eye: ● ON` stay readable
+ * at a glance. The backend name itself is read out of the value, never hardcoded here: the extension
+ * reports the active backend from `/jev-eye models`, so the footer cannot know it in advance.
+ */
 export function jevEyeStatusLine(
 	status: string,
 	acc: (text: string) => string,
@@ -1079,7 +1079,7 @@ export default function (pi: ExtensionAPI) {
 					if (!indicator) return;
 					// Clear renderIndicatorVerbatim so custom frames pass through spinnerColorFn.
 					indicator.renderIndicatorVerbatim = false;
-					indicator.spinnerColorFn = spinnerPainter(activeSpinnerPreset(), this.getActiveTheme());
+					indicator.spinnerColorFn = spinnerPainter(activeSpinnerPreset(), this.getActiveTheme(), activeSpinnerGradient());
 					indicator.messageColorFn = (text: string) => {
 						try {
 							const th = this.getActiveTheme();

@@ -3,26 +3,36 @@
  * Single source of truth for frames, cadence, and colours.
  */
 import { assert, isMain } from "./check.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
+/** Picker order: the escape hatch first, this package's own spinner second, then the rest
+ *  alphabetically. `Pi (system)` and `Arnative` are not sorted in — they are the two rows a
+ *  user is most likely to want and they should never move. */
 export const SPINNER_PRESETS = [
 	"Pi (system)",
-	"Diamond Glow",
-	"Diamond Pulse",
-	"Circle Pulse",
-	"Circle Wave",
-	"Shade Wave",
+	"Arnative",
+	"Arrow Orbit",
 	"Braille Column",
 	"Braille Level",
-	"Kanji Count",
-	"Suzhou Tally",
-	"Gemini",
+	"Circle Pulse",
+	"Circle Wave",
 	"Claude",
+	"Diamond Glow",
+	"Diamond Pulse",
+	"Dot Spine",
+	"Gemini",
+	"Kanji Count",
+	"Pacman",
+	"Shade Wave",
+	"Suzhou Tally",
 ] as const;
 export type SpinnerPreset = (typeof SPINNER_PRESETS)[number];
-export const DEFAULT_SPINNER_PRESET: SpinnerPreset = "Diamond Glow";
+export const DEFAULT_SPINNER_PRESET: SpinnerPreset = "Arnative";
 
 /** Persistence key in `arnative-config.json` (see `lib/preset-store.ts`). */
 export const SPINNER_PRESET_KEY = "spinnerPreset";
+/** Persistence key for the gradient override on `accent` presets. Values: `"on"` / `"off"`. */
+export const SPINNER_GRADIENT_KEY = "spinnerGradient";
 
 interface Preset {
 	/** Animation frames. Empty leaves pi's indicator alone. */
@@ -35,17 +45,17 @@ interface Preset {
 	note: string;
 }
 
-/** Claude Code mark animation frames, adapting to Ghostty and non-macOS font fallbacks. */
-function defaultClaudeCharacters(): readonly string[] {
-	if (process.env.TERM === "xterm-ghostty") {
-		return ["\u00b7", "\u2722", "\u2733", "\u2736", "\u273b", "*"];
-	}
-	return process.platform === "darwin"
-		? ["\u00b7", "\u2722", "\u2733", "\u2736", "\u273b", "\u273d"]
-		: ["\u00b7", "\u2722", "*", "\u2736", "\u273b", "\u273d"];
-}
-
-const CLAUDE_BASE_FRAMES = defaultClaudeCharacters();
+/** Claude Code mark animation frames.
+ *
+ *  The set was rearranged for width, not taste. Measured in the terminal font (JetBrainsMono
+ *  Nerd Font), the previous set (`· ✢ * ✶ ✻ ✽`) mixed two widths: `✢` `✻` `✽` are absent from
+ *  most monospace faces, so Windows served them from a fallback font at ~1.5 cells and the label
+ *  shifted sideways on every second tick. `✤ ✻ ✽ ❋` still fall back here (measured: 1.48 cells
+ *  in Segoe UI Symbol/Emoji); only `·` `*` `✶` are genuinely monospace-native at 1.00. The frames
+ *  are pinned by codepoint in the self-check, so a silent swap cannot creep back in.
+ *  This is the *only* place in the package with fallback-width glyphs — every other preset is
+ *  either entirely native or entirely fallback, and therefore a constant width. */
+const CLAUDE_BASE_FRAMES = ["\u00b7", "\u002a", "\u2736", "\u2724", "\u273b", "\u273d", "\u274b"] as const;
 const CLAUDE_PING_PONG_FRAMES = [...CLAUDE_BASE_FRAMES, ...[...CLAUDE_BASE_FRAMES].reverse()] as const;
 
 /**
@@ -110,6 +120,17 @@ export const SPINNER_PRESET_DEFS: Record<SpinnerPreset, Preset> = {
 		paint: "accent",
 		note: "rising braille dot level fill",
 	},
+	// A dot body growing outward from a two-cell core: each frame adds one dot cell on both ends
+	// (⠂⠐ → ⠺ ⠂⠐ ⠗ → ⠺ ⠪ ⠂⠐ ⠕ ⠗). Every frame is 10 columns so the label stays put; the
+	// spacing between the cells is what makes the growth read as a body rather than a row. Named
+	// off the `Braille *` prefix so it does not read as a third variant of the two above; the
+	// note still says braille, which is what the glyphs are.
+	"Dot Spine": {
+		frames: ["    \u2802\u2810    ", "  \u283a \u2802\u2810 \u2817  ", "\u283a \u282a \u2802\u2810 \u2815 \u2817"],
+		intervalMs: 200,
+		paint: "accent",
+		note: "braille dot body growing out from the centre, 3 frames",
+	},
 	// Kanji stroke count: one, two, three lines (一 二 三).
 	"Kanji Count": {
 		frames: ["\u4e00", "\u4e8c", "\u4e09"],
@@ -124,6 +145,33 @@ export const SPINNER_PRESET_DEFS: Record<SpinnerPreset, Preset> = {
 		paint: "accent",
 		note: "vertical tally bars, one to three",
 	},
+	// A four-arrow ring turning clockwise one position per frame (▴▸▾◂ ▸▾◂▴ ▾◂▴▸ ◂▴▸▾).
+	// 200ms × 4 matches Diamond Glow: one full turn per 0.8s.
+	"Arrow Orbit": {
+		frames: ["\u25b4\u25b8\u25be\u25c2", "\u25b8\u25be\u25c2\u25b4", "\u25be\u25c2\u25b4\u25b8", "\u25c2\u25b4\u25b8\u25be"],
+		intervalMs: 200,
+		paint: "accent",
+		note: "four-arrow ring, turning clockwise",
+	},
+	// The package's own spinner, and the default: a spark and a braille cell trading places
+	// around the centre. The trailing space in two frames is load-bearing: both cells are one
+	// column wide, so dropping it would shift the label by a column every second frame.
+	"Arnative": {
+		frames: [" \u2727\u2819", " \u2727\u28e0", "\u28c4\u2727 ", "\u280b\u2726 "],
+		intervalMs: 200,
+		paint: "accent",
+		note: "spark and dot cell circling, the Arnative mark",
+	},
+	// Pacman eating his way across the row, one cell per frame, with the trail behind him
+	// (`~` = ghost tail, `+ − ×` = the pellets still ahead). Every frame is 7 columns so the
+	// label stays put; `ᗧ` is U+15E7, the Canadian Syllabics `ye`, the glyph the pacman CLI
+	// spinners use because it reads as an open mouth facing right.
+	Pacman: {
+		frames: ["\u15e7 + \u2212 \u00d7", "~ \u15e7 \u2212 \u00d7", "~ ~ \u15e7 \u00d7", "~ ~ ~ \u15e7"],
+		intervalMs: 200,
+		paint: "accent",
+		note: "pacman eating the pellets, 4 frames",
+	},
 	// Gemini CLI's spinner is the `dots` entry from the `cli-spinners` package, the same
 	// Braille set pi ships; what makes it Gemini is the Google brand gradient sweeping the
 	// glyph on a 4s cycle (GeminiSpinner.tsx paints `CliSpinner` through `tinygradient`).
@@ -133,8 +181,9 @@ export const SPINNER_PRESET_DEFS: Record<SpinnerPreset, Preset> = {
 		paint: "gradient",
 		note: "pi's Braille + Google gradient",
 	},
-	// Claude Code's mark animation: ping-pong loop of dingbats swelling and contracting,
-	// matching upstream SpinnerAnimationRow (120ms per frame).
+	// Claude Code's mark animation: ping-pong loop of marks swelling and contracting, following
+	// upstream's cadence. Three of the seven frames are served by a fallback font on a machine
+	// without the full Dingbats block, so the note names them instead of promising a smooth row.
 	Claude: {
 		frames: CLAUDE_PING_PONG_FRAMES,
 		intervalMs: 120,
@@ -174,18 +223,36 @@ export function googleGradientRgb(t: number): [number, number, number] {
 /** Truecolor SGR for one glyph. pi's own `fg` cannot take a raw RGB, so the escape is ours. */
 const fgRgb = ([r, g, b]: readonly [number, number, number]): string => `\x1b[38;2;${r};${g};${b}m`;
 
-/** Painter for a preset's spinner; gradient and claude use fixed branding, accent uses theme. */
+/**
+ * How long one full sweep of the brand gradient takes, in ms.
+ *
+ * The frame interval decides how many steps the sweep gets, so the step size — what the eye reads
+ * as smooth or as stepping — is `cycle / interval`. At 4s a 200ms preset moves up to 65 RGB units
+ * per frame, which reads as a strobe rather than a sweep; 20s brings that to 13 (measured:
+ * `200ms` 64.9 → 13.2, `80ms` 26.2 → 5.7 max delta). 20s is also slow enough to stay readable on
+ * `Pi (system)`, where the same sweep would otherwise finish in one blink.
+ */
+export const GRADIENT_CYCLE_MS = 20000;
+
+/** The Google sweep, shared by the `gradient` presets and the `accent` override. */
+const gradientPainter = (text: string): string => `${fgRgb(googleGradientRgb(Date.now() / GRADIENT_CYCLE_MS))}${text}\x1b[0m`;
+
+/** Painter for a preset's spinner; gradient and claude use fixed branding, accent uses theme.
+ *
+ *  `gradient` is the `/arnative` → Animations `[g]` override. It only reaches presets whose
+ *  own paint mode is `accent`: `Gemini` is already the brand sweep, and `Claude` carries its
+ *  own mark colour, so overriding either would erase what the preset exists to be. */
 export function spinnerPainter(
 	preset: SpinnerPreset,
 	theme: { fg?(color: string, text: string): string } | null,
+	gradient = false,
 ): (text: string) => string {
 	const def = SPINNER_PRESET_DEFS[preset];
-	if (def.paint === "gradient") {
-		return (text) => `${fgRgb(googleGradientRgb(Date.now() / 4000))}${text}\x1b[0m`;
-	}
+	if (def.paint === "gradient") return gradientPainter;
 	if (def.paint === "claude") {
 		return (text) => `${fgRgb(CLAUDE_RGB)}${text}\x1b[0m`;
 	}
+	if (gradient) return gradientPainter;
 	const fg = theme?.fg?.bind(theme);
 	if (!fg) return (text) => text;
 	return (text) => fg("accent", text);
@@ -196,6 +263,19 @@ export function previewFrames(preset: SpinnerPreset): string {
 	const def = SPINNER_PRESET_DEFS[preset];
 	const frames = def.frames.length > 0 ? def.frames : SPINNER_PRESET_DEFS.Gemini.frames;
 	return frames.join(" ");
+}
+
+/** The frame a live preview should show at `now`, and the width to reserve for it.
+ *
+ *  The picker animates the selected row from the wall clock instead of a stored counter, so a
+ *  dropped repaint cannot desynchronise it — the index is a function of `now`. The width is the
+ *  widest frame, so the row does not jump as the cell changes. */
+export function previewFrameAt(preset: SpinnerPreset, now = Date.now()): { text: string; width: number } {
+	const def = SPINNER_PRESET_DEFS[preset];
+	const frames = def.frames.length > 0 ? def.frames : SPINNER_PRESET_DEFS.Gemini.frames;
+	const intervalMs = def.frames.length > 0 ? def.intervalMs : 80;
+	const index = Math.floor(now / intervalMs) % frames.length;
+	return { text: frames[index]!, width: Math.max(...frames.map((f) => [...f].length)) };
 }
 
 
@@ -234,13 +314,56 @@ if (isMain(import.meta.url)) {
 		assert(/^[\u25a0-\u25ff\u2b00-\u2bff]$/.test(f), `Diamond Glow frame ${f} is a geometric shape`);
 	}
 
-	// Claude preset: upstream dingbats in ping-pong order, matching Claude Code.
+	// Claude preset: ping-pong order, matching Claude Code.
 	const claude = SPINNER_PRESET_DEFS.Claude.frames;
 	assert(claude[0] === "\u00b7", "Claude starts on the interpunct");
-	assert(claude.length === 12, "Claude uses a 12-frame ping-pong loop");
+	assert(claude.length === 14, "Claude uses a 14-frame ping-pong loop over 7 base marks");
 	assert(SPINNER_PRESET_DEFS.Claude.intervalMs === 120, "Claude matches upstream 120ms cadence");
 	assert(claude.join("") === [...claude].reverse().join(""), "Claude's ping-pong frames are a palindrome");
-	for (const f of claude) assert(f !== " " && f.length === 1, `Claude frame ${JSON.stringify(f)} is one glyph`);
+	assert(
+		claude.join("") === "\u00b7\u002a\u2736\u2724\u273b\u273d\u274b\u274b\u273d\u273b\u2724\u2736\u002a\u00b7",
+		"Claude's base marks are pinned by codepoint",
+	);
+	// Every frame must be one column by the Unicode width tables — that catches a fullwidth or
+	// CJK mark slipped in. It cannot catch the *real* failure mode (a glyph the terminal font
+	// lacks, served ~1.5 cells wide by a fallback font), because that width is a font property
+	// and is invisible from here. Those frames are pinned by codepoint above instead, so the set
+	// cannot change silently.
+	assert(
+		claude.every((f) => visibleWidth(f) === 1),
+		`Claude frames must be single-column, got ${claude.filter((f) => visibleWidth(f) !== 1).join(" ")}`,
+	);
+
+	// Arrow Orbit, Arnative and Pacman each draw several glyphs per frame, so every frame must
+	// be the same width or the label jumps sideways each tick. Pinned by codepoint: a font
+	// fallback that swaps one arrow/star for a double-width glyph is exactly what this catches.
+	const arrow = SPINNER_PRESET_DEFS["Arrow Orbit"].frames;
+	assert(arrow.join("|") === "\u25b4\u25b8\u25be\u25c2|\u25b8\u25be\u25c2\u25b4|\u25be\u25c2\u25b4\u25b8|\u25c2\u25b4\u25b8\u25be", "Arrow Orbit turns clockwise one position per frame");
+	const spark = SPINNER_PRESET_DEFS.Arnative.frames;
+	assert(spark.join("|") === " \u2727\u2819| \u2727\u28e0|\u28c4\u2727 |\u280b\u2726 ", "Arnative frames as specified");
+	const pacman = SPINNER_PRESET_DEFS.Pacman.frames;
+	assert(
+		pacman.join("|") === "\u15e7 + \u2212 \u00d7|~ \u15e7 \u2212 \u00d7|~ ~ \u15e7 \u00d7|~ ~ ~ \u15e7",
+		"Pacman eats one cell per frame",
+	);
+	// The mouth moves one cell right each frame, so the glyph's column is the frame index.
+	for (const [i, frame] of pacman.entries()) {
+		assert([...frame].indexOf("\u15e7") === i * 2, `Pacman frame ${i} puts the mouth in column ${i * 2}`);
+	}
+	assert(DEFAULT_SPINNER_PRESET === "Arnative", "a fresh install gets the Arnative spinner");
+	const worm = SPINNER_PRESET_DEFS["Dot Spine"].frames;
+	assert(
+		worm.join("|") === "    \u2802\u2810    |  \u283a \u2802\u2810 \u2817  |\u283a \u282a \u2802\u2810 \u2815 \u2817",
+		"Dot Spine frames as specified",
+	);
+	// The core `⠂⠐` sits at columns 4-5 in every frame and the body grows outward around it, so
+	// the centre never drifts; the glyph count grows 2 → 4 → 6.
+	for (const frame of worm) assert([...frame].slice(4, 6).join("") === "\u2802\u2810", `Dot Spine keeps its core centred: ${JSON.stringify(frame)}`);
+	assert(worm.map((f) => [...f].filter((c) => c !== " ").length).join() === "2,4,6", "Dot Spine adds one cell at each end per frame");
+	for (const frames of [arrow, spark, pacman, worm]) {
+		const widths = new Set(frames.map((f) => [...f].length));
+		assert(widths.size === 1, `every frame of a multi-glyph preset is the same length: ${[...widths].join()}`);
+	}
 
 	// The gradient closes: t=1 must equal t=0, or the 4s sweep would jump at the seam.
 	assert(
@@ -259,12 +382,61 @@ if (isMain(import.meta.url)) {
 		"accent presets paint through the theme token",
 	);
 	assert(spinnerPainter("Diamond Glow", null)("x") === "x", "no theme -> identity painter, never a crash");
+
+	// The `[g]` override reaches accent presets only: the two branded presets keep their identity.
+	const override = spinnerPainter("Diamond Glow", { fg: (c, t) => `<${c}>${t}` }, true)("x");
+	assert(override.startsWith("\x1b[38;2;") && override.endsWith("x\x1b[0m"), "gradient overrides an accent preset");
+	assert(spinnerPainter("Diamond Glow", null, true)("x").startsWith("\x1b[38;2;"), "the override needs no theme");
+	assert(
+		spinnerPainter("Claude", { fg: (c, t) => `<${c}>${t}` }, true)("x").startsWith("\x1b[38;2;215;119;87m"),
+		"gradient leaves Claude's own mark colour alone",
+	);
+	// Gemini already sweeps and Claude owns its mark colour, so `[g]` must not repaint either.
+	assert(
+		spinnerPainter("Gemini", null, true) === spinnerPainter("Gemini", null),
+		"the flag is ignored on a preset that already sweeps",
+	);
+	assert(
+		spinnerPainter("Claude", null, true)("x") === spinnerPainter("Claude", null)("x"),
+		"the flag is ignored on the preset that carries a mark colour",
+	);
 	const grad = spinnerPainter("Gemini", null)("x");
 	assert(grad.startsWith("\x1b[38;2;") && grad.endsWith("x\x1b[0m"), "the gradient painter emits truecolor + reset");
+
+	// The sweep must be slow enough to read as motion: the frame interval is fixed per preset, so
+	// the step size is what the cycle decides. Pin the measured ceiling rather than a taste.
+	const stepCeiling = (intervalMs: number): number => {
+		const steps = GRADIENT_CYCLE_MS / intervalMs;
+		let worst = 0;
+		for (let i = 0; i < steps; i++) {
+			const a = googleGradientRgb(i / steps);
+			const b = googleGradientRgb((i + 1) / steps);
+			worst = Math.max(worst, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+		}
+		return worst;
+	};
+	assert(stepCeiling(200) <= 15, `the slowest preset steps <= 15 RGB units (got ${stepCeiling(200).toFixed(1)})`);
+	assert(stepCeiling(80) <= 8, `the fastest preset steps <= 8 RGB units (got ${stepCeiling(80).toFixed(1)})`);
 	assert(spinnerPainter("Claude", null)("x").startsWith("\x1b[38;2;215;119;87m"), "Claude uses its own mark colour");
 
 	assert(previewFrames("Diamond Glow").split(" ").length === 4, "the picker preview shows every Diamond frame");
 	assert(previewFrames("Pi (system)").length > 0, "Pi (system) still previews pi's Braille set");
+
+	// Picker order: the two fixed rows first, then everything else alphabetically. Pinned
+	// because a new preset must not land wherever the edit happened to be.
+	assert(SPINNER_PRESETS[0] === "Pi (system)" && SPINNER_PRESETS[1] === "Arnative", "the two fixed rows lead the picker");
+	const rest = SPINNER_PRESETS.slice(2);
+	assert(
+		rest.join() === [...rest].sort((a, b) => a.localeCompare(b)).join(),
+		`the rest is alphabetical, got ${rest.join()}`,
+	);
+	assert(new Set(SPINNER_PRESETS).size === SPINNER_PRESETS.length, "every preset name is unique");
+
+	// The live preview reads the clock, so it advances without any stored counter.
+	assert(previewFrameAt("Diamond Glow", 0).text === "\u2b25", "the preview starts on frame 0");
+	assert(previewFrameAt("Diamond Glow", 200).text === "\u25c8", "the preview advances one frame per interval");
+	assert(previewFrameAt("Diamond Glow", 800).text === "\u2b25", "the preview wraps at the end of the loop");
+	assert(previewFrameAt("Pacman", 0).width === 7, "the preview reserves the widest frame");
 
 	console.log("spinner.ts self-check OK");
 }

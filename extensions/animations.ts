@@ -15,9 +15,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadChoice, saveChoice } from "../lib/preset-store.ts";
 import {
 	DEFAULT_SPINNER_PRESET,
+	SPINNER_GRADIENT_KEY,
 	SPINNER_PRESETS,
 	SPINNER_PRESET_DEFS,
 	SPINNER_PRESET_KEY,
+	previewFrameAt,
 	previewFrames,
 	spinnerPainter,
 	type SpinnerPreset,
@@ -31,6 +33,7 @@ const ROW_DIVIDER = " · ";
 /** The arnative editor instance, published by `footer.ts` so the live spinner is reachable. */
 export const EDITOR_KEY = Symbol.for("pi-arnative.editor");
 const SPINNER_PRESET_CONFIG_KEY = Symbol.for("pi-arnative.spinnerPreset");
+const SPINNER_GRADIENT_CONFIG_KEY = Symbol.for("pi-arnative.spinnerGradient");
 
 /** The `setWorkingMessage`/`setWorkingIndicator` surface of `ctx.ui`. */
 type WorkingUi = { setWorkingIndicator?: (options?: unknown) => void } | null | undefined;
@@ -69,6 +72,22 @@ export function activeSpinnerPreset(): SpinnerPreset {
 	return SPINNER_PRESETS.includes(stored as SpinnerPreset) ? (stored as SpinnerPreset) : DEFAULT_SPINNER_PRESET;
 }
 
+/** Is the `accent` → gradient override on? Stored as `"on"`/`"off"` so an absent key reads as
+ *  off through the same allow-list path every other choice uses. */
+export function activeSpinnerGradient(): boolean {
+	const stored =
+		(globalThis as Record<symbol, unknown>)[SPINNER_GRADIENT_CONFIG_KEY] ??
+		loadChoice(SPINNER_GRADIENT_KEY, ["on", "off"] as const);
+	return stored === "on";
+}
+
+/** Flip the gradient override, persist it, and repaint the live spinner at once. */
+export function setSpinnerGradient(on: boolean): void {
+	(globalThis as Record<symbol, unknown>)[SPINNER_GRADIENT_CONFIG_KEY] = on ? "on" : "off";
+	saveChoice(SPINNER_GRADIENT_KEY, on ? "on" : "off");
+	applySpinnerPreset(activeWorkingUi(), activeWorkingTheme());
+}
+
 /**
  * Publish the choice for this process, write it to `arnative-config.json`, and install it on
  * the running session right away — the picker previews by moving the cursor, so a choice that
@@ -94,7 +113,7 @@ export function paintLiveIndicator(painter: (text: string) => string): void {
 export function applySpinnerPreset(ui: WorkingUi, theme: ThemeLike): void {
 	const preset = activeSpinnerPreset();
 	const def = SPINNER_PRESET_DEFS[preset];
-	const painter = spinnerPainter(preset, theme);
+	const painter = spinnerPainter(preset, theme, activeSpinnerGradient());
 	try {
 		if (def.frames.length === 0) ui?.setWorkingIndicator?.();
 		else ui?.setWorkingIndicator?.({ frames: [...def.frames], intervalMs: def.intervalMs });
@@ -104,12 +123,16 @@ export function applySpinnerPreset(ui: WorkingUi, theme: ThemeLike): void {
 	paintLiveIndicator(painter);
 }
 
-/** Picker text. The description states the one seam: a preset applies to the next spinner. */
-export const ANIMATIONS_PICKER_TEXT = {
-	title: "Animations - Arnative\u2819",
-	description: "The working spinner — applies on the next tool call.",
-	legend: "[↑↓] Preview  [Enter] Select  [Esc] Close",
-} as const;
+/** Picker copy. The description states the one seam: a preset applies to the next spinner.
+ *  The legend is built per call because its `[g]` row states the current mode — a constant
+ *  would keep saying `off` after the user turned it on. */
+export function animationsPickerText(): { title: string; description: string; legend: string } {
+	return {
+		title: "Animations - Arnative\u2819",
+		description: "The working spinner — applies on the next tool call.",
+		legend: `[↑↓] Preview  [g] Gradient ${activeSpinnerGradient() ? "on" : "off"}  [Enter] Select  [Esc] Close`,
+	};
+}
 
 /** One row per preset: the name, then its note and the frames it actually cycles. The
  *  frames belong in the note — a user picking an animation wants to see the glyphs, and this
@@ -124,6 +147,19 @@ export function animationRows(): Array<{ label: string; note: string }> {
 /** The row as one flat string, for the headless fallback and the self-check. */
 export function animationRowText(preset: SpinnerPreset): string {
 	return `${preset}${ROW_DIVIDER}${SPINNER_PRESET_DEFS[preset].note}  ${previewFrames(preset)}`;
+}
+
+/** Repaint cadence for the picker's animated row. Fast enough to read as motion at every
+ *  preset's own interval (the slowest is 200ms, the fastest 80ms), cheap because the row only
+ *  redraws one line. */
+export const PREVIEW_TICK_MS = 80;
+
+/** Note for one row with the frame that is live *now*, padded to the widest frame so the
+ *  text after it does not shift as the glyph changes. */
+export function animationRowNote(preset: SpinnerPreset, now = Date.now()): string {
+	const { text, width } = previewFrameAt(preset, now);
+	const pad = " ".repeat(Math.max(0, width - [...text].length));
+	return `${SPINNER_PRESET_DEFS[preset].note}  ${text}${pad}`;
 }
 
 /** Register the extension: keep the installed preset in step with the session's theme. */
@@ -150,6 +186,17 @@ if (isMain(import.meta.url)) {
 		"every row has a note",
 	);
 	assert(animationRowText("Diamond Glow").includes("\u2b25"), "the row text previews the frames");
+
+	// The picker's animated note shows exactly one live frame, padded to the widest one so the
+	// row does not shift. `animationRowNote` takes `now`, so the assertion does not race a clock.
+	assert(animationRowNote("Diamond Glow", 0).endsWith("\u2b25"), "the live note shows frame 0");
+	assert(animationRowNote("Diamond Glow", 200).endsWith("\u25c8"), "the live note advances with the clock");
+	assert(animationRowNote("Pacman", 0).endsWith("\u15e7 + \u2212 \u00d7"), "a wide frame is shown whole");
+	assert(
+		animationRowNote("Pacman", 0).length === animationRowNote("Pacman", 600).length,
+		"every frame pads to the same width, so the note never shifts",
+	);
+	assert(PREVIEW_TICK_MS <= 80, "the preview ticks at least as fast as the quickest preset");
 
 	// Installing a preset goes through pi's indicator API; `Pi (system)` passes nothing.
 	const calls: Array<Record<string, unknown> | undefined> = [];

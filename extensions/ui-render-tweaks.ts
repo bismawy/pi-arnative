@@ -1,5 +1,5 @@
 /**
- * Five small patches to pi's fullscreen renderer (render layer only, session data
+ * Six small patches to pi's fullscreen renderer (render layer only, session data
  * untouched):
  * 1. Hide pi's built-in "Reloading keybindings, extensions, skills..." box
  *    (hardcoded in handleReloadCommand, no auto-hide).
