@@ -348,6 +348,16 @@ function readTail(filePath: string, fromByte: number): Buffer | null {
 let cachedSummary: UsageSummary | null = null;
 let lastScanMs = 0;
 
+/** Drop every in-memory memo so the next scan reads the cache file and the session files
+ *  again. The self-check needs this: `forceScan` skips the 5s summary cache but still
+ *  trusts the memoized disk cache, so without it a "cold parse" test asserts a value
+ *  against itself and can never fail. */
+export function resetUsageCache(): void {
+	diskMemo = null;
+	cachedSummary = null;
+	lastScanMs = 0;
+}
+
 export function collectUsageSummary(forceScan = false): UsageSummary {
 	const now = Date.now();
 	if (!forceScan && cachedSummary && now - lastScanMs < 5000) {
@@ -536,12 +546,22 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	return cachedSummary;
 }
 
-// Match model names across id shapes ("gemini-3.8-flash", "vendor/gemini-…").
-const modelMatches = (mNameLower: string, targetLower: string): boolean =>
-	mNameLower === targetLower ||
-	mNameLower.endsWith("/" + targetLower) ||
-	mNameLower.split(":")[0] === targetLower ||
-	targetLower.endsWith("/" + mNameLower);
+/** One model id in its canonical form: trimmed, case-folded, route tag (`:free`) dropped. */
+const canonicalModel = (id: string): string => {
+	const lower = id.trim().toLowerCase();
+	const tag = lower.indexOf(":");
+	return tag === -1 ? lower : lower.slice(0, tag);
+};
+
+/** Do these two ids name the same model? Exact after `canonicalModel` — deliberately not fuzzy.
+ *
+ *  The rule used to also match a bare tail (`target.endsWith("/" + name)`), so the first run
+ *  under a new provider inherited the history of every other provider whose id ended the same
+ *  way: `river/deepseek-ai/DeepSeek-V4.1-Flash` reported wally+yarz's deepseek totals
+ *  (29.5M in / 3.2M out / 360.5M cache) as its own (2026-10-17). Two ids that differ are two
+ *  routes — billed, rate-limited and counted apart — and only the vendor knows whether a short
+ *  id and a path id are the same model, so the tab shows the tokens of the id it names. */
+const modelMatches = (mName: string, target: string): boolean => canonicalModel(mName) === canonicalModel(target);
 
 /** All-time usage for one model (same numbers as /usage; the active session is already in its own file). */
 export function getModelAllTimeUsage(modelId?: string): { input: number; output: number; cacheRead: number } {
@@ -552,10 +572,10 @@ export function getModelAllTimeUsage(modelId?: string): { input: number; output:
 	let out = 0;
 	let read = 0;
 
-	const target = modelId.toLowerCase();
+	const target = modelId;
 	for (const p of summary.providers) {
 		for (const m of p.models) {
-			if (modelMatches(m.name.toLowerCase(), target)) {
+			if (modelMatches(m.name, target)) {
 				inp += m.input;
 				out += m.output;
 				read += m.cacheRead;
