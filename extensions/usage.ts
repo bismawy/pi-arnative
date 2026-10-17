@@ -309,7 +309,7 @@ export class UsageModalComponent implements Component {
 			{
 				title: screenTitle("Usage"),
 				description: width >= 70 ? "Token, message & cache usage across all local Pi sessions." : "Usage across all local sessions.",
-				legend: this.hintText(width),
+				legend: legendUsage(width),
 			},
 			body,
 			edge,
@@ -333,10 +333,6 @@ export class UsageModalComponent implements Component {
 		if (row.estimatedCost > 0) parts.push(`~${formatCost(row.estimatedCost)} est.`);
 		const divider = soft(" · ");
 		return `${icon}${soft(capitalize(title))}${divider}${soft(parts.join(" · "))}`;
-	}
-
-	private hintText(width: number): string {
-		return legendUsage(width);
 	}
 }
 
