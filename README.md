@@ -23,29 +23,8 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 <summary><b>Configuration & Presets</b></summary>
 
 ### Working Spinner Presets
-Configurable via `/arnative` → **Animations** (saved to `arnative-config.json`). The picker
-leads with `Pi (system)` and `Arnative`, then lists the rest alphabetically, and the selected
-row **animates** — the glyph after its note is the preset's live frame, ticking at 80ms, not a
-static glyph list.
-- `Arnative` (default — spark `✧` + dot cell circling, `✧⠙` → `✧⣠` → `⣄✧` → `⠋✦`)
-- `Diamond Glow`, `Diamond Pulse`, `Circle Pulse`, `Circle Wave`, `Shade Wave`
-- `Braille Column`, `Braille Level`, `Kanji Count`, `Suzhou Tally`
-- `Bagua Trigram` (I Ching trigrams `☶` → `☵` → `☳` — mountain, water, thunder)
-- `Yin Yang Lines` (I Ching digrams `⚌` → `⚎` → `⚍` → `⚏` — a broken yin line travels through
-  the two, all four glyphs coming from one fallback face at one width so the row stays put)
-- `Dot Spine` (a braille dot body growing out from the centre, `⠂⠐` → `⠺ ⠂⠐ ⠗` → `⠺ ⠪ ⠂⠐ ⠕ ⠗`)
-- `Arrow Orbit` (four-arrow ring `▴▸▾◂`, one position per 200ms frame)
-- `Pacman` (`ᗧ + − ×` → `~ ᗧ − ×` → `~ ~ ᗧ ×` → `~ ~ ~ ᗧ`, eating one cell per frame)
-- `Pi (system)`, `Gemini` (Google gradient sweep), and `Claudeon` (`· * ⋆ ✶`, an 8-frame pulse,
-  **inspired by Claude** — every frame is a glyph the monospace faces themselves carry, so it
-  advances exactly one cell; a glyph the font lacks is served ~1.5 cells wide by a fallback font
-  and walks the label)
-
-Press `[g]` inside the Animations screen to paint every `accent` preset with the Google
-brand sweep instead of the theme accent. The switch is saved as `spinnerGradient` and
-leaves `Gemini` and `Claudeon` alone — those presets are their own colour. One sweep takes
-20s (`GRADIENT_CYCLE_MS`): the frame interval is fixed per preset, so the cycle is what
-keeps the colour step readable — 13 RGB units per frame at 200ms, 6 at 80ms.
+Configurable via `/arnative` → **Animations** (saved to `arnative-config.json`).
+Features 18 presets with live animated preview in the picker (`Arnative` as default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle Google brand gradient sweep on accent presets.
 
 ### Footer Presets
 Configurable via `/arnative` → **Footers**:
