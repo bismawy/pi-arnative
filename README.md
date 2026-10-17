@@ -33,9 +33,9 @@ static glyph list.
 - `Dot Spine` (a braille dot body growing out from the centre, `⠂⠐` → `⠺ ⠂⠐ ⠗` → `⠺ ⠪ ⠂⠐ ⠕ ⠗`)
 - `Arrow Orbit` (four-arrow ring `▴▸▾◂`, one position per 200ms frame)
 - `Pacman` (`ᗧ + − ×` → `~ ᗧ − ×` → `~ ~ ᗧ ×` → `~ ~ ~ ᗧ`, eating one cell per frame)
-- `Pi (system)`, `Gemini` (Google gradient sweep), and `Claude` (`· * ⋆ ✶ ❋ ✤`, a 12-frame
-  pulse; frames are picked for cell width in a monospace font, since a glyph the terminal lacks is
-  served ~1.5 cells wide by a fallback font and shifts the label — `❋` and `✤` still do)
+- `Pi (system)`, `Gemini` (Google gradient sweep), and `Claude` (`· * ⋆ ✶`, an 8-frame pulse;
+  every frame is a glyph the monospace faces themselves carry, so it advances exactly one cell —
+  a glyph the font lacks is served ~1.5 cells wide by a fallback font and walks the label)
 
 Press `[g]` inside the Animations screen to paint every `accent` preset with the Google
 brand sweep instead of the theme accent. The switch is saved as `spinnerGradient` and
