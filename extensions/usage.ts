@@ -13,7 +13,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
 import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
 import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
-import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, type UsageSummary } from "../lib/usage-store.ts";
+import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -386,7 +386,7 @@ if (isMain(import.meta.url)) {
 	const asst = (model: string, input: number) => JSON.stringify({ message: { role: "assistant", provider: "google", model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0.02 } } } });
 	writeFileSync(
 		join(fixture, "sessions", "proj", "a.jsonl"),
-		[JSON.stringify({ message: { role: "user", content: "hi" } }), asst("gemini-3.8-flash", 100), asst("gemini-3.8-flash", 50), asst("other-model", 7)].join(String.fromCharCode(10)),
+		[JSON.stringify({ message: { role: "user", content: "hi" } }), asst("gemini-3.8-flash", 100), asst("gemini-3.8-flash", 50), asst("other-model", 7)].join(String.fromCharCode(10)) + String.fromCharCode(10),
 	);
 
 	const summary = collectUsageSummary(true);
@@ -419,6 +419,9 @@ if (isMain(import.meta.url)) {
 	const incremental = JSON.stringify(getModelAllTimeUsage("gemini-3.8-flash"));
 	const cacheRaw = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, unknown>;
 	// Drop the cache (as a fresh machine, or a version bump, would) and rescan the whole file.
+	// Writing `{}` is not enough on its own: the disk cache is memoized per process, so the
+	// memo would answer and this assert would compare a value against itself, never failing.
+	resetUsageCache();
 	writeFileSync(join(fixture, "arnative-usage-cache.json"), "{}", "utf8");
 	collectUsageSummary(true);
 	assert(
@@ -445,13 +448,28 @@ if (isMain(import.meta.url)) {
 	// These use a provider that reports NO cost (cost.total = 0), which is the case the estimate
 	// exists for; `asst` above reports 0.02 per message and would be priced by the provider.
 	mkdirSync(join(fixture, "sessions", "ui"), { recursive: true });
-	const freeAsst = (model: string, input: number) =>
-		JSON.stringify({ message: { role: "assistant", provider: "wally", model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0 } } } });
+	const freeAsstOf = (provider: string, model: string, input: number) =>
+		JSON.stringify({ message: { role: "assistant", provider, model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0 } } } });
+	const freeAsst = (model: string, input: number) => freeAsstOf("wally", model, input);
 	writeFileSync(
 		join(fixture, "sessions", "ui", "rows.jsonl"),
-		[freeAsst("gemini-3.8-flash", 100), freeAsst("other-model", 7)].join(String.fromCharCode(10)),
+		[
+			freeAsst("gemini-3.8-flash", 100),
+			freeAsst("other-model", 7),
+			// The shipped shape of the collision: a bare id and, on another provider, a path id
+			// that merely ENDS with it. Suffix matching folded the second into the first, so a first
+			// run under `river/…` showed wally+yarz's 29.5M/3.2M/360.5M as if it were its own.
+			freeAsst("deepseek-v4.1-flash", 300),
+			freeAsstOf("9router", "river/deepseek-ai/DeepSeek-V4.1-Flash", 200),
+		].join(String.fromCharCode(10)),
 	);
 	collectUsageSummary(true);
+
+	// Per-id totals: a model id reports its own tokens only, whatever it is a suffix of.
+	assert(getModelAllTimeUsage("deepseek-v4.1-flash").input === 300, "a bare id does not absorb a longer id that ends with it");
+	assert(getModelAllTimeUsage("river/deepseek-ai/DeepSeek-V4.1-Flash").input === 200, "a path id counts its own provider's tokens only");
+	assert(getModelAllTimeUsage("RIVER/DeepSeek-AI/deepseek-V4.1-Flash").input === 200, "case still does not split one model's history");
+	assert(getModelAllTimeUsage("deepseek-v4.1-flash:free").input === 300, "a route tag folds into the model it tags");
 
 	// Cost estimation: unpriced pairs use rates declared automatically in models.json.
 	assert(loadPriceTable() !== null && Object.keys(loadPriceTable()).length === 0, "no models.json rates means an empty table");
