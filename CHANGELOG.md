@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0] - 2026-10-17
 
 ### Fixed
 - **A model id no longer reports another route's tokens.** The match rule also accepted a stored name the target merely *ends* with (`target.endsWith("/" + name)`), so a first run under `river/deepseek-ai/DeepSeek-V4.1-Flash` showed wally+yarz's `deepseek-v4.1-flash` history — 29.5M in / 3.2M out / 360.5M cache reads — as its own. Matching is now exact after `canonicalModel` (trimmed, case-folded, `:route` tag dropped), so the header's Model tab and `/usage` state the tokens of the id they name. Measured on the operator's own history: River reports 148.5k in / 26.5k out / 1.6M cache reads, and the old totals stay reachable under `deepseek-v4.1-flash` (`lib/usage-store.ts`).
