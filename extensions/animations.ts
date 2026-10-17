@@ -234,7 +234,7 @@ if (isMain(import.meta.url)) {
 	pickCalls.length = 0;
 	// Instance B — a second copy of the module, like the one `arnative.ts` holds — does the pick.
 	const instanceB = await import(`./animations.ts?second=${Date.now()}`);
-	instanceB.setSpinnerPreset("Claude");
+	instanceB.setSpinnerPreset("Claudeon");
 	assert(pickCalls.length === 1, "a second module instance installs through the shared ui");
 	assert(pickCalls[0]?.frames?.[0] === "\u00b7", "the chosen preset's frames are installed, not the old ones");
 	assert(pickCalls[0]?.intervalMs === 120, "and its cadence (120ms)");

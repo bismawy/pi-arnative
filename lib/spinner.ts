@@ -16,7 +16,7 @@ export const SPINNER_PRESETS = [
 	"Braille Level",
 	"Circle Pulse",
 	"Circle Wave",
-	"Claude",
+	"Claudeon",
 	"Diamond Glow",
 	"Diamond Pulse",
 	"Dot Spine",
@@ -40,12 +40,12 @@ interface Preset {
 	/** Frame delay in ms. `0` keeps pi's interval. */
 	intervalMs: number;
 	/** How the frame is painted. */
-	paint: "accent" | "gradient" | "claude";
+	paint: "accent" | "gradient" | "claudeon";
 	/** Shown in the picker row after `·`. */
 	note: string;
 }
 
-/** Claude Code mark animation frames.
+/** The Claude Code mark, restyled: the four marks Claudeon pulses through.
  *
  *  Only one rule decides the set: every frame must be a glyph the terminal font *itself* carries,
  *  so it advances exactly one cell. A glyph the font lacks is served by a fallback font, and
@@ -183,14 +183,13 @@ export const SPINNER_PRESET_DEFS: Record<SpinnerPreset, Preset> = {
 		paint: "gradient",
 		note: "pi's Braille + Google gradient",
 	},
-	// Claude Code's mark animation: ping-pong loop of marks swelling and contracting, following
-	// upstream's cadence. Three of the seven frames are served by a fallback font on a machine
-	// without the full Dingbats block, so the note names them instead of promising a smooth row.
-	Claude: {
+	// Claudeon: a mark of our own, inspired by Claude Code's pulsing dingbats. The shape is
+	// Claude's; the glyphs are not — they are picked to be one cell wide in the terminal font.
+	Claudeon: {
 		frames: CLAUDE_PING_PONG_FRAMES,
 		intervalMs: 120,
-		paint: "claude",
-		note: "Claude Code's pulsing marks, 120ms",
+		paint: "claudeon",
+		note: "inspired by Claude — pulsing marks, 120ms",
 	},
 };
 
@@ -205,8 +204,9 @@ const GOOGLE_BRAND: ReadonlyArray<readonly [number, number, number]> = [
 	[168, 130, 234], // back to purple
 ];
 
-/** Claude Code's own spinner colour: the 256-colour grey-orange index it brands around. */
-const CLAUDE_RGB: readonly [number, number, number] = [215, 119, 87];
+/** Claude Code's own spinner colour: the grey-orange it brands around. Claudeon keeps it,
+ *  because the colour is what makes the mark read as "the Claude-style spinner". */
+const CLAUDEON_RGB: readonly [number, number, number] = [215, 119, 87];
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
@@ -239,10 +239,10 @@ export const GRADIENT_CYCLE_MS = 20000;
 /** The Google sweep, shared by the `gradient` presets and the `accent` override. */
 const gradientPainter = (text: string): string => `${fgRgb(googleGradientRgb(Date.now() / GRADIENT_CYCLE_MS))}${text}\x1b[0m`;
 
-/** Painter for a preset's spinner; gradient and claude use fixed branding, accent uses theme.
+/** Painter for a preset's spinner; gradient and claudeon use fixed branding, accent uses theme.
  *
  *  `gradient` is the `/arnative` → Animations `[g]` override. It only reaches presets whose
- *  own paint mode is `accent`: `Gemini` is already the brand sweep, and `Claude` carries its
+ *  own paint mode is `accent`: `Gemini` is already the brand sweep, and `Claudeon` carries its
  *  own mark colour, so overriding either would erase what the preset exists to be. */
 export function spinnerPainter(
 	preset: SpinnerPreset,
@@ -251,8 +251,8 @@ export function spinnerPainter(
 ): (text: string) => string {
 	const def = SPINNER_PRESET_DEFS[preset];
 	if (def.paint === "gradient") return gradientPainter;
-	if (def.paint === "claude") {
-		return (text) => `${fgRgb(CLAUDE_RGB)}${text}\x1b[0m`;
+	if (def.paint === "claudeon") {
+		return (text) => `${fgRgb(CLAUDEON_RGB)}${text}\x1b[0m`;
 	}
 	if (gradient) return gradientPainter;
 	const fg = theme?.fg?.bind(theme);
@@ -316,15 +316,16 @@ if (isMain(import.meta.url)) {
 		assert(/^[\u25a0-\u25ff\u2b00-\u2bff]$/.test(f), `Diamond Glow frame ${f} is a geometric shape`);
 	}
 
-	// Claude preset: ping-pong order, matching Claude Code.
-	const claude = SPINNER_PRESET_DEFS.Claude.frames;
-	assert(claude[0] === "\u00b7", "Claude starts on the interpunct");
-	assert(claude.length === 8, "Claude uses an 8-frame there-and-back loop over 4 base marks");
-	assert(SPINNER_PRESET_DEFS.Claude.intervalMs === 120, "Claude matches upstream 120ms cadence");
-	assert(claude.join("") === [...claude].reverse().join(""), "Claude's ping-pong frames are a palindrome");
+	// Claudeon preset: a mark of our own, inspired by Claude Code's pulsing dingbats. The
+	// attribution lives in the preset's note; the type and colour keep the `claudeon` name.
+	const claudeon = SPINNER_PRESET_DEFS.Claudeon.frames;
+	assert(claudeon[0] === "\u00b7", "Claudeon starts on the interpunct");
+	assert(claudeon.length === 8, "Claudeon uses an 8-frame there-and-back loop over 4 base marks");
+	assert(SPINNER_PRESET_DEFS.Claudeon.intervalMs === 120, "Claudeon matches upstream 120ms cadence");
+	assert(claudeon.join("") === [...claudeon].reverse().join(""), "Claudeon's ping-pong frames are a palindrome");
 	assert(
-		claude.join("") === "\u00b7\u002a\u22c6\u2736\u2736\u22c6\u002a\u00b7",
-		"Claude's base marks are pinned by codepoint",
+		claudeon.join("") === "\u00b7\u002a\u22c6\u2736\u2736\u22c6\u002a\u00b7",
+		"Claudeon's base marks are pinned by codepoint",
 	);
 	// Every frame must be one column by the Unicode width tables — that catches a fullwidth or
 	// CJK mark slipped in. It cannot catch the *real* failure mode (a glyph the terminal font
@@ -332,8 +333,8 @@ if (isMain(import.meta.url)) {
 	// and is invisible from here. Those frames are pinned by codepoint above instead, so the set
 	// cannot change silently.
 	assert(
-		claude.every((f) => visibleWidth(f) === 1),
-		`Claude frames must be single-column, got ${claude.filter((f) => visibleWidth(f) !== 1).join(" ")}`,
+		claudeon.every((f) => visibleWidth(f) === 1),
+		`Claudeon frames must be single-column, got ${claudeon.filter((f) => visibleWidth(f) !== 1).join(" ")}`,
 	);
 
 	// Arrow Orbit, Arnative and Pacman each draw several glyphs per frame, so every frame must
@@ -390,16 +391,16 @@ if (isMain(import.meta.url)) {
 	assert(override.startsWith("\x1b[38;2;") && override.endsWith("x\x1b[0m"), "gradient overrides an accent preset");
 	assert(spinnerPainter("Diamond Glow", null, true)("x").startsWith("\x1b[38;2;"), "the override needs no theme");
 	assert(
-		spinnerPainter("Claude", { fg: (c, t) => `<${c}>${t}` }, true)("x").startsWith("\x1b[38;2;215;119;87m"),
-		"gradient leaves Claude's own mark colour alone",
+		spinnerPainter("Claudeon", { fg: (c, t) => `<${c}>${t}` }, true)("x").startsWith("\x1b[38;2;215;119;87m"),
+		"gradient leaves Claudeon's own mark colour alone",
 	);
-	// Gemini already sweeps and Claude owns its mark colour, so `[g]` must not repaint either.
+	// Gemini already sweeps and Claudeon owns its mark colour, so `[g]` must not repaint either.
 	assert(
 		spinnerPainter("Gemini", null, true) === spinnerPainter("Gemini", null),
 		"the flag is ignored on a preset that already sweeps",
 	);
 	assert(
-		spinnerPainter("Claude", null, true)("x") === spinnerPainter("Claude", null)("x"),
+		spinnerPainter("Claudeon", null, true)("x") === spinnerPainter("Claudeon", null)("x"),
 		"the flag is ignored on the preset that carries a mark colour",
 	);
 	const grad = spinnerPainter("Gemini", null)("x");
@@ -419,7 +420,7 @@ if (isMain(import.meta.url)) {
 	};
 	assert(stepCeiling(200) <= 15, `the slowest preset steps <= 15 RGB units (got ${stepCeiling(200).toFixed(1)})`);
 	assert(stepCeiling(80) <= 8, `the fastest preset steps <= 8 RGB units (got ${stepCeiling(80).toFixed(1)})`);
-	assert(spinnerPainter("Claude", null)("x").startsWith("\x1b[38;2;215;119;87m"), "Claude uses its own mark colour");
+	assert(spinnerPainter("Claudeon", null)("x").startsWith("\x1b[38;2;215;119;87m"), "Claudeon uses its own mark colour");
 
 	assert(previewFrames("Diamond Glow").split(" ").length === 4, "the picker preview shows every Diamond frame");
 	assert(previewFrames("Pi (system)").length > 0, "Pi (system) still previews pi's Braille set");
