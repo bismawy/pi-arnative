@@ -50,12 +50,13 @@ interface Preset {
  *  The set was rearranged for width, not taste. Measured in the terminal font (JetBrainsMono
  *  Nerd Font), the previous set (`· ✢ * ✶ ✻ ✽`) mixed two widths: `✢` `✻` `✽` are absent from
  *  most monospace faces, so Windows served them from a fallback font at ~1.5 cells and the label
- *  shifted sideways on every second tick. `✤ ✻ ✽ ❋` still fall back here (measured: 1.48 cells
- *  in Segoe UI Symbol/Emoji); only `·` `*` `✶` are genuinely monospace-native at 1.00. The frames
- *  are pinned by codepoint in the self-check, so a silent swap cannot creep back in.
- *  This is the *only* place in the package with fallback-width glyphs — every other preset is
- *  either entirely native or entirely fallback, and therefore a constant width. */
-const CLAUDE_BASE_FRAMES = ["\u00b7", "\u002a", "\u2736", "\u2724", "\u273b", "\u273d", "\u274b"] as const;
+ *  shifted sideways on every second tick. The fullwidth `✳` (2.29 cells) is gone and the set is
+ *  now `· * ⋆ ✶ ❋ ✤` — but `❋` `✤` still fall back here (measured 1.48 cells in Segoe UI
+ *  Emoji/Symbol), so two 0.48-cell jumps remain per cycle; what changed is that only 4 of the 12
+ *  frames sit displaced, against 8 of 14 before. For a row with no displacement at all the frames
+ *  must all be monospace-native — `·` `*` `⋆` `✶` are, and nothing else in this set is.
+ *  Frames are pinned by codepoint in the self-check, so a silent swap cannot creep back in. */
+const CLAUDE_BASE_FRAMES = ["\u00b7", "\u002a", "\u22c6", "\u2736", "\u274b", "\u2724"] as const;
 const CLAUDE_PING_PONG_FRAMES = [...CLAUDE_BASE_FRAMES, ...[...CLAUDE_BASE_FRAMES].reverse()] as const;
 
 /**
@@ -317,11 +318,11 @@ if (isMain(import.meta.url)) {
 	// Claude preset: ping-pong order, matching Claude Code.
 	const claude = SPINNER_PRESET_DEFS.Claude.frames;
 	assert(claude[0] === "\u00b7", "Claude starts on the interpunct");
-	assert(claude.length === 14, "Claude uses a 14-frame ping-pong loop over 7 base marks");
+	assert(claude.length === 12, "Claude uses a 12-frame ping-pong loop over 6 base marks");
 	assert(SPINNER_PRESET_DEFS.Claude.intervalMs === 120, "Claude matches upstream 120ms cadence");
 	assert(claude.join("") === [...claude].reverse().join(""), "Claude's ping-pong frames are a palindrome");
 	assert(
-		claude.join("") === "\u00b7\u002a\u2736\u2724\u273b\u273d\u274b\u274b\u273d\u273b\u2724\u2736\u002a\u00b7",
+		claude.join("") === "\u00b7\u002a\u22c6\u2736\u274b\u2724\u2724\u274b\u2736\u22c6\u002a\u00b7",
 		"Claude's base marks are pinned by codepoint",
 	);
 	// Every frame must be one column by the Unicode width tables — that catches a fullwidth or
