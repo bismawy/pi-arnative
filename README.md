@@ -30,6 +30,9 @@ static glyph list.
 - `Arnative` (default — spark `✧` + dot cell circling, `✧⠙` → `✧⣠` → `⣄✧` → `⠋✦`)
 - `Diamond Glow`, `Diamond Pulse`, `Circle Pulse`, `Circle Wave`, `Shade Wave`
 - `Braille Column`, `Braille Level`, `Kanji Count`, `Suzhou Tally`
+- `Bagua Trigram` (I Ching trigrams `☶` → `☵` → `☳` — mountain, water, thunder)
+- `Yin Yang Lines` (I Ching digrams `⚌` → `⚎` → `⚍` → `⚏` — a broken yin line travels through
+  the two, all four glyphs coming from one fallback face at one width so the row stays put)
 - `Dot Spine` (a braille dot body growing out from the centre, `⠂⠐` → `⠺ ⠂⠐ ⠗` → `⠺ ⠪ ⠂⠐ ⠕ ⠗`)
 - `Arrow Orbit` (four-arrow ring `▴▸▾◂`, one position per 200ms frame)
 - `Pacman` (`ᗧ + − ×` → `~ ᗧ − ×` → `~ ~ ᗧ ×` → `~ ~ ~ ᗧ`, eating one cell per frame)

@@ -12,6 +12,7 @@ export const SPINNER_PRESETS = [
 	"Pi (system)",
 	"Arnative",
 	"Arrow Orbit",
+	"Bagua Trigram",
 	"Braille Column",
 	"Braille Level",
 	"Circle Pulse",
@@ -25,6 +26,7 @@ export const SPINNER_PRESETS = [
 	"Pacman",
 	"Shade Wave",
 	"Suzhou Tally",
+	"Yin Yang Lines",
 ] as const;
 export type SpinnerPreset = (typeof SPINNER_PRESETS)[number];
 export const DEFAULT_SPINNER_PRESET: SpinnerPreset = "Arnative";
@@ -146,6 +148,27 @@ export const SPINNER_PRESET_DEFS: Record<SpinnerPreset, Preset> = {
 		intervalMs: 200,
 		paint: "accent",
 		note: "vertical tally bars, one to three",
+	},
+	// Bagua trigrams (three stacked lines): mountain, water, thunder (☶ ☵ ☳). Only three of the
+	// eight are used — a spinner is a short loop, not a catalogue — and all three arrive from the
+	// same fallback face at the same width, so the row holds its place even though the terminal
+	// font itself has none of them.
+	"Bagua Trigram": {
+		frames: ["\u2636", "\u2635", "\u2633"],
+		intervalMs: 200,
+		paint: "accent",
+		note: "bagua trigrams — mountain, water, thunder",
+	},
+	// I Ching digrams: two stacked lines that go solid, then break one at a time (⚌ ⚎ ⚍ ⚏).
+	// Read as a movement, the broken (yin) line travels downward — both lines whole, the lower
+	// one breaks, the break moves up, then both are broken — and the loop restarts. All four
+	// glyphs come from one fallback face at one width, so the row is constant even though the
+	// terminal font itself has none of them.
+	"Yin Yang Lines": {
+		frames: ["\u268c", "\u268e", "\u268d", "\u268f"],
+		intervalMs: 200,
+		paint: "accent",
+		note: "I Ching digrams, a broken line travelling through two",
 	},
 	// A four-arrow ring turning clockwise one position per frame (▴▸▾◂ ▸▾◂▴ ▾◂▴▸ ◂▴▸▾).
 	// 200ms × 4 matches Diamond Glow: one full turn per 0.8s.
@@ -354,6 +377,17 @@ if (isMain(import.meta.url)) {
 		assert([...frame].indexOf("\u15e7") === i * 2, `Pacman frame ${i} puts the mouth in column ${i * 2}`);
 	}
 	assert(DEFAULT_SPINNER_PRESET === "Arnative", "a fresh install gets the Arnative spinner");
+	// The four I Ching digrams, pinned by codepoint, in the order the operator gave them.
+	const yinYang = SPINNER_PRESET_DEFS["Yin Yang Lines"].frames;
+	assert(
+		yinYang.join("|") === "\u268c|\u268e|\u268d|\u268f",
+		"Yin Yang Lines frames as specified (all whole, lower breaks, break rises, both break)",
+	);
+	assert(new Set(yinYang).size === 4, "Yin Yang Lines shows four distinct digrams");
+	// The three bagua trigrams, pinned by codepoint, in the order the operator gave them.
+	const bagua = SPINNER_PRESET_DEFS["Bagua Trigram"].frames;
+	assert(bagua.join("|") === "\u2636|\u2635|\u2633", "Bagua Trigram frames as specified (mountain, water, thunder)");
+	assert(new Set(bagua).size === 3, "Bagua Trigram shows three distinct trigrams");
 	const worm = SPINNER_PRESET_DEFS["Dot Spine"].frames;
 	assert(
 		worm.join("|") === "    \u2802\u2810    |  \u283a \u2802\u2810 \u2817  |\u283a \u282a \u2802\u2810 \u2815 \u2817",
