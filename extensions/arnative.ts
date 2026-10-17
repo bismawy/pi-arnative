@@ -14,9 +14,13 @@ import { markedLabels } from "../lib/format.ts";
 import { LEGEND_LIVE, LEGEND_MOVE, matchesBack } from "../lib/shortcuts.ts";
 import { SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
 import {
-	ANIMATIONS_PICKER_TEXT,
+	activeSpinnerGradient,
+	animationsPickerText,
 	activeSpinnerPreset,
+	animationRowNote,
 	animationRows,
+	PREVIEW_TICK_MS,
+	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
@@ -76,6 +80,18 @@ interface ListPickerHooks {
 	/** `←`: leave this screen for its parent (the menu, or the chat when there is none).
 	 *  Distinct from `cancel`/Esc, which closes or reverts the screen it is on. */
 	back?: () => void;
+	/** `g`: toggle a screen-level switch (Animations → gradient). Only a screen that passes
+	 *  this hook reacts to the key, so `g` stays a plain letter everywhere else. */
+	toggleGradient?: () => void;
+	/** Note re-read on every render, so a row can animate (Animations → a moving frame).
+	 *  Returning undefined keeps the row's static note. */
+	note?: (label: string) => string | undefined;
+	/** Repaint cadence for an animated note. The frame itself is read from the clock, so a
+	 *  missed repaint costs one frame and never desynchronises the animation. */
+	tickMs?: number;
+	/** Legend re-read on every render, for a key row that states live state
+	 *  (`[g] Gradient on`). A constant legend would keep advertising the value it opened with. */
+	legend?: () => string;
 }
 
 /** Box copy, so one picker serves every menu ("Themes - Arnative⠙", "Headers - Arnative⠙", …).
@@ -94,6 +110,7 @@ export class ListPicker implements Component {
 	private applied: string | undefined;
 	private readonly livePreview: boolean;
 	private readonly opened: string | undefined;
+	private readonly tick: ReturnType<typeof setInterval> | undefined;
 	/** Border painter, from the session's thinking level — the box follows the model. */
 	private readonly edge: (s: string) => string;
 
@@ -117,10 +134,13 @@ export class ListPicker implements Component {
 		this.applied = current;
 		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
 		this.edge = thinkingColorOf(theme, thinkingLevel);
+		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
 	invalidate(): void {}
-	dispose(): void {}
+	dispose(): void {
+		if (this.tick) clearInterval(this.tick);
+	}
 
 	/** Selected row, for callers that need the choice after `done()` resolves. */
 	get index(): number {
@@ -166,7 +186,11 @@ export class ListPicker implements Component {
 			this.move(1);
 			return;
 		}
-		if (matchesKey(keyData, "enter")) this.hooks.done();
+		if (matchesKey(keyData, "enter")) {
+			this.hooks.done();
+			return;
+		}
+		if (this.hooks.toggleGradient && matchesKey(keyData, "g")) this.hooks.toggleGradient();
 	}
 
 	render(width: number): string[] {
@@ -181,7 +205,8 @@ export class ListPicker implements Component {
 			const isSelected = i === this.selected;
 			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
 			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
-			const note = item.note ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", item.note)}` : "";
+			const noteText = this.hooks.note?.(item.label) ?? item.note;
+			const note = noteText ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", noteText)}` : "";
 			// Extract parenthetical suffix to render softly
 			const suffix = /(\(.*\))$/.exec(item.label)?.[1] ?? "";
 			const head = suffix ? item.label.slice(0, item.label.length - suffix.length) : item.label;
@@ -189,7 +214,7 @@ export class ListPicker implements Component {
 			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${paint(head)}${tail}${pad}${note}`;
 			body.push(truncateToWidth(content, width - 4, ""));
 		}
-		return renderScreen(th, width, this.text, body, edge);
+		return renderScreen(th, width, this.hooks.legend ? { ...this.text, legend: this.hooks.legend() } : this.text, body, edge);
 	}
 }
 
@@ -342,9 +367,10 @@ const openAnimations = async (ctx: ExtensionCommandContext): Promise<boolean | v
 	const rows: ListRow[] = animationRows();
 
 	if (ctx.mode !== "tui") {
-		// No custom components (RPC/headless): fall back to the blocking picker.
+		// No custom components (RPC/headless): fall back to the blocking picker. The gradient
+		// switch has no row here, so it is reported rather than silently unreachable.
 		const labels = markedLabels(SPINNER_PRESETS, opened);
-		const pick = await ctx.ui.select(ANIMATIONS_PICKER_TEXT.title, labels);
+		const pick = await ctx.ui.select(animationsPickerText().title, labels);
 		if (pick === undefined) return;
 		setSpinnerPreset(SPINNER_PRESETS[labels.indexOf(pick)]!);
 		ctx.ui.notify(`[arnative] Animation: ${SPINNER_PRESETS[labels.indexOf(pick)]}`, "info");
@@ -365,9 +391,20 @@ const openAnimations = async (ctx: ExtensionCommandContext): Promise<boolean | v
 					if (activeSpinnerPreset() !== opened) setSpinnerPreset(opened);
 					done(true);
 				},
+				// `[g]` is a switch, not a preview: it is a command the user asked for and the legend
+				// states its state, so Esc and `←` leave it on. Only the preset preview reverts.
+				toggleGradient: () => {
+					setSpinnerGradient(!activeSpinnerGradient());
+					tui.requestRender();
+				},
+				legend: () => animationsPickerText().legend,
+				// The row animates: its note is re-read each tick and the frame comes from the
+				// clock, so the picker shows motion instead of a static glyph list.
+				note: (label) => animationRowNote(label as SpinnerPreset),
+				tickMs: PREVIEW_TICK_MS,
 				requestRender: () => tui.requestRender(),
 			},
-			ANIMATIONS_PICKER_TEXT,
+			animationsPickerText(),
 			true,
 			ctx.thinkingLevel,
 		),
@@ -470,7 +507,26 @@ export function arnativeCompletions(prefix: string): AutocompleteItem[] | null {
 	return items.length > 0 ? items : null;
 }
 
+/** The theme this package ships. Applied only when pi has no theme setting of its own, so a
+ *  fresh install lands on Arnative without ever overriding a choice someone made. */
+export const DEFAULT_THEME = "arnative";
+
+/** Should the shipped theme be installed? Only when no theme is set at all (pi would fall back
+ *  to `system`) and the theme actually loaded, which a headless or filtered load may not do. */
+export function shouldApplyDefaultTheme(
+	themeSetting: string | undefined,
+	themes: readonly { name: string }[],
+): boolean {
+	return themeSetting === undefined && themes.some((t) => t.name === DEFAULT_THEME);
+}
+
 export default function (pi: ExtensionAPI) {
+	pi.on("session_start", async (_event, ctx) => {
+		// `setTheme` writes the choice into pi's settings, so this runs once per install and the
+		// second session already sees an explicit setting.
+		if (!shouldApplyDefaultTheme(pi.getSettings()?.theme, ctx.ui.getAllThemes())) return;
+		ctx.ui.setTheme(DEFAULT_THEME);
+	});
 	pi.registerCommand("arnative", {
 		description: "Arnative settings menu: themes, headers, footers, usage",
 		getArgumentCompletions: arnativeCompletions,
@@ -509,6 +565,12 @@ if (isMain(import.meta.url)) {
 	assert(MENUS.some((m) => m.value === "usage"), "usage menu registered");
 	assert(arnativeCompletions("us")![0]!.value === "usage", "usage menu has completions");
 	assert(typeof MENUS.find((m) => m.value === "usage")!.open === "function", "the usage row opens the dashboard");
+
+	// The shipped theme is applied only when pi has no theme setting of its own.
+	assert(shouldApplyDefaultTheme(undefined, [{ name: "arnative" }]), "an unset theme installs Arnative");
+	assert(!shouldApplyDefaultTheme("arnative", [{ name: "arnative" }]), "an explicit Arnative setting is left alone");
+	assert(!shouldApplyDefaultTheme("gruvbox", [{ name: "arnative" }]), "a chosen theme is never overridden");
+	assert(!shouldApplyDefaultTheme(undefined, [{ name: "dark" }]), "no install when the theme did not load");
 	assert(arnativeCompletions("zz") === null, "completions null when nothing matches");
 
 	// Live-preview picker (shared by Themes and Headers): move = preview, Enter = keep, Esc = revert.
@@ -679,10 +741,36 @@ if (isMain(import.meta.url)) {
 		animationRows(),
 		"Pi (system)",
 		{ preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} },
-		ANIMATIONS_PICKER_TEXT,
+		animationsPickerText(),
 	);
 	const animLines = animPicker.render(120);
 	assert(animLines.some((l) => l.includes("Pi ") && l.includes("<dim>(system)</dim>")), "animations picker dims (system)");
+
+	// `g` reaches only a screen that passes the hook, and its legend follows the toggle.
+	const quiet = (): void => undefined;
+	let gradientOn = false;
+	const gradientPicker = new ListPicker(
+		fakeTheme,
+		animationRows(),
+		"Pi (system)",
+		{
+			preview: quiet,
+			revert: quiet,
+			done: quiet,
+			requestRender: quiet,
+			toggleGradient: () => {
+				gradientOn = !gradientOn;
+			},
+			legend: () => `[g] Gradient ${gradientOn ? "on" : "off"}`,
+		},
+		animationsPickerText(),
+	);
+	gradientPicker.handleInput("g");
+	assert(gradientOn, "g reaches the screen's own toggle");
+	assert(gradientPicker.render(120).some((l) => l.includes("[g] Gradient on")), "the legend follows the toggle");
+	assert(gradientPicker.index === 0, "g is not a row key: the cursor stays put");
+	mainPicker.handleInput("g");
+	assert(gradientOn, "a screen without the hook ignores g");
 
 	console.log("arnative.ts self-check OK");
 }
