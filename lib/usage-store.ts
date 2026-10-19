@@ -6,7 +6,7 @@
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -231,13 +231,12 @@ function loadDiskCache(): Map<string, FileCacheItem> {
 
 function saveDiskCache(map: Map<string, FileCacheItem>): void {
 	try {
-		const obj: Record<string, FileCacheItem> = {};
-		for (const [k, v] of map.entries()) {
-			obj[k] = v;
-		}
-		const dir = dirname(cacheFilePath());
-		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-		writeFileSync(cacheFilePath(), JSON.stringify(obj), "utf8");
+		// Temp file + rename: a concurrent pi session never reads a half-written cache.
+		const path = cacheFilePath();
+		const tmp = `${path}.${process.pid}.tmp`;
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)), "utf8");
+		renameSync(tmp, path);
 	} catch {
 		// ignore
 	}

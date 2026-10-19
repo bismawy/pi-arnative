@@ -6,10 +6,10 @@
  * editing it directly would race the manager and could drop concurrent changes. The choices here
  * belong to this package, not to pi.
  *
- * The file is read once per process and merged on write, so two extensions writing different
- * keys cannot clobber each other.
+ * Reads are memoised per process; every write re-reads the file and replaces it atomically
+ * (temp file + rename), so concurrent pi sessions that write different keys keep both.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -23,19 +23,17 @@ const configPath = (): string => join(getAgentDir(), "arnative-config.json");
 
 let memo: Record<string, unknown> | null = null;
 
-function readConfig(): Record<string, unknown> {
-	if (memo) return memo;
-	memo = {};
+function readDisk(): Record<string, unknown> {
 	try {
-		if (existsSync(configPath())) {
-			const raw = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
-			if (raw && typeof raw === "object" && !Array.isArray(raw)) memo = raw as Record<string, unknown>;
-		}
+		const raw = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
+		if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
 	} catch {
-		// unreadable/corrupt: fall back to defaults rather than crash the header
+		// absent, unreadable or corrupt: fall back to defaults rather than crash the header
 	}
-	return memo;
+	return {};
 }
+
+const readConfig = (): Record<string, unknown> => (memo ??= readDisk());
 
 /** The stored value for `key`, or undefined when absent or not one of `allowed`. */
 export function loadChoice<T extends string>(key: string, allowed: readonly T[]): T | undefined {
@@ -45,13 +43,15 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
 export function saveChoice(key: string, value: string): void {
-	const current = readConfig();
-	if (current[key] === value) return;
-	current[key] = value;
+	if (readConfig()[key] === value) return;
+	// Re-read: another pi session may have written its own key since this one loaded.
+	memo = { ...readDisk(), [key]: value };
 	try {
-		const dir = dirname(configPath());
-		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-		writeFileSync(configPath(), `${JSON.stringify(current, null, 2)}\n`, "utf8");
+		const path = configPath();
+		const tmp = `${path}.${process.pid}.tmp`;
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(tmp, `${JSON.stringify(memo, null, 2)}\n`, "utf8");
+		renameSync(tmp, path);
 	} catch {
 		// ignore: the choice still applies for this session
 	}
@@ -73,6 +73,12 @@ if (isMain(import.meta.url)) {
 	saveChoice(FOOTER_PRESET_KEY, "a");
 	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "a saved choice reads back");
 	assert(loadChoice(FOOTER_PRESET_KEY, ["a", "b"] as const) === "a", "a second key is stored without clobbering the first");
+
+	// Another pi session writes its own key after this one loaded; a save must keep it.
+	writeFileSync(join(fixture, "arnative-config.json"), JSON.stringify({ headerPreset: "b", footerPreset: "a", other: "x" }), "utf8");
+	saveChoice(FOOTER_PRESET_KEY, "b");
+	resetPresetCache();
+	assert(loadChoice("other", ["x"] as const) === "x", "a key written by another process survives a save");
 
 	// The point of the file: the choice outlives the process (drop the in-memory copy).
 	resetPresetCache();
