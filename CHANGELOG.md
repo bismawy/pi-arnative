@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **A preset choice survives a second pi session.** `saveChoice` merged into a memo read once per process and wrote the whole file back, so a session that had already loaded the file dropped the keys another session had written: two concurrent saves left only the last one. Every save now re-reads the file, merges its one key, and replaces the file atomically (temp file + `rename`). The self-check writes the file behind the module and asserts the other key survives (`lib/preset-store.ts`).
+- **The usage cache is replaced atomically.** `saveDiskCache` wrote in place, so a second pi session could read a truncated JSON, discard the cache and rescan every session file. It now writes a temp file and renames it, and `Object.fromEntries` replaces the manual copy loop (`lib/usage-store.ts`).
+
+### Changed
+- **`ROW_DIVIDER` has one definition.** The divider between a picker row label and its note was declared twice, once in the picker and once in the animations module. It now lives in `lib/format.ts` beside `markedLabels`, and both modules import it (`lib/format.ts`, `extensions/arnative.ts`, `extensions/animations.ts`).
+
 ## [0.6.0] - 2026-10-17
 
 ### Fixed

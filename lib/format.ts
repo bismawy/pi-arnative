@@ -23,6 +23,9 @@ export function modelDisplayParts(model?: { id?: string; name?: string; provider
 	return { name, provider };
 }
 
+// Divider between a picker row label and its note (Label · note), shared by every /arnative list.
+export const ROW_DIVIDER = " · ";
+
 // Picker rows for every /arnative list (themes, header & footer presets):
 // `● name` marks the active entry, everything else gets a two-space indent.
 export function markedLabels(names: readonly string[], current: string | undefined): string[] {

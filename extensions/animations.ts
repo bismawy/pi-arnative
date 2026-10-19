@@ -25,10 +25,7 @@ import {
 	type SpinnerPreset,
 } from "../lib/spinner.ts";
 import { assert, isMain } from "../lib/check.ts";
-
-/** The row divider, matching the one `arnative.ts` draws (`Label · note`). Kept local so
- *  this module does not reach into the picker just for a separator string. */
-const ROW_DIVIDER = " · ";
+import { ROW_DIVIDER } from "../lib/format.ts";
 
 /** The arnative editor instance, published by `footer.ts` so the live spinner is reachable. */
 export const EDITOR_KEY = Symbol.for("pi-arnative.editor");

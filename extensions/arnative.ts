@@ -10,7 +10,7 @@ import { matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type 
 import { softSecondaryOf, stripAnsi, thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { markedLabels } from "../lib/format.ts";
+import { markedLabels, ROW_DIVIDER } from "../lib/format.ts";
 import { LEGEND_LIVE, LEGEND_MOVE, matchesBack } from "../lib/shortcuts.ts";
 import { SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
 import {
@@ -41,9 +41,6 @@ export interface ListRow {
 	label: string;
 	note?: string;
 }
-
-/** Divider between row label and note, padded to align across rows. */
-export const ROW_DIVIDER = " · ";
 
 /** Menu rows: `Label · description` (same rhythm as /jev-eye's menu). */
 export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): ListRow[] {
