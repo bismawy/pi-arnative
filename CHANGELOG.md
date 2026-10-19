@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.1] - 2026-10-19
 
 ### Fixed
 - **A preset choice survives a second pi session.** `saveChoice` merged into a memo read once per process and wrote the whole file back, so a session that had already loaded the file dropped the keys another session had written: two concurrent saves left only the last one. Every save now re-reads the file, merges its one key, and replaces the file atomically (temp file + `rename`). The self-check writes the file behind the module and asserts the other key survives (`lib/preset-store.ts`).
