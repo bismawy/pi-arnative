@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2] - 2026-10-20
+
+### Fixed
+- **The usage cache no longer loses another session's rollup.** `saveDiskCache` wrote its whole in-memory map, so of two pi sessions sharing one agent dir the later writer dropped the entries the other had cached for its own files. It now re-reads the disk cache before the rename and keeps the keys this session does not have — only while their session file still exists, so a prune done by this scan stays pruned (`lib/usage-store.ts`).
+
+### Added
+- **The footer cache cell falls back to pi's own usage.** `pi-cache-optimizer` only reports providers it has an adapter for; a provider it does not recognize (a custom one such as `hark.ts`) publishes no `pi-cache-stats` status and the cell stayed empty. It now shows `pi X%`, computed as `cacheRead / (input + cacheRead)` from the usage pi already records on the branch — the optimizer's own string still wins when present (`extensions/footer.ts`).
+
 ## [0.6.1] - 2026-10-19
 
 ### Fixed
