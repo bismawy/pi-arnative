@@ -233,6 +233,14 @@ function saveDiskCache(map: Map<string, FileCacheItem>): void {
 	try {
 		// Temp file + rename: a concurrent pi session never reads a half-written cache.
 		const path = cacheFilePath();
+		// Re-read: another pi session may have cached its own files since this one loaded.
+		// Skip keys whose session file is gone, so a prune done by this scan stays pruned.
+		try {
+			const disk = JSON.parse(readFileSync(path, "utf8")) as Record<string, FileCacheItem>;
+			for (const [k, v] of Object.entries(disk)) if (!map.has(k) && existsSync(k)) map.set(k, v);
+		} catch {
+			// absent or corrupt: write this session's entries alone
+		}
 		const tmp = `${path}.${process.pid}.tmp`;
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)), "utf8");

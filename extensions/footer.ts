@@ -598,6 +598,14 @@ function parseOptimizer(raw: string | undefined): string | null {
 	return m ? `${m[1]} ${m[2]} (${m[3]})` : null;
 }
 
+// Pi's own per-message usage: shown when pi-cache-optimizer has no adapter for the
+// provider (a custom one like hark.ts publishes no pi-cache-stats status).
+let usageTotals = { inp: 0, read: 0 };
+export function piCacheHit(): string | null {
+	const total = usageTotals.inp + usageTotals.read;
+	return total > 0 ? "pi " + ((usageTotals.read / total) * 100).toFixed(1) + "%" : null;
+}
+
 let usageScanAt = 0;
 let usageScanLen = -1;
 let usageScanNums = { inp: 0, out: 0, read: 0 };
@@ -650,6 +658,7 @@ export function getUsage(
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
 	}
+	usageTotals = { inp, read };
 	const parts: string[] = [];
 	if (inp > 0) parts.push(`${acc("↑")}${soft(formatTokens(inp))}`);
 	if (out > 0) parts.push(`${acc("↓")}${soft(formatTokens(out))}`);
@@ -1015,13 +1024,13 @@ export default function (pi: ExtensionAPI) {
 								if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
 							}
 
-							const opt = parseOptimizer(rawCache);
 							let usageStr = "";
 							try {
 								usageStr = getUsage(ctx, acc, secondarySoft);
 							} catch {
 								// fallback
 							}
+							const opt = parseOptimizer(rawCache) ?? piCacheHit();
 							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${secondarySoft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
 							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${secondarySoft(opt)}` : "", usageStr].filter(Boolean);
 
@@ -1353,6 +1362,9 @@ if (isMain(import.meta.url)) {
 	usageBranch.push({ type: "message", message: { role: "assistant", usage: { input: 1000, output: 2500, cacheRead: 0 } } });
 	const s3 = getUsage(usageCtx, id, id);
 	assert(s3.includes("↑1.1k") && s3.includes("↓2.6k"), "branch length changed: full rescan");
+	// No pi-cache-stats status (provider without an optimizer adapter): the cache cell
+	// falls back to Pi's own usage, cacheRead / (input + cacheRead) = 10 / 1110.
+	assert(piCacheHit() === "pi 0.9%", "cache fallback reads Pi's built-in usage: " + piCacheHit());
 
 	// regression: a refresh arriving while one is in flight is re-run with the newest
 	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger).
