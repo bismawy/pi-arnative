@@ -229,7 +229,7 @@ export class ListPicker implements Component {
 /** Title of a sub-screen, derived from `screenTitle` so the format lives in one place. */
 export const pickerTitle = (setting: string): ScreenText["title"] => screenTitle(setting);
 
-// Self-check: `node extensions/list-picker.ts`
+// Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
 	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", "menu legend pinned");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");

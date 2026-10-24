@@ -24,8 +24,8 @@ import {
 } from "./animations.ts";
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
-import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "./list-picker.ts";
-import { openProviders } from "./provider.ts";
+import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
+import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
 
 export interface ArnativeMenu {

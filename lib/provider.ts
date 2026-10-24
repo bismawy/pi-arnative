@@ -723,7 +723,7 @@ export const openProviders = async (ctx: ExtensionCommandContext): Promise<boole
 	}
 };
 
-// Self-check: `node extensions/provider.ts`
+// Self-check: `node lib/provider.ts`
 if (isMain(import.meta.url)) {
 	// Flavors and bases.
 	assert(chatBaseUrl("openai-completions", "https://api.x.com/v1") === "https://api.x.com/v1", "openai keeps an explicit /v1");

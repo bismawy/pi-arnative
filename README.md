@@ -93,8 +93,8 @@ To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 | `extensions/animations.ts` | Working spinner presets and `/arnative` → Animations picker |
 | `lib/spinner.ts` | Spinner preset catalog: frames, cadence, and painters |
 | `extensions/arnative.ts` | Settings menu with live preview and navigation |
-| `extensions/provider.ts` | Custom provider wizard: probe, model pick, edit actions, `models.json`/`auth.json` save |
-| `extensions/list-picker.ts` | The live-preview/multi-select picker every arnative screen shares |
+| `lib/provider.ts` | Custom provider wizard: probe, model pick, edit actions, `models.json`/`auth.json` save |
+| `lib/list-picker.ts` | The live-preview/multi-select picker every arnative screen shares |
 | `extensions/timestamps.ts` | Message timestamps and bubble backgrounds |
 | `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection style, and UI polish |
 | `extensions/usage.ts` | Token and cost dashboard (`/usage`) |

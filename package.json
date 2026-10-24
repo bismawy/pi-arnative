@@ -41,7 +41,7 @@
   },
   "scripts": {
     "dev": "pi --extension ./extensions/tools.ts --extension ./extensions/section-headers.ts --extension ./extensions/footer.ts --extension ./extensions/timestamps.ts --extension ./extensions/ui-render-tweaks.ts --extension ./extensions/usage.ts --extension ./extensions/animations.ts --extension ./extensions/arnative.ts",
-    "test": "node lib/box.ts && node lib/ansi.ts && node lib/color.ts && node lib/shortcuts.ts && node lib/preset-store.ts && node lib/spinner.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node extensions/list-picker.ts && node extensions/provider.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts && node extensions/animations.ts && node extensions/arnative.ts && node --test",
+    "test": "node lib/box.ts && node lib/ansi.ts && node lib/color.ts && node lib/shortcuts.ts && node lib/preset-store.ts && node lib/spinner.ts && node themes/gen-themes.mjs --check && node extensions/tools.ts && node lib/list-picker.ts && node lib/provider.ts && node extensions/footer.ts && node extensions/timestamps.ts && node extensions/ui-render-tweaks.ts && node extensions/usage.ts && node extensions/animations.ts && node extensions/arnative.ts && node --test",
     "preview": "node scripts/preview.mjs",
     "themes": "node themes/gen-themes.mjs",
     "release:check": "node scripts/release-check.mjs pre-tag",
