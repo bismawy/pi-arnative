@@ -41,8 +41,10 @@ interface ListPickerHooks {
 	/** Esc, when it must be told apart from Enter (a menu selects, it does not revert). */
 	cancel?: () => void;
 	/** `←`: leave this screen for its parent (the menu, or the chat when there is none).
-	 *  Distinct from `cancel`/Esc, which closes or reverts the screen it is on. */
-	back?: () => void;
+	 *  Distinct from `cancel`/Esc, which closes or reverts the screen it is on. Pass
+	 *  `false` to hide the key entirely — a fill screen must not lose its work to a
+	 *  stray `←`; Esc stays the only way out and the legend says so. */
+	back?: (() => void) | false;
 	/** `g`: toggle a screen-level switch (Animations → gradient). Only a screen that passes
 	 *  this hook reacts to the key, so `g` stays a plain letter everywhere else. */
 	toggleGradient?: () => void;
@@ -147,6 +149,7 @@ export class ListPicker implements Component {
 		if (matchesBack(keyData)) {
 			// Leave for the parent without touching the preview: `back` owns the revert of an
 			// uncommitted preview, because "cancel" here means "close", not "undo".
+			if (this.hooks.back === false) return;
 			if (this.hooks.back) {
 				this.hooks.back();
 				return;
@@ -231,7 +234,7 @@ export const pickerTitle = (setting: string): ScreenText["title"] => screenTitle
 
 // Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", "menu legend pinned");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "move legend pinned, ← advertised where a back target exists");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 	const quiet = (): void => undefined;
@@ -240,6 +243,24 @@ if (isMain(import.meta.url)) {
 	assert(lines[0]!.startsWith("╭") && lines[lines.length - 1]!.startsWith("╰"), "picker framed");
 	assert(lines.every((l) => visibleWidth(l) === 50), "picker lines fit width 50");
 	assert(lines.some((l) => l.includes("→ a")), "the cursor marks the selection");
+
+	// `←` behavior is owned by the screen: a parent gets the back call, `false` swallows
+	// the key (a fill screen keeps its work), and a root menu closes like Esc.
+	const keyLeft = "\x1b[D";
+	let backCalls = 0;
+	let closedByBack = false;
+	const backPicker = new ListPicker(fakeTheme, nameRows(["a"]), "a", { preview: quiet, revert: quiet, done: quiet, cancel: quiet, requestRender: quiet, back: () => { backCalls++; } }, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
+	backPicker.handleInput(keyLeft);
+	assert(backCalls === 1 && closedByBack === false, "a parent screen receives ← as back");
+	let closed = "none";
+	const noBackPicker = new ListPicker(fakeTheme, nameRows(["a"]), "a", { preview: quiet, revert: quiet, done: () => { closed = "done"; }, cancel: () => { closed = "cancel"; }, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
+	noBackPicker.handleInput(keyLeft);
+	assert(closed === "cancel", "a root menu closes on ← like Esc");
+	let fillClosed = "none";
+	const fillPicker = new ListPicker(fakeTheme, nameRows(["a"]), "a", { preview: quiet, revert: quiet, done: () => { fillClosed = "done"; }, cancel: () => { fillClosed = "cancel"; }, requestRender: quiet, back: false }, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
+	fillPicker.handleInput(keyLeft);
+	fillPicker.handleInput("\x1bOD");
+	assert(fillClosed === "none", "a fill screen swallows ← entirely");
 
 	// A long list scrolls: 10 rows visible, the cursor always inside the window, and one
 	// frame height whether the cursor sits at the top or the bottom.

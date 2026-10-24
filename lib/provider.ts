@@ -422,6 +422,8 @@ const pickModels = async (
 				revert: () => {},
 				done: () => done([...checked]),
 				cancel: () => done(null),
+				// A fill screen: `←` is hidden — it must not throw away a half-picked list.
+				back: false,
 				requestRender: () => tui.requestRender(),
 				toggle: () => {
 					const label = rows[picker.index]?.label;
@@ -628,6 +630,8 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 					revert: () => {},
 					done: () => done(true),
 					cancel: () => done(null),
+					// A fill screen: `←` is hidden — it must not throw away half-set levels.
+					back: false,
 					requestRender: () => tui.requestRender(),
 					toggle: () => {
 						const label = rows[picker.index]?.label;
@@ -726,21 +730,27 @@ const providerActionFlow = async (ctx: ExtensionCommandContext, name: string): P
 /** The Providers screen: existing entries as rows, add as the last row. `←` reopens the
  *  settings menu, like every screen; after an add or a delete the list reopens. */
 export const openProviders = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
-	let summaries: ProviderSummary[];
-	try {
-		summaries = summarizeProviders(loadModelsConfig());
-	} catch {
-		ctx.ui.notify("[arnative] models.json is not valid JSON — fix it by hand first.", "error");
-		return;
-	}
-	const rows: ListRow[] = summaries.map((s) => ({
-		label: s.name,
-		note: `${s.api ?? "unknown api"} · ${s.modelCount} model${s.modelCount === 1 ? "" : "s"}`,
-	}));
-	rows.push({ label: ADD_ROW, note: "endpoint, key, name — the rest is automatic" });
+	/** Provider rows re-read from models.json; empty means the file turned unreadable. */
+	const refresh = (): ListRow[] => {
+		let summaries: ProviderSummary[];
+		try {
+			summaries = summarizeProviders(loadModelsConfig());
+		} catch {
+			ctx.ui.notify("[arnative] models.json is not valid JSON — fix it by hand first.", "error");
+			return [];
+		}
+		const rows: ListRow[] = summaries.map((s) => ({
+			label: s.name,
+			note: `${s.api ?? "unknown api"} · ${s.modelCount} model${s.modelCount === 1 ? "" : "s"}`,
+		}));
+		rows.push({ label: ADD_ROW, note: "endpoint, key, name — the rest is automatic" });
+		return rows;
+	};
 
-	const choose = async (index: number): Promise<void> => {
-		const label = rows[index]?.label;
+	const rows = refresh();
+	if (rows.length === 0) return;
+
+	const choose = async (label: string | undefined): Promise<void> => {
 		if (label === ADD_ROW) await addProviderFlow(ctx);
 		else if (label) await providerActionFlow(ctx, label);
 	};
@@ -750,8 +760,8 @@ export const openProviders = async (ctx: ExtensionCommandContext): Promise<boole
 		const picked = await ctx.ui.select(PROVIDERS_TEXT.title, rows.map(rowText));
 		if (picked === undefined) return;
 		// Provider ids are [A-Za-z0-9_-], so a `startsWith` on the flat row is unambiguous.
-		const index = rows.findIndex((r) => picked.startsWith(r.label));
-		if (index >= 0) await choose(index);
+		const label = rows.find((r) => picked.startsWith(r.label))?.label;
+		await choose(label);
 		return;
 	}
 
@@ -770,7 +780,15 @@ export const openProviders = async (ctx: ExtensionCommandContext): Promise<boole
 		});
 		if (index === null || index === undefined) return;
 		if (index === -1) return true;
-		await choose(index);
+		await choose(rows[index]?.label);
+		// A provider may have been added, edited or deleted: re-read the list instead of
+		// showing the copy the screen opened with. An unreadable models.json keeps the old
+		// rows up rather than blanking the screen.
+		const fresh = refresh();
+		if (fresh.length > 0) {
+			rows.length = 0;
+			rows.push(...fresh);
+		}
 	}
 };
 

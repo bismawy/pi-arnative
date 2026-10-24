@@ -302,6 +302,8 @@ async function openMainMenu(ctx: ExtensionCommandContext, startLabel?: string): 
 				revert: () => {},
 				done: () => done(picker.index),
 				cancel: () => done(null),
+				// The menu has no screen behind it: `←` closes, straight back to the chat.
+				back: () => done(null),
 				requestRender: () => tui.requestRender(),
 			}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_MOVE }, false, ctx.thinkingLevel);
 			return picker;
@@ -438,8 +440,7 @@ if (isMain(import.meta.url)) {
 
 	// `←` reports upward instead of closing on a screen with a parent, reverting the live
 	// preview first; the root menu has nothing behind it and omits the key.
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", "menu legend pinned, and free of a dead back key");
-	assert(!LIST_LEGEND_MOVE.includes("←"), "the root menu does not advertise ←");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "menu legend pinned, ← Back advertised");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
 	let backs = 0;
 	let backReverts = 0;
