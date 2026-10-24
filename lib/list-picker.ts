@@ -373,7 +373,10 @@ if (isMain(import.meta.url)) {
 	}, "https://api.example.com/v1");
 	field.focused = true;
 	const fieldLines = field.render(60);
-	const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\x1b_pi:c\x07/g, "");
+	// CSI and every APC wrapper (`\x1b_…\x07`): pi-tui 0.87 emitted only `_pi:c`, 1.4 adds
+	// `_pi:fc`/`_pi:/fc` around the placeholder — a narrow strip left escapes glued to the
+	// text and failed the include on CI's newer version.
+	const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\x1b_.*?\x07/g, "");
 	assert(fieldLines[0]!.startsWith("╭") && fieldLines[1]!.includes("Provider - Arnative"), "the input renders in the arnative box");
 	assert(fieldLines.some((l) => plain(l).includes("> https://api.example.com/v1")), "an empty field shows its dim placeholder");
 	assert(fieldLines.some((l) => l.includes(INPUT_LEGEND)), "the input legend is pinned");
