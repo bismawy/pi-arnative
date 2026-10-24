@@ -481,6 +481,15 @@ if (isMain(import.meta.url)) {
 		Object.keys(migrated[migKey]!.r).every((k) => k.includes("\u0000")),
 		"v5 stores model rows only (provider rows are derived on load)",
 	);
+	// Layout "1" cleanup: the dead flat prices file and a flat cache a downgrade recreated
+	// beside the folder copy are removed on the next load; the folder copy survives.
+	writeFileSync(join(mig, "arnative-prices.json"), "{}", "utf8");
+	writeFileSync(join(mig, "arnative-usage-cache.json"), "{}", "utf8");
+	resetUsageCache();
+	collectUsageSummary(true);
+	assert(!existsSync(join(mig, "arnative-prices.json")), "the dead flat prices file is removed");
+	assert(!existsSync(join(mig, "arnative-usage-cache.json")), "a flat cache recreated beside the folder copy is removed");
+	assert(existsSync(join(mig, "arnative", "usage-cache.json")), "the folder copy survives the cleanup");
 	rmSync(mig, { recursive: true, force: true });
 	// Back to the main fixture: the UI rows below still scan it.
 	process.env.PI_CODING_AGENT_DIR = fixture;
