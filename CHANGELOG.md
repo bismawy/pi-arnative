@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **The push gate hook now ships with the repo.** `.githooks/pre-push` is the pre-push gate the README describes (it used to live only in a machine-local setup): it rejects a branch push whose tip tree does not match the `.git/arnative-preview` stamp that `npm run preview` writes, so a fix cannot reach GitHub without a live preview. Tags and branch deletions pass; activate per clone with `git config core.hooksPath .githooks`.
+
 ## [0.7.0] - 2026-10-24
 
 ### Added

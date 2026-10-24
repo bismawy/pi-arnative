@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Local-first push gate (README "Local-first push gate").
+#
+# Rejects any branch push whose tip commit's tree carries no live-preview stamp:
+# `npm run preview` (scripts/preview.mjs) runs Pi with the working tree and writes
+# `.git/arnative-preview` — the sha256 of the commit's `extensions lib themes
+# package.json` listing, byte-identical to fingerprint() there. A fix cannot reach
+# GitHub unseen: commit, preview, then push.
+#
+# Activate per clone (hooks are not auto-installed by git):
+#   git config core.hooksPath .githooks
+#
+# Stdin (git pre-push): "<local-ref> <local-sha> <remote-ref> <remote-sha>" per pushed
+# ref. The gate reads the REMOTE ref (what the push would create) and the LOCAL sha (the
+# commit that would land there). Tags and branch deletions pass.
+
+set -u
+
+zero=0000000000000000000000000000000000000000
+git_dir=$(git rev-parse --git-dir)
+stamp_file="$git_dir/arnative-preview"
+
+# The exact recipe fingerprint() in scripts/preview.mjs uses — never change one side alone.
+fingerprint_of() {
+	git ls-tree -r "$1" -- extensions lib themes package.json | sha256sum | cut -c1-64
+}
+
+fail=0
+while read -r local_ref local_sha remote_ref _remote_sha; do
+	case "$remote_ref" in
+	refs/tags/*) continue ;;          # tags follow their commit; the branch was gated
+	esac
+	[ "$local_sha" = "$zero" ] && continue   # branch deletion: nothing to certify
+
+	branch=${remote_ref#refs/heads/}
+	stamp=$(cat "$stamp_file" 2>/dev/null || true)
+	tree_fp=$(fingerprint_of "$local_sha")
+
+	if [ -z "$stamp" ]; then
+		echo "push rejected: no preview stamp for $branch" >&2
+		echo "  run:  npm run preview   (commit or stash first — the tree must be clean)" >&2
+		echo "  then push again; the preview stamps the exact commit it showed." >&2
+		fail=1
+	elif [ "$stamp" != "$tree_fp" ]; then
+		echo "push rejected: the preview stamp does not match $branch's tree" >&2
+		echo "  extensions/lib/themes/package.json changed after the last preview." >&2
+		echo "  run:  npm run preview   (fresh stamp for the commit you are pushing)" >&2
+		fail=1
+	fi
+done
+
+exit $fail
