@@ -4,7 +4,9 @@
 
 ### Added
 - **Providers: a custom endpoint from three inputs.** `/arnative` → **Providers** asks for the endpoint URL, API key, and name, then probes the endpoint once (Ollama `/api/tags`, Gemini `/v1beta/models`, OpenAI/Anthropic `/models` lists), lists the models it answered with, and saves on Space-picked selection — the key into `auth.json` (the file `/login` writes), the declaration into `models.json`. `[a]` switches the API flavor when a relay answers in an ambiguous shape; no answer falls back to manual ids. Opening `/model` picks up the saved provider (`extensions/provider.ts`).
-- **Multi-select for the shared picker.** `ListPicker` gains `marked`/`toggle`/`press` hooks and a dynamic description, so a screen can run a checkbox list without leaving the arnative chrome (`extensions/list-picker.ts`, extracted from `arnative.ts` to keep the provider screen cycle-free).
+- **Provider actions: edit and delete on Enter.** Enter on a stored provider opens an action menu — Select models, Probe models (re-reads the endpoint, vanished models stay listed), Thinking, Delete. Every action writes through to `models.json` immediately (delete also removes the `auth.json` key); sibling provider fields like `compat` survive every edit.
+- **Reasoning auto-detection.** Model ids decide the thinking flag on save: a `thinking`/`reasoner` token, an effort suffix (`-high`/`-medium`/`-low`), or an o1/o3/o4/r1-style generation marks reasoning models — `ag/claude-opus-4-6-thinking` and `ag/gemini-4-argon-high` on, `wally/glm-5.3-flash` off. The Thinking screen lists the flags with the detected values and Space overrides them.
+- **Scrolling model lists.** The shared picker gains a 10-row viewport: long relay catalogs scroll a window centered on the cursor, with `↑ N more` / `↓ N more` rows announcing what is hidden, so the box keeps one height (`extensions/list-picker.ts`).
 
 ## [0.6.2] - 2026-10-20
 

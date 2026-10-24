@@ -9,7 +9,8 @@
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
 import { screenTitle, type ScreenText } from "../lib/box.ts";
@@ -173,13 +174,30 @@ export async function probeEndpoint(base: string, key: string, fetchImpl: FetchL
 
 // ---------------------------------------------------------------- stores
 
+export interface ProviderModel {
+	id: string;
+	/** Reasoning (thinking) support; omitted means chat-only. Auto-detected from the id. */
+	reasoning?: boolean;
+}
+
 export interface ProviderEntry {
 	name?: string;
 	baseUrl: string;
 	api: ApiFlavor;
 	/** Set only when the endpoint needs no credential; a real key goes to auth.json. */
 	apiKey?: string;
-	models: { id: string }[];
+	models: ProviderModel[];
+}
+
+/** Reasoning heuristic over a relay catalog id: the catalogs expose only ids, so a
+ *  `thinking`/`reasoner` token, an effort suffix (`-high`/`-medium`/`-low`), or an
+ *  o1/o3/o4/r1-style generation marks the reasoning variants. */
+export function detectReasoning(id: string): boolean {
+	const s = id.toLowerCase();
+	if (/(^|[^a-z0-9])(thinking|reasoner|reasoning)([^a-z0-9]|$)/.test(s)) return true;
+	if (/-(high|medium|low)$/.test(s)) return true;
+	if (/(^|[^a-z0-9])[or][134]([^0-9]|$)/.test(s)) return true;
+	return false;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -233,6 +251,25 @@ export function withoutAuth(auth: unknown, name: string): Record<string, unknown
 	return root;
 }
 
+/** Rewrites one provider's model list and nothing else — compat, headers, name, every
+ *  sibling field survives an edit exactly as it was stored. */
+export function withProviderModels(config: unknown, name: string, models: ProviderModel[]): Record<string, unknown> {
+	const root = isObj(config) ? { ...config } : {};
+	const providers = isObj(root.providers) ? { ...root.providers } : {};
+	const base = isObj(providers[name]) ? providers[name] : {};
+	providers[name] = { ...base, models };
+	root.providers = providers;
+	return root;
+}
+
+/** A stored selection keeps its reasoning flag; a new id gets the detected one. */
+export function mergeReasoning(entry: ProviderEntry, ids: string[]): ProviderModel[] {
+	return ids.map((id) => {
+		const existing = entry.models.find((m) => m.id === id);
+		return existing?.reasoning ?? detectReasoning(id) ? { id, reasoning: true } : { id };
+	});
+}
+
 const modelsPath = (): string => join(getAgentDir(), "models.json");
 const authPath = (): string => join(getAgentDir(), "auth.json");
 
@@ -282,6 +319,36 @@ export function deleteProviderNamed(name: string): boolean {
 	return true;
 }
 
+/** The stored credential for a provider, from the same auth.json /login writes. */
+export function readAuthKey(name: string): string | undefined {
+	const auth = readJson(authPath());
+	if (!isObj(auth) || !isObj(auth[name])) return undefined;
+	const entry = auth[name] as Record<string, unknown>;
+	if (entry.type === "api_key" && typeof entry.key === "string") return entry.key;
+	return undefined;
+}
+
+/** The stored entry with its models typed; extra fields stay in the raw config (edits go
+ *  through {@link withProviderModels}, which never drops them). */
+export function loadProviderEntry(config: unknown, name: string): ProviderEntry | undefined {
+	if (!isObj(config) || !isObj(config.providers)) return undefined;
+	const value = (config.providers as Record<string, unknown>)[name];
+	if (!isObj(value)) return undefined;
+	const models: ProviderModel[] = Array.isArray(value.models)
+		? (value.models as unknown[]).flatMap((m): ProviderModel[] => {
+				if (!isObj(m) || typeof m.id !== "string") return [];
+				return typeof m.reasoning === "boolean" ? [{ id: m.id, reasoning: m.reasoning }] : [{ id: m.id }];
+			})
+		: [];
+	return {
+		name: typeof value.name === "string" ? value.name : name,
+		baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+		api: (typeof value.api === "string" ? value.api : "openai-completions") as ApiFlavor,
+		apiKey: typeof value.apiKey === "string" ? value.apiKey : undefined,
+		models,
+	};
+}
+
 // ---------------------------------------------------------------- wizard
 
 const PROVIDERS_TEXT: ScreenText = {
@@ -293,16 +360,19 @@ const PROVIDERS_TEXT: ScreenText = {
 const ADD_ROW = "+ Add provider";
 
 const MODEL_LEGEND = "[↑↓] Move  [Space] Toggle  [a] API  [Enter] Save  [Esc] Cancel";
+const MODEL_LEGEND_LOCKED = "[↑↓] Move  [Space] Toggle  [Enter] Save  [Esc] Cancel";
+/** Rows visible before the model list scrolls (a relay catalog can exceed the screen). */
+const MODEL_VIEWPORT = 10;
 
-/** One model-selection screen: Space checks rows, `a` cycles the API flavor, Enter saves.
- *  Esc leaves without writing anything. */
+/** One model-selection screen: Space checks rows, `a` cycles the API flavor (unless the
+ *  stored api is final), Enter saves. Esc leaves without writing anything. */
 const pickModels = async (
 	ctx: ExtensionCommandContext,
 	models: string[],
-	probe: ProbeResult | undefined,
+	opts: { flavor: ApiFlavor; via?: string; checked?: Set<string>; lockFlavor?: boolean },
 ): Promise<{ picked: string[]; flavor: ApiFlavor } | undefined> => {
-	const checked = new Set(models);
-	let flavor: ApiFlavor = probe?.flavor ?? "openai-completions";
+	const checked = new Set(opts.checked ?? models);
+	let flavor = opts.flavor;
 	const rows: ListRow[] = models.map((id) => ({ label: id }));
 	const picked = await ctx.ui.custom<string[] | null>((tui, theme, _kb, done) => {
 		const picker = new ListPicker(
@@ -323,17 +393,16 @@ const pickModels = async (
 				},
 				marked: (label) => checked.has(label),
 				press: (keyData) => {
-					if (!matchesKey(keyData, "a")) return;
+					if (opts.lockFlavor || !matchesKey(keyData, "a")) return;
 					flavor = API_FLAVORS[(API_FLAVORS.indexOf(flavor) + 1) % API_FLAVORS.length]!;
 				},
 				description: () =>
-					probe
-						? `${FLAVOR_LABELS[flavor]} · ${probe.via} · ${checked.size}/${models.length} picked`
-						: `${FLAVOR_LABELS[flavor]} · ${checked.size}/${models.length} picked`,
+					`${FLAVOR_LABELS[flavor]}${opts.via ? ` · ${opts.via}` : ""} · ${checked.size}/${models.length} picked`,
 			},
-			{ title: screenTitle("Models"), description: FLAVOR_LABELS[flavor], legend: MODEL_LEGEND },
+			{ title: screenTitle("Models"), description: FLAVOR_LABELS[flavor], legend: opts.lockFlavor ? MODEL_LEGEND_LOCKED : MODEL_LEGEND },
 			false,
 			ctx.thinkingLevel,
+			MODEL_VIEWPORT,
 		);
 		return picker;
 	});
@@ -388,7 +457,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 	if (result) {
 		ctx.ui.notify(`[arnative] ${FLAVOR_LABELS[result.flavor]} · ${result.via} · ${result.models.length} models.`, "info");
 		if (ctx.mode === "tui") {
-			const chosen = await pickModels(ctx, result.models, result);
+			const chosen = await pickModels(ctx, result.models, { flavor: result.flavor, via: result.via });
 			if (!chosen) return;
 			({ picked, flavor } = chosen);
 		} else {
@@ -413,7 +482,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		name,
 		baseUrl: chatBaseUrl(flavor, endpoint),
 		api: flavor,
-		models: picked.map((id) => ({ id })),
+		models: mergeReasoning({ name, baseUrl: "", api: flavor, models: [] }, picked),
 	};
 	// A keyless endpoint still needs a resolvable credential for pi to list the models.
 	if (!key) entry.apiKey = result?.keyless ? "ollama" : "dummy";
@@ -423,7 +492,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}. Fix the JSON by hand first.`, "error");
 		return;
 	}
-	ctx.ui.notify(`[arnative] Provider saved: ${name} (${FLAVOR_LABELS[flavor]}, ${picked.length} models). Open /model to pick one.`, "info");
+	ctx.ui.notify(`[arnative] Provider saved: ${name} (${FLAVOR_LABELS[flavor]}, ${picked.length} models, ${entry.models.filter((m) => m.reasoning).length} reasoning). Open /model to pick one.`, "info");
 };
 
 const deleteProviderFlow = async (ctx: ExtensionCommandContext, name: string): Promise<void> => {
@@ -432,6 +501,174 @@ const deleteProviderFlow = async (ctx: ExtensionCommandContext, name: string): P
 		ctx.ui.notify(deleteProviderNamed(name) ? `[arnative] Deleted ${name}.` : `[arnative] ${name} was already gone.`, "info");
 	} catch (error) {
 		ctx.ui.notify(`[arnative] Not deleted: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
+	}
+};
+
+/** Writes one provider's model list through to models.json (auth.json is untouched — the
+ *  key only changes through add or delete). */
+const saveModelsNamed = (ctx: ExtensionCommandContext, name: string, models: ProviderModel[]): void => {
+	try {
+		writeJson(modelsPath(), withProviderModels(readJson(modelsPath()), name, models));
+	} catch (error) {
+		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
+		return;
+	}
+	ctx.ui.notify(`[arnative] ${name}: ${models.length} models, ${models.filter((m) => m.reasoning).length} reasoning — models.json updated. Open /model to refresh.`, "info");
+};
+
+const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
+	const ids = entry.models.map((m) => m.id);
+	let picked: string[] | undefined;
+	if (ctx.mode === "tui") {
+		const chosen = await pickModels(ctx, ids, { flavor: entry.api, checked: new Set(ids), lockFlavor: true });
+		if (!chosen) return;
+		picked = chosen.picked;
+	} else {
+		const answer = await readInput(ctx, "Model ids (comma/space; empty = keep)", ids.join(", "));
+		if (answer === undefined || answer === "") return;
+		picked = answer.split(/[\s,]+/).filter(Boolean);
+	}
+	saveModelsNamed(ctx, name, mergeReasoning(entry, picked));
+};
+
+const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
+	// The real key lives in auth.json; an inline dummy never authenticates a probe.
+	const stored = readAuthKey(name);
+	const inline = entry.apiKey && entry.apiKey !== "dummy" && entry.apiKey !== "ollama" ? entry.apiKey : "";
+	const key = stored ?? inline;
+	ctx.ui.setStatus("arnative", "probing endpoint…");
+	let result: ProbeResult | undefined;
+	try {
+		result = await probeEndpoint(entry.baseUrl, key ?? "");
+	} finally {
+		ctx.ui.setStatus("arnative", undefined);
+	}
+	if (!result) {
+		ctx.ui.notify("[arnative] The endpoint did not answer a model list (key or URL wrong?).", "warning");
+		return;
+	}
+	ctx.ui.notify(`[arnative] ${FLAVOR_LABELS[result.flavor]} · ${result.via} · ${result.models.length} models.`, "info");
+	// Vanished models stay listed (still checked) so a relay hiccup cannot shrink the set.
+	const union = [...new Set([...result.models, ...entry.models.map((m) => m.id)])];
+	let picked: string[] | undefined;
+	if (ctx.mode === "tui") {
+		const chosen = await pickModels(ctx, union, { flavor: entry.api, via: result.via, checked: new Set(entry.models.map((m) => m.id)), lockFlavor: true });
+		if (!chosen) return;
+		picked = chosen.picked;
+	} else {
+		const answer = await readInput(ctx, "Model ids (comma/space; empty = keep)", union.join(", "));
+		if (answer === undefined || answer === "") return;
+		picked = answer.split(/[\s,]+/).filter(Boolean);
+	}
+	saveModelsNamed(ctx, name, mergeReasoning(entry, picked));
+};
+
+const THINKING_LEGEND = "[↑↓] Move  [Space] Toggle  [Enter] Save  [Esc] Cancel";
+
+const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
+	const auto = (id: string): boolean => detectReasoning(id);
+	const checked = new Set(entry.models.filter((m) => m.reasoning ?? auto(m.id)).map((m) => m.id));
+	const rows: ListRow[] = entry.models.map((m) => ({ label: m.id }));
+	let picked: string[] | undefined;
+	if (ctx.mode === "tui") {
+		const chosen = await ctx.ui.custom<string[] | null>((tui, theme, _kb, done) => {
+			const picker = new ListPicker(
+				theme,
+				rows,
+				undefined,
+				{
+					preview: () => {},
+					revert: () => {},
+					done: () => done([...checked]),
+					cancel: () => done(null),
+					requestRender: () => tui.requestRender(),
+					toggle: () => {
+						const label = rows[picker.index]?.label;
+						if (!label) return;
+						if (checked.has(label)) checked.delete(label);
+						else checked.add(label);
+					},
+					marked: (label) => checked.has(label),
+					note: (label) => (checked.has(label) ? "thinking" : "chat"),
+					description: () => `${checked.size}/${rows.length} reasoning · ids say ${rows.filter((r) => auto(r.label)).length}`,
+				},
+				{ title: screenTitle("Thinking"), description: "toggle reasoning per model", legend: THINKING_LEGEND },
+				false,
+				ctx.thinkingLevel,
+				MODEL_VIEWPORT,
+			);
+			return picker;
+		});
+		if (!chosen) return;
+		picked = chosen;
+	} else {
+		const answer = await readInput(ctx, "Reasoning model ids (comma/space; empty = none)", [...checked].join(", "));
+		if (answer === undefined) return;
+		picked = answer.split(/[\s,]+/).filter(Boolean);
+	}
+	saveModelsNamed(ctx, name, entry.models.map((m) => (picked!.includes(m.id) ? { id: m.id, reasoning: true } : { id: m.id })));
+};
+
+const ACTION_SELECT = "Select models";
+const ACTION_PROBE = "Probe models";
+const ACTION_THINKING = "Thinking";
+const ACTION_DELETE = "Delete";
+
+const ACTIONS_TEXT: ScreenText = {
+	title: screenTitle("Provider"),
+	description: "Edit the models, re-probe, toggle thinking, or delete.",
+	legend: LIST_LEGEND_MOVE,
+};
+
+/** Enter on an existing provider: an action menu instead of a straight delete. Every
+ *  action writes through to models.json (and auth.json for delete) before returning. */
+const providerActionFlow = async (ctx: ExtensionCommandContext, name: string): Promise<void> => {
+	for (;;) {
+		const entry = loadProviderEntry(loadModelsConfig(), name);
+		if (!entry) {
+			ctx.ui.notify(`[arnative] ${name} is gone — the list will refresh.`, "warning");
+			return;
+		}
+		const rows: ListRow[] = [
+			{ label: ACTION_SELECT, note: "tick the models this provider exposes" },
+			{ label: ACTION_PROBE, note: "re-read the model list from the endpoint" },
+			{ label: ACTION_THINKING, note: "toggle reasoning per model (auto-detected)" },
+			{ label: ACTION_DELETE, note: "remove the provider and its stored key" },
+		];
+		let action: string | null | undefined;
+		if (ctx.mode === "tui") {
+			action = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+				const picker = new ListPicker(
+					theme,
+					rows,
+					undefined,
+					{
+						preview: () => {},
+						revert: () => {},
+						done: () => done(rows[picker.index]?.label),
+						cancel: () => done(null),
+						// `←` leaves the actions for the provider list; Esc closes the whole menu.
+						back: () => done(null),
+						requestRender: () => tui.requestRender(),
+					},
+					{ ...ACTIONS_TEXT, title: screenTitle(`Provider · ${name}`) },
+					false,
+					ctx.thinkingLevel,
+				);
+				return picker;
+			});
+		} else {
+			const picked = await ctx.ui.select(`${name} — edit or delete`, rows.map(rowText));
+			action = picked === undefined ? undefined : rows.find((r) => picked.startsWith(r.label))?.label;
+		}
+		if (!action) return;
+		if (action === ACTION_DELETE) {
+			await deleteProviderFlow(ctx, name);
+			return;
+		}
+		if (action === ACTION_SELECT) await selectModelsFlow(ctx, name, entry);
+		else if (action === ACTION_PROBE) await probeModelsFlow(ctx, name, entry);
+		else if (action === ACTION_THINKING) await thinkingFlow(ctx, name, entry);
 	}
 };
 
@@ -454,7 +691,7 @@ export const openProviders = async (ctx: ExtensionCommandContext): Promise<boole
 	const choose = async (index: number): Promise<void> => {
 		const label = rows[index]?.label;
 		if (label === ADD_ROW) await addProviderFlow(ctx);
-		else if (label) await deleteProviderFlow(ctx, label);
+		else if (label) await providerActionFlow(ctx, label);
 	};
 
 	if (ctx.mode !== "tui") {
@@ -579,6 +816,41 @@ if (isMain(import.meta.url)) {
 		threw = true;
 	}
 	assert(threw, "genuinely broken JSON still throws, so the caller can report it");
+
+	// Reasoning auto-detection from ids (relay catalogs expose only ids).
+	assert(detectReasoning("ag/claude-opus-4-6-thinking"), "a thinking token means reasoning");
+	assert(detectReasoning("ag/gemini-4-argon-high"), "an effort suffix means reasoning");
+	assert(detectReasoning("deepseek-reasoner"), "reasoner means reasoning");
+	assert(detectReasoning("o1-mini"), "an o-generation number means reasoning");
+	assert(detectReasoning("deepseek-r1"), "r1 means reasoning");
+	assert(!detectReasoning("ocz/mimo-v2.6-flash-free"), "a plain flash id is chat");
+	assert(!detectReasoning("wally/glm-5.3-flash"), "glm flash is chat");
+	assert(!detectReasoning("oc/big-pickle"), "an unrelated id is chat");
+	assert(!detectReasoning("river/Qwen/Qwen3.8-27B-FP8"), "qwen without a thinking token is chat");
+
+	// Edit flows rewrite only `models` and keep every other provider field.
+	const rich = { providers: { r: { name: "R", baseUrl: "b", api: "openai-completions", compat: { supportsLongCacheRetention: false }, models: [{ id: "m1", reasoning: true }] } } };
+	const edited = withProviderModels(rich, "r", [{ id: "m2" }]);
+	const savedProvider = (edited.providers as Record<string, Record<string, unknown>>).r!;
+	assert(savedProvider.compat !== undefined && savedProvider.name === "R", "withProviderModels keeps sibling fields");
+	assert(Array.isArray(savedProvider.models) && (savedProvider.models[0] as { id: string }).id === "m2", "withProviderModels replaces the model list");
+	const merged = mergeReasoning({ name: "n", baseUrl: "b", api: "openai-completions", models: [{ id: "m1", reasoning: true }, { id: "m2" }] }, ["m2", "x-thinking"]);
+	assert(merged[0]!.id === "m2" && !merged[0]!.reasoning, "a stored chat model stays chat");
+	assert(merged[1]!.reasoning === true, "a new thinking id is detected");
+	const keptFlag = mergeReasoning({ name: "n", baseUrl: "b", api: "openai-completions", models: [{ id: "m1", reasoning: true }] }, ["m1"]);
+	assert(keptFlag[0]!.reasoning === true, "a stored reasoning flag survives a reselect");
+	const entryLoaded = loadProviderEntry(rich, "r");
+	assert(entryLoaded?.models[0]!.id === "m1" && entryLoaded.api === "openai-completions", "loadProviderEntry reads models and api");
+	assert(loadProviderEntry(rich, "missing") === undefined, "loadProviderEntry misses cleanly");
+
+	// The stored key is read back from auth.json in an isolated agent dir (never the user's).
+	const tmp = mkdtempSync(join(tmpdir(), "arnative-providers-"));
+	process.env.PI_CODING_AGENT_DIR = tmp;
+	saveProvider("t1", { name: "t1", baseUrl: "https://x.com/v1", api: "openai-completions", models: [{ id: "m" }] }, "sk-x");
+	assert(readAuthKey("t1") === "sk-x", "readAuthKey returns the stored key");
+	assert(readAuthKey("missing") === undefined, "readAuthKey misses cleanly");
+	delete process.env.PI_CODING_AGENT_DIR;
+	rmSync(tmp, { recursive: true, force: true });
 
 	// The providers screen copy stays factual and pinned.
 	assert(PROVIDERS_TEXT.title === "Providers - Arnative\u2819", `providers title pinned, got ${PROVIDERS_TEXT.title}`);

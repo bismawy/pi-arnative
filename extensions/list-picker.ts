@@ -88,6 +88,8 @@ export class ListPicker implements Component {
 	private readonly tick: ReturnType<typeof setInterval> | undefined;
 	/** Border painter, from the session's thinking level — the box follows the model. */
 	private readonly edge: (s: string) => string;
+	/** Rows shown before the list scrolls (a relay catalog can be far longer than the screen). */
+	private readonly maxRows: number | undefined;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -99,6 +101,8 @@ export class ListPicker implements Component {
 		livePreview = true,
 		/** The session's thinking level; colors the box border (theme `thinking*` slot). */
 		thinkingLevel?: string,
+		/** Visible rows before scrolling; undefined shows every row. */
+		maxRows?: number,
 	) {
 		this.theme = theme;
 		this.rows = rows;
@@ -109,10 +113,14 @@ export class ListPicker implements Component {
 		this.applied = current;
 		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
 		this.edge = thinkingColorOf(theme, thinkingLevel);
+		this.maxRows = maxRows;
 		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
-	invalidate(): void {}
+	/** Component contract: renders are computed per call, so there is no cached output to drop. */
+	invalidate(): void {
+		/* intentionally no state */
+	}
 	dispose(): void {
 		if (this.tick) clearInterval(this.tick);
 	}
@@ -148,7 +156,7 @@ export class ListPicker implements Component {
 			(this.hooks.cancel ?? this.hooks.done)();
 			return;
 		}
-		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q") || matchesKey(keyData, "escape")) {
+		if (keyData === "Q" || matchesKey(keyData, "q") || matchesKey(keyData, "escape")) {
 			if (this.applied !== this.opened) this.hooks.revert();
 			(this.hooks.cancel ?? this.hooks.done)();
 			return;
@@ -177,7 +185,11 @@ export class ListPicker implements Component {
 		const edge = (text: string) => this.edge(text);
 		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
 		const body: string[] = [];
-		for (let i = 0; i < this.rows.length; i++) {
+		// A long list scrolls a window centered on the cursor, so the box keeps one height.
+		const max = this.maxRows ?? this.rows.length;
+		const windowStart = this.rows.length <= max ? 0 : Math.min(Math.max(0, this.selected - Math.floor(max / 2)), this.rows.length - max);
+		const windowEnd = Math.min(this.rows.length, windowStart + max);
+		for (let i = windowStart; i < windowEnd; i++) {
 			const item = this.rows[i]!;
 			const isSelected = i === this.selected;
 			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
@@ -197,6 +209,9 @@ export class ListPicker implements Component {
 			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${mark}${paint(head)}${tail}${pad}${note}`;
 			body.push(truncateToWidth(content, width - 4, ""));
 		}
+		// Hidden rows are announced, never silently cut (an empty line is still a row).
+		if (windowStart > 0) body.unshift(truncateToWidth(th.fg("dim", `↑ ${windowStart} more`), width - 4, ""));
+		if (windowEnd < this.rows.length) body.push(truncateToWidth(th.fg("dim", `↓ ${this.rows.length - windowEnd} more`), width - 4, ""));
 		return renderScreen(
 			th,
 			width,
@@ -219,15 +234,33 @@ if (isMain(import.meta.url)) {
 	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", "menu legend pinned");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
-	const picker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", {
-		preview: () => {},
-		revert: () => {},
-		done: () => {},
-		requestRender: () => {},
-	}, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
+	const quiet = (): void => undefined;
+	const picker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
 	const lines = picker.render(50);
 	assert(lines[0]!.startsWith("╭") && lines[lines.length - 1]!.startsWith("╰"), "picker framed");
 	assert(lines.every((l) => visibleWidth(l) === 50), "picker lines fit width 50");
 	assert(lines.some((l) => l.includes("→ a")), "the cursor marks the selection");
+
+	// A long list scrolls: 10 rows visible, the cursor always inside the window, and one
+	// frame height whether the cursor sits at the top or the bottom.
+	const many = nameRows(Array.from({ length: 25 }, (_, i) => `m${i}`));
+	const scrolled = new ListPicker(fakeTheme, many, "m0", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false, undefined, 10);
+	const countItems = (ls: string[]): number => ls.filter((l) => /m\d/.test(l)).length;
+	let frame = scrolled.render(50);
+	assert(countItems(frame) === 10, "a scrolled list shows exactly 10 model rows");
+	assert(frame.some((l) => l.includes("↓ 15 more")) && !frame.some((l) => l.includes("↑")), "the top of the list announces only what is below");
+	for (let i = 0; i < 14; i++) scrolled.handleInput("\x1b[B");
+	frame = scrolled.render(50);
+	assert(countItems(frame) === 10, "still 10 rows after scrolling");
+	assert(frame.some((l) => l.includes("↑ 9 more")) && frame.some((l) => l.includes("↓ 6 more")), "both ends announce their hidden rows");
+	assert(frame.some((l) => l.includes("→ m14")), "the cursor row stays visible");
+	scrolled.handleInput("\x1b[B");
+	const frameNext = scrolled.render(50);
+	assert(frameNext.length === frame.length && countItems(frameNext) === 10, "the frame height stays constant while scrolling inside the list");
+	for (let i = 0; i < 20; i++) scrolled.handleInput("\x1b[B");
+	frame = scrolled.render(50);
+	assert(frame.some((l) => l.includes("→ m24")) && frame.some((l) => l.includes("↑ 15 more")) && !frame.some((l) => l.includes("↓")), "the bottom of the list announces only what is above");
+	const short = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false, undefined, 10);
+	assert(!short.render(50).some((l) => l.includes("more")), "a short list shows no scroll indicators");
 	console.log("list-picker.ts self-check OK");
 }
