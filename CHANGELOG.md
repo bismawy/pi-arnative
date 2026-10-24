@@ -19,6 +19,10 @@
 ### Changed
 - **`/arnative` → Themes lists this package's themes only.** The picker shows the `arnative` family (`arnative` and its variants) and nothing else — pi's own `system`/`dark`/`light` and a theme of your own (e.g. `omarchy-system`) stay in `/settings` → Theme, which keeps the full list. Esc still reverts to whatever theme was active when the picker opened, arnative or not, and the empty-list message now points at a reinstall instead of the themes folder (`extensions/arnative.ts`).
 
+### Fixed
+- **Esc cancels the add-provider flow at every prompt.** The flow asked for endpoint, API key and provider name, but only Esc at the first prompt aborted: Esc at the key prompt continued keyless (and could save a provider with a dummy key that never authenticates), Esc at the name prompt silently accepted the suggested name. Both prompts now honor the `[Esc] Cancel` their legend promises — Enter on an empty key field still means keyless, and an empty name still accepts the suggestion (`lib/provider.ts`).
+- **Provider config writes are atomic.** `writeJson` wrote `models.json` and `auth.json` with a direct `writeFileSync`, so a crash or power loss mid-write could truncate them — a truncated `auth.json` breaks the stored credentials of every provider, and the wizard then refuses to save until the file is repaired by hand. It now writes a temp file and renames it over the target, the same pattern `preset-store.ts` and `usage-store.ts` already use, and the self-check proves an interrupted save leaves the previous config intact (`lib/provider.ts`).
+
 ## [0.6.2] - 2026-10-20
 
 ### Fixed
