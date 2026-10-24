@@ -533,9 +533,14 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 	const endpoint = normalizeBase(endpointRaw);
 
 	const key = await readInput(ctx, "Provider", "API key — empty for local or keyless endpoints", "sk-…");
+	// Esc cancels the flow, Enter on an empty field means keyless: readInput keeps the two
+	// apart (undefined vs ""), and the field's own legend promises [Esc] Cancel.
+	if (key === undefined) return;
 
 	const suggested = guessProviderName(endpoint);
-	const name = await readInput(ctx, "Provider", "a provider id (letters, digits, - and _)", suggested, suggested) || suggested;
+	const nameInput = await readInput(ctx, "Provider", "a provider id (letters, digits, - and _)", suggested, suggested);
+	if (nameInput === undefined) return; // Esc cancels; an empty Enter accepts the suggestion.
+	const name = nameInput || suggested;
 	if (!/^[A-Za-z0-9_-]+$/.test(name)) {
 		ctx.ui.notify(`[arnative] "${name}" is not a usable provider id (letters, digits, - and _ only).`, "warning");
 		return;
