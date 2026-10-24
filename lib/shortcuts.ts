@@ -64,8 +64,10 @@ const QUIT = keySet("q/Esc", "q", "escape");
 
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
-/** Move-and-open list (the root menu, the provider list, the provider actions).
- *  `←` steps back: to the chat from the root menu, to the menu from a list. */
+/** Root `/arnative` menu: nothing behind it, so `←` is not advertised — Esc closes. */
+export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
+/** Move-and-open list inside a submenu (the provider list, the provider actions):
+ *  `←` steps back to the screen above. */
 export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [BACK.label, "Back"], [CANCEL.label, "Close"]);
 /** Live-preview list: moving applies, Enter keeps, `←` steps out, Esc reverts. */
 export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [BACK.label, "Back"], [CANCEL.label, "Revert"]);

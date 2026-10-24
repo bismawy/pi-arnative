@@ -24,7 +24,7 @@ import {
 } from "./animations.ts";
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
-import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
+import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
 
@@ -302,10 +302,11 @@ async function openMainMenu(ctx: ExtensionCommandContext, startLabel?: string): 
 				revert: () => {},
 				done: () => done(picker.index),
 				cancel: () => done(null),
-				// The menu has no screen behind it: `←` closes, straight back to the chat.
-				back: () => done(null),
+				// Nothing is behind the root menu: `←` is not a close shortcut here, so the key
+				// is hidden — Esc (and `q`) close, and the legend says so.
+				back: false,
 				requestRender: () => tui.requestRender(),
-			}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_MOVE }, false, ctx.thinkingLevel);
+			}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false, ctx.thinkingLevel);
 			return picker;
 		});
 		if (index === null || index === undefined) return;
@@ -440,7 +441,8 @@ if (isMain(import.meta.url)) {
 
 	// `←` reports upward instead of closing on a screen with a parent, reverting the live
 	// preview first; the root menu has nothing behind it and omits the key.
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "menu legend pinned, ← Back advertised");
+	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "the root menu legend omits ←");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "submenu legend advertises ← Back");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
 	let backs = 0;
 	let backReverts = 0;
@@ -475,9 +477,10 @@ if (isMain(import.meta.url)) {
 		done: () => {},
 		cancel: () => { menuCancelled = true; },
 		requestRender: () => {},
-	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_MOVE }, false);
+	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
 	const menuLines = mainPicker.render(60);
 	assert(menuLines.some((l) => l.includes(MENU_TITLE)), "the main menu renders its title");
+	assert(menuLines.some((l) => l.includes("[Esc] Close") && !l.includes("←")), "the root menu legend renders without a back key");
 	assert(menuLines.some((l) => l.includes(MENU_DESC)), "the main menu renders the description under the title");
 	assert(menuLines.findIndex((l) => l.includes(MENU_TITLE)) < menuLines.findIndex((l) => l.includes(MENU_DESC)), "description sits below the title");
 	assert(menuLines.every((l) => visibleWidth(l) === 60), "main menu lines fit the width");
@@ -505,7 +508,7 @@ if (isMain(import.meta.url)) {
 		revert: () => {},
 		done: () => {},
 		requestRender: () => {},
-	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_MOVE }, false);
+	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
 	const resumedRows = resumed.render(60).map(stripAnsi);
 	assert(resumedRows.some((l) => l.startsWith("│ → Usage")), "the menu reopens on the row it was left on");
 	assert(!resumedRows.some((l) => l.startsWith("│ → Themes")), "and not on the first row");

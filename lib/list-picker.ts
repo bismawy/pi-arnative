@@ -9,10 +9,11 @@ import { softSecondaryOf, thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { ROW_DIVIDER } from "../lib/format.ts";
-import { LEGEND_LIVE, LEGEND_MOVE, matchesBack } from "../lib/shortcuts.ts";
+import { LEGEND_LIVE, LEGEND_MOVE, LEGEND_ROOT, matchesBack } from "../lib/shortcuts.ts";
 
 // Legends come from the `KeySet`s the handlers match, so a key cannot be advertised on a
 // screen that does not handle it; the root menu has nothing behind it and omits `←`.
+export const LIST_LEGEND_ROOT = LEGEND_ROOT;
 export const LIST_LEGEND_MOVE = LEGEND_MOVE;
 export const LIST_LEGEND_LIVE = LEGEND_LIVE;
 
@@ -234,6 +235,7 @@ export const pickerTitle = (setting: string): ScreenText["title"] => screenTitle
 
 // Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
+	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "root legend pinned, no ← behind the root menu");
 	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "move legend pinned, ← advertised where a back target exists");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };

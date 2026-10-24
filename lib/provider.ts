@@ -534,7 +534,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}. Fix the JSON by hand first.`, "error");
 		return;
 	}
-	ctx.ui.notify(`[arnative] Provider saved: ${name} (${FLAVOR_LABELS[flavor]}, ${picked.length} models, ${entry.models.filter((m) => m.level && m.level !== "off").length} thinking). Open /model to pick one.`, "info");
+	ctx.ui.notify(`[arnative] Provider saved: ${name} (${FLAVOR_LABELS[flavor]}, ${picked.length} models, ${levelsSummary(entry.models)}). Open /model to pick one.`, "info");
 };
 
 const deleteProviderFlow = async (ctx: ExtensionCommandContext, name: string): Promise<void> => {
@@ -546,6 +546,13 @@ const deleteProviderFlow = async (ctx: ExtensionCommandContext, name: string): P
 	}
 };
 
+/** "3 thinking (auto, high, xhigh)" — the levels a save registered, for the notify. */
+const levelsSummary = (models: ProviderModel[]): string => {
+	const on = models.filter((m) => m.level && m.level !== "off");
+	const distinct = [...new Set(on.map((m) => m.level!))];
+	return on.length === 0 ? "0 thinking" : `${on.length} thinking (${distinct.join(", ")})`;
+};
+
 /** Writes one provider's model list through to models.json (auth.json is untouched — the
  *  key only changes through add or delete). */
 const saveModelsNamed = (ctx: ExtensionCommandContext, name: string, models: ProviderModel[]): void => {
@@ -555,7 +562,7 @@ const saveModelsNamed = (ctx: ExtensionCommandContext, name: string, models: Pro
 		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
 		return;
 	}
-	ctx.ui.notify(`[arnative] ${name}: ${models.length} models, ${models.filter((m) => m.level && m.level !== "off").length} thinking — models.json updated. Open /model to refresh.`, "info");
+	ctx.ui.notify(`[arnative] ${name}: ${models.length} models, ${levelsSummary(models)} — models.json updated. Open /model to refresh.`, "info");
 };
 
 const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
@@ -932,6 +939,8 @@ if (isMain(import.meta.url)) {
 	assert(loadProviderEntry(rich, "missing") === undefined, "loadProviderEntry misses cleanly");
 	const roundTrip = loadProviderEntry(withProviderModels(rich, "r", [{ id: "m9", level: "xhigh" }]), "r");
 	assert(roundTrip?.models[0]!.level === "xhigh", "a saved level loads back as itself");
+	assert(levelsSummary([{ id: "a" }, { id: "b", level: "high" }, { id: "c", level: "auto" }]) === "2 thinking (high, auto)", "the save notify names the registered levels");
+	assert(levelsSummary([{ id: "a" }]) === "0 thinking", "an all-chat save says so plainly");
 
 	// The stored key is read back from auth.json in an isolated agent dir (never the user's).
 	const tmp = mkdtempSync(join(tmpdir(), "arnative-providers-"));
