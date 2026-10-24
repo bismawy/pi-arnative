@@ -24,7 +24,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 <summary><b>Configuration & Presets</b></summary>
 
 ### Working Spinner Presets
-Configurable via `/arnative` → **Animations** (saved to `arnative-config.json`).
+Configurable via `/arnative` → **Animations** (saved to `~/.pi/agent/arnative/config.json`).
 Features 18 presets with live animated preview in the picker (`Arnative` as default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle Google brand gradient sweep on accent presets.
 
 ### Footer Presets

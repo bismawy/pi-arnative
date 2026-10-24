@@ -9,7 +9,7 @@
  * Reads are memoised per process; every write re-reads the file and replaces it atomically
  * (temp file + rename), so concurrent pi sessions that write different keys keep both.
  */
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -19,12 +19,21 @@ export const HEADER_PRESET_KEY = "headerPreset";
 export const FOOTER_PRESET_KEY = "footerPreset";
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
-const configPath = (): string => join(getAgentDir(), "arnative-config.json");
+// Everything pi-arnative writes lives in one folder (agent dir/arnative); the config moved
+// there from a flat arnative-config.json, which is migrated in on first read.
+const configDir = (): string => join(getAgentDir(), "arnative");
+const configPath = (): string => join(configDir(), "config.json");
+const legacyConfigPath = (): string => join(getAgentDir(), "arnative-config.json");
 
 let memo: Record<string, unknown> | null = null;
 
 function readDisk(): Record<string, unknown> {
 	try {
+		// One-time move into the arnative folder (was a flat file next to it).
+		if (!existsSync(configPath()) && existsSync(legacyConfigPath())) {
+			mkdirSync(configDir(), { recursive: true });
+			renameSync(legacyConfigPath(), configPath());
+		}
 		const raw = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
 		if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
 	} catch {
@@ -75,7 +84,7 @@ if (isMain(import.meta.url)) {
 	assert(loadChoice(FOOTER_PRESET_KEY, ["a", "b"] as const) === "a", "a second key is stored without clobbering the first");
 
 	// Another pi session writes its own key after this one loaded; a save must keep it.
-	writeFileSync(join(fixture, "arnative-config.json"), JSON.stringify({ headerPreset: "b", footerPreset: "a", other: "x" }), "utf8");
+	writeFileSync(join(fixture, "arnative", "config.json"), JSON.stringify({ headerPreset: "b", footerPreset: "a", other: "x" }), "utf8");
 	saveChoice(FOOTER_PRESET_KEY, "b");
 	resetPresetCache();
 	assert(loadChoice("other", ["x"] as const) === "x", "a key written by another process survives a save");
@@ -89,9 +98,19 @@ if (isMain(import.meta.url)) {
 	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === undefined, "an unknown stored value is rejected");
 
 	// A corrupt file must not throw on the header's render path.
-	writeFileSync(join(fixture, "arnative-config.json"), "{not json", "utf8");
+	writeFileSync(join(fixture, "arnative", "config.json"), "{not json", "utf8");
 	resetPresetCache();
 	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === undefined, "a corrupt config file reads as empty");
+
+	// A flat pre-folder config is moved into the arnative folder on first read.
+	const mig = mkdtempSync(join(tmpdir(), "arnative-preset-mig-"));
+	process.env.PI_CODING_AGENT_DIR = mig;
+	writeFileSync(join(mig, "arnative-config.json"), JSON.stringify({ headerPreset: "b" }), "utf8");
+	resetPresetCache();
+	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "a legacy flat config is migrated and read");
+	assert(existsSync(join(mig, "arnative", "config.json")), "the migrated config lives in the arnative folder");
+	rmSync(mig, { recursive: true, force: true });
+
 
 	rmSync(fixture, { recursive: true, force: true });
 	console.log("preset-store.ts self-check OK");

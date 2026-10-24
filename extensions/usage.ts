@@ -4,9 +4,9 @@
  * shared with the Model tab.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
@@ -400,8 +400,9 @@ if (isMain(import.meta.url)) {
 
 	// A session file that grows is parsed from the tail only (byte offset in the cache), not re-read.
 	const file = join(fixture, "sessions", "proj", "a.jsonl");
-	const cachedBefore = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, { consumed: number; size: number }>;
-	assert(cachedBefore[file]!.consumed === cachedBefore[file]!.size, "cache records the full parsed offset");
+	const cachePath = join(fixture, "arnative", "usage-cache.json");
+	const cachedBefore = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { c: number; s: number }>;
+	assert(cachedBefore[relative(join(fixture, "sessions"), file)]!.c === cachedBefore[relative(join(fixture, "sessions"), file)]!.s, "cache records the full parsed offset");
 	writeFileSync(file, asst("gemini-3.8-flash", 1000) + String.fromCharCode(10), { flag: "a" });
 	const grown = collectUsageSummary(true);
 	assert(grown.totals.msgs === 4, "an appended record is picked up from the tail");
@@ -413,12 +414,12 @@ if (isMain(import.meta.url)) {
 	// The per-file rollup is what makes a refresh cheap: folding a tail must reproduce the same
 	// totals as parsing the whole file from scratch. Compare the incremental answer to a cold one.
 	const incremental = JSON.stringify(getModelAllTimeUsage("gemini-3.8-flash"));
-	const cacheRaw = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, unknown>;
+	const cacheRaw = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, unknown>;
 	// Drop the cache (as a fresh machine, or a version bump, would) and rescan the whole file.
 	// Writing `{}` is not enough on its own: the disk cache is memoized per process, so the
 	// memo would answer and this assert would compare a value against itself, never failing.
 	resetUsageCache();
-	writeFileSync(join(fixture, "arnative-usage-cache.json"), "{}", "utf8");
+	writeFileSync(cachePath, "{}", "utf8");
 	collectUsageSummary(true);
 	assert(
 		JSON.stringify(getModelAllTimeUsage("gemini-3.8-flash")) === incremental,
@@ -436,9 +437,54 @@ if (isMain(import.meta.url)) {
 	// Disk cache pruning: no cache key may point at a session file that is gone.
 	rmSync(join(fixture, "sessions", "proj", "a.jsonl"));
 	collectUsageSummary(true);
-	const raw = JSON.parse(readFileSync(join(fixture, "arnative-usage-cache.json"), "utf8")) as Record<string, unknown>;
+	const raw = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, unknown>;
 	assert(Object.keys(raw).length === 0, "usage disk cache prunes deleted session files");
 	rmSync(fixture, { recursive: true, force: true });
+
+	// A flat pre-folder cache is moved into the arnative folder on first read; the v4
+	// items keep working (decode feeds the summary, a grown file tail-folds forward) and
+	// the next save is the compact v5 shape: session-dir-relative keys, model-only rows.
+	const mig = mkdtempSync(join(tmpdir(), "arnative-usage-mig-"));
+	process.env.PI_CODING_AGENT_DIR = mig;
+	mkdirSync(join(mig, "sessions", "p"), { recursive: true });
+	const migFile = join(mig, "sessions", "p", "a.jsonl");
+	const migLine = asst("gemini-3.8-flash", 5) + String.fromCharCode(10);
+	writeFileSync(migFile, migLine, "utf8");
+	const migStat = statSync(migFile);
+	writeFileSync(
+		join(mig, "arnative-usage-cache.json"),
+		JSON.stringify({
+			[migFile]: {
+				mtimeMs: migStat.mtimeMs,
+				size: migStat.size,
+				v: 4,
+				consumed: migStat.size,
+				rollup: {
+					providers: {
+						"x\u0000m": { sessions: 1, msgs: 3, input: 4, output: 5, cacheRead: 6, cost: 0 },
+						"x": { sessions: 1, msgs: 3, input: 4, output: 5, cacheRead: 6, cost: 0 },
+					},
+				},
+			},
+		}),
+		"utf8",
+	);
+	resetUsageCache();
+	assert(collectUsageSummary(true).totals.msgs === 3, "a migrated v4 entry feeds the summary as-is (no reparse of an unchanged file)");
+	writeFileSync(migFile, asst("gemini-3.8-flash", 7) + String.fromCharCode(10), { flag: "a" });
+	assert(collectUsageSummary(true).totals.msgs === 4, "a grown file tail-folds on top of a migrated v4 entry");
+	assert(existsSync(join(mig, "arnative", "usage-cache.json")), "the cache is saved into the arnative folder");
+	const migrated = JSON.parse(readFileSync(join(mig, "arnative", "usage-cache.json"), "utf8")) as Record<string, { r: Record<string, number[]> }>;
+	const migKey = join("p", "a.jsonl");
+	assert(Object.keys(migrated)[0] === migKey, "v5 keys are stored relative to the sessions dir");
+	assert(
+		Object.keys(migrated[migKey]!.r).every((k) => k.includes("\u0000")),
+		"v5 stores model rows only (provider rows are derived on load)",
+	);
+	rmSync(mig, { recursive: true, force: true });
+	// Back to the main fixture: the UI rows below still scan it.
+	process.env.PI_CODING_AGENT_DIR = fixture;
+	resetUsageCache();
 
 	// UI checks need rows of their own: the scratch above ends with an empty, deleted file.
 	// These use a provider that reports NO cost (cost.total = 0), which is the case the estimate

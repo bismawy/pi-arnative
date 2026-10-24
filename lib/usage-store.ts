@@ -1,13 +1,13 @@
 /**
  * Token usage data layer — the single source for /usage and the Model tab.
  * - Scans local Pi session history (~/.pi/agent/sessions/*.jsonl).
- * - mtime+size keyed cache in ~/.pi/agent/arnative-usage-cache.json, read into
+ * - mtime+size keyed cache in ~/.pi/agent/arnative/usage-cache.json, read into
  *   memory once (parsing 4MB per header frame cost ~50ms and lagged long chats).
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 interface UsageEntry {
@@ -207,8 +207,51 @@ export function formatTokens(n: number): string {
 }
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
-const cacheFilePath = (): string => join(getAgentDir(), "arnative-usage-cache.json");
+// Everything pi-arnative writes lives in one folder (agent dir/arnative); the cache moved
+// there from a flat arnative-usage-cache.json, which is migrated in on first read.
+const cacheDir = (): string => join(getAgentDir(), "arnative");
+const cacheFilePath = (): string => join(cacheDir(), "usage-cache.json");
+const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.json");
 const CACHE_VERSION = 4; // v4: per-file rollup (was raw entries in v3)
+
+/** The v5 disk shape: one-char keys, and only provider\0model rows — provider-level
+ *  rollups are derived on load, so every number is stored once. Keys on disk are
+ *  paths relative to the sessions dir (the absolute path dominated the old size). */
+type DiskItem = { m: number; s: number; c?: number; r: Record<string, [number, number, number, number, number]> };
+
+/** Decode one disk item (v5 compact or v4 full) into the in-memory shape. */
+function decodeDiskItem(raw: unknown): FileCacheItem | null {
+	if (!raw || typeof raw !== "object") return null;
+	if ("rollup" in raw) {
+		const v4 = raw as FileCacheItem;
+		return v4.rollup ? { ...v4, v: CACHE_VERSION } : null;
+	}
+	const d = raw as Partial<DiskItem>;
+	if (typeof d.m !== "number" || typeof d.s !== "number" || !d.r) return null;
+	const rollup: FileRollup = { providers: {} };
+	for (const [pm, a] of Object.entries(d.r)) {
+		if (!Array.isArray(a) || a.length < 5) continue;
+		const [msgs, input, output, cacheRead, cost] = a as [number, number, number, number, number];
+		Object.assign((rollup.providers[pm] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cost });
+		const p = (rollup.providers[pm.split("\u0000")[0]!] ??= emptyRollup());
+		p.sessions = 1;
+		p.msgs += msgs;
+		p.input += input;
+		p.output += output;
+		p.cacheRead += cacheRead;
+		p.cost += cost;
+	}
+	return { mtimeMs: d.m, size: d.s, v: CACHE_VERSION, consumed: typeof d.c === "number" ? d.c : d.s, rollup };
+}
+
+/** Encode an in-memory item as v5: model rows only (see DiskItem). */
+function encodeDiskItem(item: FileCacheItem): DiskItem {
+	const r: DiskItem["r"] = {};
+	for (const [pm, roll] of Object.entries(item.rollup.providers)) {
+		if (pm.includes("\u0000")) r[pm] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cost];
+	}
+	return { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r };
+}
 
 // Disk cache is memoized; save writes memory + disk together.
 let diskMemo: Map<string, FileCacheItem> | null = null;
@@ -217,33 +260,52 @@ function loadDiskCache(): Map<string, FileCacheItem> {
 	if (diskMemo) return diskMemo;
 	diskMemo = new Map<string, FileCacheItem>();
 	try {
-		if (existsSync(cacheFilePath())) {
-			const raw = JSON.parse(readFileSync(cacheFilePath(), "utf8")) as Record<string, FileCacheItem>;
-			for (const [k, v] of Object.entries(raw)) {
-				diskMemo.set(k, v);
-			}
+		// One-time move into the arnative folder (was a flat file next to it).
+		if (!existsSync(cacheFilePath()) && existsSync(legacyCachePath())) {
+			mkdirSync(cacheDir(), { recursive: true });
+			renameSync(legacyCachePath(), cacheFilePath());
+		}
+	} catch {
+		// a concurrent session may have moved it already: read whichever path exists
+	}
+	readDiskFileInto(cacheFilePath(), diskMemo);
+	if (diskMemo.size === 0) readDiskFileInto(legacyCachePath(), diskMemo);
+	return diskMemo;
+}
+
+/** Read one cache file into `map`. v4 items keep their absolute-path keys verbatim;
+ *  v5 keys are session-dir-relative and resolved back to absolute here. */
+function readDiskFileInto(path: string, map: Map<string, FileCacheItem>): void {
+	try {
+		if (!existsSync(path)) return;
+		const sessionsDir = join(getAgentDir(), "sessions");
+		const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+		for (const [k, v] of Object.entries(raw)) {
+			const item = decodeDiskItem(v);
+			if (!item) continue;
+			map.set(v && typeof v === "object" && "rollup" in v ? k : join(sessionsDir, k), item);
 		}
 	} catch {
 		// ignore
 	}
-	return diskMemo;
 }
 
 function saveDiskCache(map: Map<string, FileCacheItem>): void {
 	try {
-		// Temp file + rename: a concurrent pi session never reads a half-written cache.
 		const path = cacheFilePath();
+		const sessionsDir = join(getAgentDir(), "sessions");
 		// Re-read: another pi session may have cached its own files since this one loaded.
 		// Skip keys whose session file is gone, so a prune done by this scan stays pruned.
-		try {
-			const disk = JSON.parse(readFileSync(path, "utf8")) as Record<string, FileCacheItem>;
-			for (const [k, v] of Object.entries(disk)) if (!map.has(k) && existsSync(k)) map.set(k, v);
-		} catch {
-			// absent or corrupt: write this session's entries alone
-		}
+		const disk = new Map<string, FileCacheItem>();
+		readDiskFileInto(path, disk);
+		if (disk.size === 0) readDiskFileInto(legacyCachePath(), disk);
+		for (const [k, v] of disk) if (!map.has(k) && existsSync(k)) map.set(k, v);
+		const out: Record<string, DiskItem> = {};
+		for (const [k, v] of map.entries()) out[relative(sessionsDir, k)] = encodeDiskItem(v);
+		// Temp file + rename: a concurrent pi session never reads a half-written cache.
 		const tmp = `${path}.${process.pid}.tmp`;
-		mkdirSync(dirname(path), { recursive: true });
-		writeFileSync(tmp, JSON.stringify(Object.fromEntries(map)), "utf8");
+		mkdirSync(cacheDir(), { recursive: true });
+		writeFileSync(tmp, JSON.stringify(out), "utf8");
 		renameSync(tmp, path);
 	} catch {
 		// ignore
