@@ -48,17 +48,18 @@ export const MENU_DESC = "Themes, headers, footers, animations, providers, usage
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
-	description: "Selection previews live — same list as /settings → Theme.",
+	description: "Selection previews live — arnative themes only (all themes: /settings → Theme).",
 	legend: LIST_LEGEND_LIVE,
 };
 
 const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
-	const themes = ctx.ui.getAllThemes();
-	if (themes.length === 0) {
-		ctx.ui.notify("[arnative] No themes found. Add files to ~/.pi/agent/themes/ and run /reload.", "warning");
+	// Only this package's family (`arnative`, `arnative-<variant>`): the picker brands itself
+	// arnative, so pi's own themes and the user's belong in /settings → Theme, not here.
+	const names = ctx.ui.getAllThemes().map((t) => t.name).filter(isArnativeThemeName);
+	if (names.length === 0) {
+		ctx.ui.notify("[arnative] No arnative themes found. Reinstall pi-arnative, or pick any theme in /settings → Theme.", "warning");
 		return;
 	}
-	const names = themes.map((t) => t.name);
 	const current = ctx.ui.theme.name;
 
 	if (ctx.mode !== "tui") {
@@ -244,7 +245,7 @@ export const MENUS: ArnativeMenu[] = [
 	{
 		value: "themes",
 		label: "Themes",
-		description: "list & apply themes (the /settings → Theme list)",
+		description: "arnative themes only (all themes: /settings → Theme)",
 		open: openThemes,
 	},
 	{
@@ -348,6 +349,13 @@ export function arnativeCompletions(prefix: string): AutocompleteItem[] | null {
  *  fresh install lands on Arnative without ever overriding a choice someone made. */
 export const DEFAULT_THEME = "arnative";
 
+/** A theme of this package's family: `arnative` itself or an `arnative-<variant>`. The
+ *  generator (`themes/gen-themes.mjs`) ships only such names, so the name is the identity —
+ *  pi may load them from the package dir or a user copy, and both answer to it. */
+export function isArnativeThemeName(name: string): boolean {
+	return name === DEFAULT_THEME || name.startsWith(`${DEFAULT_THEME}-`);
+}
+
 /** Should the shipped theme be installed? Only when no theme is set at all (pi would fall back
  *  to `system`) and the theme actually loaded, which a headless or filtered load may not do. */
 export function shouldApplyDefaultTheme(
@@ -378,8 +386,8 @@ if (isMain(import.meta.url)) {
 	assert(markedLabels(["a"], undefined)[0] === "  a", "markedLabels handles no active theme");
 	const labels = menuRows(MENUS);
 	assert(labels.length === MENUS.length, "menuRows one row per menu");
-	assert(rowText(labels[0]!) === "Themes · list & apply themes (the /settings → Theme list)", "menu row text format");
-	assert(labels[0]!.label === "Themes" && labels[0]!.note === "list & apply themes (the /settings → Theme list)", "menu row keeps label and note apart");
+	assert(rowText(labels[0]!) === "Themes · arnative themes only (all themes: /settings → Theme)", "menu row text format");
+	assert(labels[0]!.label === "Themes" && labels[0]!.note === "arnative themes only (all themes: /settings → Theme)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
 	assert(MENU_DESC === "Themes, headers, footers, animations, providers, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
@@ -404,6 +412,13 @@ if (isMain(import.meta.url)) {
 	assert(MENUS.some((m) => m.value === "usage"), "usage menu registered");
 	assert(arnativeCompletions("us")![0]!.value === "usage", "usage menu has completions");
 	assert(typeof MENUS.find((m) => m.value === "usage")!.open === "function", "the usage row opens the dashboard");
+
+	// The /arnative picker lists the package's family only; everything else (system, dark,
+	// light, a theme of the user's own) stays in /settings → Theme.
+	assert(isArnativeThemeName("arnative"), "the default theme is family");
+	assert(isArnativeThemeName("arnative-sun"), "a variant is family");
+	for (const outsider of ["system", "dark", "light", "omarchy-system", "arnativeX", ""])
+		assert(!isArnativeThemeName(outsider), `${JSON.stringify(outsider)} is not family`);
 
 	// The shipped theme is applied only when pi has no theme setting of its own.
 	assert(shouldApplyDefaultTheme(undefined, [{ name: "arnative" }]), "an unset theme installs Arnative");
@@ -491,7 +506,7 @@ if (isMain(import.meta.url)) {
 	// not a literal run of spaces, so adding a wider screen cannot break the layout test.
 	const widest = Math.max(...MENUS.map((m) => m.label.length));
 	assert(
-		row0.startsWith(`│ → ${"Themes".padEnd(widest)}${ROW_DIVIDER}list & apply themes`),
+		row0.startsWith(`│ → ${"Themes".padEnd(widest)}${ROW_DIVIDER}arnative themes only`),
 		`menu row layout, got ${JSON.stringify(row0)}`,
 	);
 	assert(plainMenu.filter((l) => l.includes(ROW_DIVIDER)).every((l) => l.indexOf(ROW_DIVIDER) === row0.indexOf(ROW_DIVIDER)), "every divider sits in one column");
