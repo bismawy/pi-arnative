@@ -236,8 +236,19 @@ export function withoutAuth(auth: unknown, name: string): Record<string, unknown
 const modelsPath = (): string => join(getAgentDir(), "models.json");
 const authPath = (): string => join(getAgentDir(), "auth.json");
 
+/** pi's own models.json tolerance, replicated exactly: `//` comments and trailing
+ *  commas are dropped outside string literals, so the wizard accepts every file pi's
+ *  ModelConfig accepts — a hand-edited file never blocks the menu. */
+export function looseJsonParse(content: string): unknown {
+	const stripped = content
+		.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
+		.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail?: string) => tail ?? (m[0] === '"' ? m : ""));
+	return JSON.parse(stripped) as unknown;
+}
+
 /** Missing file → undefined. Corrupt JSON is thrown, never overwritten: the caller aborts
- *  and reports, so a broken models.json cannot be clobbered by a save. */
+ *  and reports, so a broken models.json cannot be clobbered by a save. Reads with pi's
+ *  tolerance: BOM stripped, comments and trailing commas dropped before JSON.parse. */
 function readJson(path: string): unknown {
 	let content: string;
 	try {
@@ -245,7 +256,8 @@ function readJson(path: string): unknown {
 	} catch {
 		return undefined;
 	}
-	return JSON.parse(content) as unknown;
+	if (content.trim() === "") return undefined;
+	return looseJsonParse(content.replace(/^\uFEFF/, ""));
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -553,6 +565,20 @@ if (isMain(import.meta.url)) {
 	const picked0 = renderModels(new Set(["m1"]), [{ label: "m1" }, { label: "m2" }]);
 	assert(picked0.some((l) => l.includes("[x] m1")) && picked0.some((l) => l.includes("[ ] m2")), "checked and unchecked rows render");
 	assert(picked0.some((l) => l.includes("[a] API")), "the model legend advertises the flavor switch");
+
+	// The store reads with pi's own tolerance: a hand-edited models.json (comments, trailing
+	// commas) is exactly what pi itself accepts, and strings containing `//` or `,]` survive.
+	assert((looseJsonParse('{\n// c\n"a": 1, // x\n"b": [1, 2,],\n}') as { a: number; b: number[] }).b.join() === "1,2", "trailing commas and // comments are dropped");
+	const kept = looseJsonParse('{"u":"http://x//y","v":"a,b]"}') as Record<string, string>;
+	assert(kept.u === "http://x//y" && kept.v === "a,b]", "string literals survive the strip");
+	assert((looseJsonParse("{\"a\": 1,}") as { a: number }).a === 1, "a trailing comma before the closing brace parses");
+	let threw = false;
+	try {
+		looseJsonParse("{nope");
+	} catch {
+		threw = true;
+	}
+	assert(threw, "genuinely broken JSON still throws, so the caller can report it");
 
 	// The providers screen copy stays factual and pinned.
 	assert(PROVIDERS_TEXT.title === "Providers - Arnative\u2819", `providers title pinned, got ${PROVIDERS_TEXT.title}`);
