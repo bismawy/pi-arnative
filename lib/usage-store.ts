@@ -6,7 +6,7 @@
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -212,6 +212,9 @@ export function formatTokens(n: number): string {
 const cacheDir = (): string => join(getAgentDir(), "arnative");
 const cacheFilePath = (): string => join(cacheDir(), "usage-cache.json");
 const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.json");
+/** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
+ *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
+const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
 const CACHE_VERSION = 4; // v4: per-file rollup (was raw entries in v3)
 
 /** The v5 disk shape: one-char keys, and only provider\0model rows — provider-level
@@ -264,7 +267,12 @@ function loadDiskCache(): Map<string, FileCacheItem> {
 		if (!existsSync(cacheFilePath()) && existsSync(legacyCachePath())) {
 			mkdirSync(cacheDir(), { recursive: true });
 			renameSync(legacyCachePath(), cacheFilePath());
+		} else if (existsSync(legacyCachePath())) {
+			// Both exist — a downgrade recreated the flat file next to the folder copy. The
+			// folder copy belongs to the newer layout, so the flat one is dead.
+			rmSync(legacyCachePath());
 		}
+		if (existsSync(legacyPricesPath())) rmSync(legacyPricesPath());
 	} catch {
 		// a concurrent session may have moved it already: read whichever path exists
 	}
