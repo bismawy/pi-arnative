@@ -396,8 +396,10 @@ const pickModels = async (
 					if (opts.lockFlavor || !matchesKey(keyData, "a")) return;
 					flavor = API_FLAVORS[(API_FLAVORS.indexOf(flavor) + 1) % API_FLAVORS.length]!;
 				},
-				description: () =>
-					`${FLAVOR_LABELS[flavor]}${opts.via ? ` · ${opts.via}` : ""} · ${checked.size}/${models.length} picked`,
+				description: () => `${FLAVOR_LABELS[flavor]}${opts.via ? ` · ${opts.via}` : ""}`,
+				// The picked count lives in the legend, accented, next to the keys it refers to.
+				legend: () =>
+					`${theme.fg("accent", `${checked.size}/${models.length} picked`)}${theme.fg("dim", ` · ${opts.lockFlavor ? MODEL_LEGEND_LOCKED : MODEL_LEGEND}`)}`,
 			},
 			{ title: screenTitle("Models"), description: FLAVOR_LABELS[flavor], legend: opts.lockFlavor ? MODEL_LEGEND_LOCKED : MODEL_LEGEND },
 			false,
