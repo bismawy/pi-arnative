@@ -137,7 +137,7 @@ if (isMain(import.meta.url)) {
 	const styled = renderScreen(th, 60, { title: "t", description: "d", legend: "<accent>34/44 picked</accent><dim> · keys</dim>" }, []);
 	assert(styled[styled.length - 2]!.includes("<accent>34/44 picked</accent>"), "a pre-styled legend renders verbatim");
 	// The header copy is longer than a narrow terminal: the wall must win over the text.
-	const longCopy = "Selection previews live — same list as /settings → Theme.";
+	const longCopy = "Selection previews live — arnative themes only (all themes: /settings → Theme).";
 	for (const w of [40, 50, 56, 60]) {
 		const narrow = renderScreen(th, w, { title: screenTitle("Themes"), description: longCopy, legend: "[Esc] Revert" }, []);
 		assert(narrow.every((l) => visibleWidth(l) === w), `a long description keeps every line at width ${w}`);
