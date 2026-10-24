@@ -64,8 +64,11 @@ const QUIT = keySet("q/Esc", "q", "escape");
 
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
-/** Root menu: move and open. No `[←]` — the menu has no screen behind it. */
-export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
+/** Root `/arnative` menu: nothing behind it, so `←` is not advertised — Esc closes. */
+export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
+/** Move-and-open list inside a submenu (the provider list, the provider actions):
+ *  `←` steps back to the screen above. */
+export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [BACK.label, "Back"], [CANCEL.label, "Close"]);
 /** Live-preview list: moving applies, Enter keeps, `←` steps out, Esc reverts. */
 export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [BACK.label, "Back"], [CANCEL.label, "Revert"]);
 /** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
@@ -107,8 +110,8 @@ if (isMain(import.meta.url)) {
 	assert(!matchesBack("h"), "a bare letter is not the back key");
 	// The legends are built from the same keys the handlers match, so a key cannot be
 	// advertised on one screen and handled on none.
-	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", `root menu legend pinned, got ${LEGEND_MOVE}`);
-	assert(!LEGEND_MOVE.includes(BACK_KEY_LABEL), "the root menu does not advertise ←");
+	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", `root menu legend pinned, got ${LEGEND_MOVE}`);
+	assert(LEGEND_MOVE.includes("[←] Back"), "the root menu advertises ← Back");
 	assert(
 		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
 		`live legend pinned, got ${LEGEND_LIVE}`,

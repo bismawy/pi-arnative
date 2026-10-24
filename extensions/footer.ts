@@ -1168,6 +1168,11 @@ export default function (pi: ExtensionAPI) {
 		armIdleProbe();
 		activeToolVerbs.delete(event.toolCallId);
 		setWorkingVerb(ctx, currentToolVerb(activeToolVerbs));
+		// A finished edit/write/bash may have changed the tree (or committed it): without
+		// this, the diff stat stays frozen at the turn_start snapshot — a session that
+		// commits inside the turn shows "clean" forever. refreshGit coalesces concurrent
+		// calls (in-flight + one queued), so a burst of tool ends costs at most two runs.
+		void refreshGit(ctx.cwd).then(() => poke());
 	});
 
 	pi.on("message_update", async (event) => {

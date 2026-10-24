@@ -32,7 +32,8 @@ const applyBg = (line: string, width: number, bgFn: (text: string) => string): s
 export interface ScreenText {
 	title: string;
 	description: string;
-	/** Keybind legend, drawn as the last row above the bottom edge. */
+	/** Keybind legend, drawn as the last row above the bottom edge. Plain text is dimmed
+	 *  by the frame; a legend that already carries ANSI styling renders verbatim. */
 	legend: string;
 }
 
@@ -66,7 +67,7 @@ export function renderScreen(
 		row(""),
 		...body.map(row),
 		row(""),
-		row(fg("dim", text.legend)),
+		row(text.legend.includes("\u001b[") ? text.legend : fg("dim", text.legend)),
 		boxEdge("╰", "╯", width, border),
 	].map((l) => truncateToWidth(l, width, ""));
 }
@@ -131,6 +132,10 @@ if (isMain(import.meta.url)) {
 	assert(taggedScreen[2]!.includes("<muted>d"), "the description is muted");
 	assert(taggedScreen[taggedScreen.length - 2]!.includes("<dim>l"), "the legend is dim");
 	assert(renderScreen(null, 40, { title: "t", description: "d", legend: "l" }, ["x"]).every((l) => visibleWidth(l) === 40), "a null theme still frames the screen");
+	// A legend that styles itself (the models picker accents its picked count) renders
+	// verbatim: no dim wrap that would mute the accent and leak a reset into the tail.
+	const styled = renderScreen(th, 60, { title: "t", description: "d", legend: "<accent>34/44 picked</accent><dim> · keys</dim>" }, []);
+	assert(styled[styled.length - 2]!.includes("<accent>34/44 picked</accent>"), "a pre-styled legend renders verbatim");
 	// The header copy is longer than a narrow terminal: the wall must win over the text.
 	const longCopy = "Selection previews live — same list as /settings → Theme.";
 	for (const w of [40, 50, 56, 60]) {

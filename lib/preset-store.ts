@@ -9,7 +9,7 @@
  * Reads are memoised per process; every write re-reads the file and replaces it atomically
  * (temp file + rename), so concurrent pi sessions that write different keys keep both.
  */
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -19,21 +19,52 @@ export const HEADER_PRESET_KEY = "headerPreset";
 export const FOOTER_PRESET_KEY = "footerPreset";
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
-const configPath = (): string => join(getAgentDir(), "arnative-config.json");
+// Everything pi-arnative writes lives in one folder (agent dir/arnative); the config moved
+// there from a flat arnative-config.json, which is migrated in on first read.
+const configDir = (): string => join(getAgentDir(), "arnative");
+const configPath = (): string => join(configDir(), "config.json");
+const legacyConfigPath = (): string => join(getAgentDir(), "arnative-config.json");
+
+/** Layout "1": every file this package writes lives under `<agent>/arnative` — the flat
+ *  `arnative-*.json` files are moved on first read, a leftover a downgrade recreated next
+ *  to the folder copy is removed, and `layoutVersion` in config.json records the layout so
+ *  the next layout change has one stamp to migrate from. */
+const LAYOUT_VERSION = "1";
 
 let memo: Record<string, unknown> | null = null;
 
-function readDisk(): Record<string, unknown> {
+function readDisk(): { parsed: boolean; record: Record<string, unknown> } {
 	try {
+		// One-time move into the arnative folder (was a flat file next to it).
+		if (!existsSync(configPath()) && existsSync(legacyConfigPath())) {
+			mkdirSync(configDir(), { recursive: true });
+			renameSync(legacyConfigPath(), configPath());
+		} else if (existsSync(legacyConfigPath())) {
+			// Both exist — a downgrade recreated the flat file next to the folder copy. The
+			// folder copy belongs to the newer layout, so the flat one is dead.
+			rmSync(legacyConfigPath());
+		}
 		const raw = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
-		if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+		if (raw && typeof raw === "object" && !Array.isArray(raw)) return { parsed: true, record: raw as Record<string, unknown> };
+		return { parsed: false, record: {} }; // readable JSON of the wrong shape: read as empty, never rewritten
 	} catch {
 		// absent, unreadable or corrupt: fall back to defaults rather than crash the header
+		return { parsed: false, record: {} };
 	}
-	return {};
 }
 
-const readConfig = (): Record<string, unknown> => (memo ??= readDisk());
+const readConfig = (): Record<string, unknown> => {
+	if (memo) return memo;
+	const { parsed, record } = readDisk();
+	memo = record;
+	// Stamp once per layout version (idempotent; saveChoice re-reads and merges, so a
+	// concurrent session's keys survive the write) — but only over an absent file or a
+	// cleanly parsed one: a corrupt or transiently unreadable config must never be wiped.
+	if ((parsed || !existsSync(configPath())) && memo.layoutVersion !== LAYOUT_VERSION) {
+		saveChoice("layoutVersion", LAYOUT_VERSION);
+	}
+	return memo;
+};
 
 /** The stored value for `key`, or undefined when absent or not one of `allowed`. */
 export function loadChoice<T extends string>(key: string, allowed: readonly T[]): T | undefined {
@@ -45,7 +76,7 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 export function saveChoice(key: string, value: string): void {
 	if (readConfig()[key] === value) return;
 	// Re-read: another pi session may have written its own key since this one loaded.
-	memo = { ...readDisk(), [key]: value };
+	memo = { ...readDisk().record, [key]: value };
 	try {
 		const path = configPath();
 		const tmp = `${path}.${process.pid}.tmp`;
@@ -75,7 +106,7 @@ if (isMain(import.meta.url)) {
 	assert(loadChoice(FOOTER_PRESET_KEY, ["a", "b"] as const) === "a", "a second key is stored without clobbering the first");
 
 	// Another pi session writes its own key after this one loaded; a save must keep it.
-	writeFileSync(join(fixture, "arnative-config.json"), JSON.stringify({ headerPreset: "b", footerPreset: "a", other: "x" }), "utf8");
+	writeFileSync(join(fixture, "arnative", "config.json"), JSON.stringify({ headerPreset: "b", footerPreset: "a", other: "x" }), "utf8");
 	saveChoice(FOOTER_PRESET_KEY, "b");
 	resetPresetCache();
 	assert(loadChoice("other", ["x"] as const) === "x", "a key written by another process survives a save");
@@ -89,9 +120,36 @@ if (isMain(import.meta.url)) {
 	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === undefined, "an unknown stored value is rejected");
 
 	// A corrupt file must not throw on the header's render path.
-	writeFileSync(join(fixture, "arnative-config.json"), "{not json", "utf8");
+	writeFileSync(join(fixture, "arnative", "config.json"), "{not json", "utf8");
 	resetPresetCache();
 	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === undefined, "a corrupt config file reads as empty");
+	assert(readFileSync(join(fixture, "arnative", "config.json"), "utf8") === "{not json", "a corrupt config is left untouched — no stamp over it");
+
+	// The flat pre-folder config is moved into the arnative folder on first read.
+	const mig = mkdtempSync(join(tmpdir(), "arnative-preset-mig-"));
+	process.env.PI_CODING_AGENT_DIR = mig;
+	writeFileSync(join(mig, "arnative-config.json"), JSON.stringify({ headerPreset: "b" }), "utf8");
+	resetPresetCache();
+	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "a legacy flat config is migrated and read");
+	assert(existsSync(join(mig, "arnative", "config.json")), "the migrated config lives in the arnative folder");
+	rmSync(mig, { recursive: true, force: true });
+
+	// Layout stamp: the folder copy wins over a stale flat file a downgrade recreated,
+	// the stale file is removed, and stamping merges into the config instead of replacing it.
+	const stamp = mkdtempSync(join(tmpdir(), "arnative-preset-stamp-"));
+	process.env.PI_CODING_AGENT_DIR = stamp;
+	mkdirSync(join(stamp, "arnative"), { recursive: true });
+	writeFileSync(join(stamp, "arnative", "config.json"), JSON.stringify({ headerPreset: "b" }), "utf8");
+	writeFileSync(join(stamp, "arnative-config.json"), JSON.stringify({ headerPreset: "a" }), "utf8"); // stale, from a downgrade
+	resetPresetCache();
+	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "the folder copy wins over the stale flat file");
+	assert(!existsSync(join(stamp, "arnative-config.json")), "the stale flat config is removed");
+	assert(loadChoice("layoutVersion", ["1"] as const) === "1", "the layout stamp is written on first read");
+	const stamped = JSON.parse(readFileSync(join(stamp, "arnative", "config.json"), "utf8")) as Record<string, unknown>;
+	assert(stamped.headerPreset === "b" && stamped.layoutVersion === "1", "stamping merges, it does not replace");
+	rmSync(stamp, { recursive: true, force: true });
+	process.env.PI_CODING_AGENT_DIR = fixture;
+	resetPresetCache();
 
 	rmSync(fixture, { recursive: true, force: true });
 	console.log("preset-store.ts self-check OK");
