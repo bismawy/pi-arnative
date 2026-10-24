@@ -61,6 +61,8 @@ export function activeFooterPreset(): FooterPreset {
 export function applyFooterPreset(ctx: ExtensionContext): void {
 	if (activeFooterPreset() === "Pi (system)") {
 		ctx.ui?.setFooter?.(undefined);
+		// The strip belongs to the arnative presets; pi's own footer stays alone.
+		ctx.ui?.setWidget?.("arnative-info", undefined);
 		return;
 	}
 	const register = (globalThis as Record<symbol, ((ctx: ExtensionContext) => void) | undefined>)[FOOTER_REGISTRAR_KEY];
@@ -106,6 +108,10 @@ let git: GitInfo = null;
 let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
+/** pi hands the statuses provider only to a `setFooter` factory — the bridge there
+ *  captures it so the above-editor widget can read statuses (setWidget gets no
+ *  footerData argument of its own). */
+let footerDataRef: { onBranchChange(cb: () => void): () => void; getExtensionStatuses(): ReadonlyMap<string, string> } | null = null;
 let lastPokeMs = 0;
 /** Column ranges of the minimal footer's disclosure markers, recorded per render
  *  (mouse coordinates are component-local, so they must come from the same frame). */
@@ -932,144 +938,153 @@ export default function (pi: ExtensionAPI) {
 		try {
 			armIdleProbe();
 			const registerArnative = (c: ExtensionContext) => {
+				// pi hands the statuses provider only to `setFooter` — so the footer slot carries a
+				// bridge that captures it and renders nothing; the info strip itself is a widget
+				// ABOVE the chat column (setWidget factories get no footerData of their own).
 				c.ui.setFooter((tui, theme, footerData) => {
+					footerDataRef = footerData;
 					activeThemeProxy = theme;
-					// Wraps the dispatch (see `wrapInputListener`): the TUI's own viewport
-					// listener runs first and would swallow the keys an `addInputListener` waits for.
-					const dot = wrapInputListener(tui);
-					rerender = () => tui.requestRender();
-					const unsub = footerData.onBranchChange(() => {
-						void refreshGit(cwd).then(() => tui.requestRender());
-					});
 					return {
-						dispose() {
-							rerender = null;
-							dot();
-							unsub();
-						},
-						invalidate() {},
-						render(width: number): string[] {
-							const acc = (text: string) => theme.fg("accent", text);
-							const dim = (text: string) => theme.fg("dim", text);
-							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-							// `accentSoft`/`secondarySoft` are vars-only tokens on Pi 1.2+, so both soft tiers
-							// are resolved through the shared painters instead of a raw fg() probe. Icons keep
-							// `accent`; the cwd/branch/clock/status text takes the border-accent tier, so the
-							// footer stays two-toned instead of the text inheriting the accent hue.
-							const soft = softOf(theme as never);
-							const softLabel = softSecondaryOf(theme as never);
-							// Diff colors: the same theme slots pi uses for a diff body, with the
-							// plain soft color as fallback for a theme that omits them.
-							const colorOr = (name: string, fallback: (t: string) => string) => (t: string) => {
-								try {
-									return fgAny(name, t);
-								} catch {
-									return fallback(t);
-								}
-							};
-							// `primary` is a var, not a token (Pi 1.2+ rejects custom `colors` keys); its
-							// arnative carrier is the official token it maps to.
-							const primary = colorOr("mdHeading", acc);
-							const secondarySoft = softLabel;
-							const diffAdd = colorOr("toolDiffAdded", soft);
-							const diffDel = colorOr("toolDiffRemoved", soft);
-							const sep = dim(" | ");
-
-							const durationStr = formatDuration(clock.total());
-							const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
-							const paused = clock.idle();
-							idlePauseShown = paused;
-							const clockIcon = paused ? dim("\uf017") : acc("\uf017");
-							const clockText = paused ? dim(durationStr) : secondarySoft(durationStr);
-							const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
-							const cwdShort = shortenCwd(cwd);
-							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
-							const open = minimalExpanded();
-							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
-							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
-							if (git) {
-								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("")}`;
-							}
-							if (isMinimal) left1 += arrow(open.left);
-							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim) + (isMinimal ? arrow(open.right) : "");
-
-							const statuses: ReadonlyMap<string, string> = (() => {
-								try {
-									return footerData.getExtensionStatuses();
-								} catch {
-									return new Map<string, string>();
-								}
-							})();
-							const rawCache = statuses.get("pi-cache-stats");
-							const cleanStatus = (s: string) => {
-								if (s.includes("MCP:")) {
-									let clean = stripAnsi(s);
-									const idx = clean.indexOf("MCP:");
-									let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
-									rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
-									const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
-									return `${acc("\uf233")} ${secondarySoft(m ? m[0] : rest || "MCP")}`;
-								}
-								if (s.includes("ponytail")) return ponytailStatusLine(s, acc, dim, secondarySoft);
-								if (isJevEyeStatus(s)) return jevEyeStatusLine(s, acc, dim, secondarySoft, theme);
-								let clean = stripAnsi(s);
-								clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
-								return secondarySoft(clean.trim());
-							};
-
-							const groups: string[] = [];
-							const mcp = statuses.get("mcp");
-							if (mcp !== undefined) groups.push(cleanStatus(mcp));
-							for (const [k, s] of statuses) {
-								if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
-							}
-
-							let usageStr = "";
-							try {
-								usageStr = getUsage(ctx, acc, secondarySoft);
-							} catch {
-								// fallback
-							}
-							const opt = parseOptimizer(rawCache) ?? piCacheHit();
-							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${secondarySoft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${secondarySoft(opt)}` : "", usageStr].filter(Boolean);
-
-							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
-							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
-							// and reveals the same rows on click/keypress, one side at a time.
-							const leftRows = isMinimal && !open.left ? [] : groups;
-							const rightRows = isMinimal && !open.right ? [] : metricCells;
-							if (isMinimal) {
-								// Own head row: it reports the zones measured from what it actually placed.
-								const placed = placeMinimalHead(left1, right1, width);
-								minimalRanges = { left: placed.left, right: placed.right };
-								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, ` ${dim("·")} `, width).slice(1);
-								return [placed.row, ...rest];
-							}
-							minimalRanges = null;
-							return layoutFooterGrid(left1, right1, leftRows, rightRows, sep, ` ${dim("·")} `, width);
-						},
-						handleMouse(event: TuiMouseEvent) {
-							// Clicks only reach here in fullscreen mode; the keyboard shortcut covers
-							// regular mode. Return handled on press so pi records the target — without
-							// that it never dispatches the follow-up click.
-							if (event.button !== "left" || event.y !== 0) return undefined;
-							const ranges = minimalRanges;
-							if (!ranges) return undefined;
-							const inside = (r: [number, number]) => event.x >= r[0] && event.x <= r[1];
-							const hit = inside(ranges.left) ? "left" : inside(ranges.right) ? "right" : null;
-							if (!hit) return undefined;
-							if (event.type === "press") return { handled: true, render: false };
-							if (event.type !== "click") return undefined;
-							const state = minimalExpanded();
-							state[hit] = !state[hit];
-							poke();
-							return { handled: true, render: true };
+						dispose() { /* the bridge only captures the provider; nothing to tear down */ },
+						invalidate() { /* every render is computed, nothing cached */ },
+						render(): string[] {
+							// The strip moved above the editor; an empty footer keeps the info from
+							// rendering twice while the bridge keeps its hold on footerData.
+							return [];
 						},
 					};
 				});
+				c.ui.setWidget?.(
+					"arnative-info",
+					(tui, theme) => {
+						activeThemeProxy = theme;
+						// Wraps the dispatch (see `wrapInputListener`): the TUI's own viewport
+						// listener runs first and would swallow the keys an `addInputListener` waits for.
+						const dot = wrapInputListener(tui);
+						rerender = () => tui.requestRender();
+						const unsub = footerDataRef?.onBranchChange(() => {
+							void refreshGit(cwd).then(() => tui.requestRender());
+						});
+						return {
+							dispose() {
+								rerender = null;
+								dot();
+								unsub?.();
+							},
+							invalidate() { /* every render is computed, nothing cached */ },
+							render(width: number): string[] {
+								// Above the chat column the whole strip reads dim — icons, values and
+								// separators alike: one quiet line group, not a second status bar.
+								const dim = (text: string) => theme.fg("dim", text);
+								const acc = dim;
+								const soft = dim;
+								const secondarySoft = dim;
+								const primary = dim;
+								const diffAdd = dim;
+								const diffDel = dim;
+								// The one living element: a running clock keeps the soft border-accent tier,
+								// so "time is moving" stays legible on an otherwise all-dim strip; a frozen
+								// clock dims with everything else.
+								const liveSoft = softSecondaryOf(theme as never);
+								const sep = dim(" | ");
 
-			};
+								const durationStr = formatDuration(clock.total());
+								const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
+								const paused = clock.idle();
+								idlePauseShown = paused;
+								const clockIcon = paused ? dim("\uf017") : acc("\uf017");
+								const clockText = paused ? dim(durationStr) : liveSoft(durationStr);
+								const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
+								const cwdShort = shortenCwd(cwd);
+								const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
+								const open = minimalExpanded();
+								const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
+								let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
+								if (git) {
+									left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("")}`;
+								}
+								if (isMinimal) left1 += arrow(open.left);
+								const right1 = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim) + (isMinimal ? arrow(open.right) : "");
+
+								const statuses: ReadonlyMap<string, string> = (() => {
+									try {
+										return footerDataRef?.getExtensionStatuses() ?? new Map<string, string>();
+									} catch {
+										return new Map<string, string>();
+									}
+								})();
+								const rawCache = statuses.get("pi-cache-stats");
+								const cleanStatus = (s: string) => {
+									if (s.includes("MCP:")) {
+										let clean = stripAnsi(s);
+										const idx = clean.indexOf("MCP:");
+										let rest = (idx >= 0 ? clean.slice(idx) : clean).replace(/\uFFFD/g, "").trim();
+										rest = rest.replace(/[\p{Extended_Pictographic}\uFE0F\u200D\u2800-\u28FF]/gu, "").replace(/\s{2,}/g, " ").trim();
+										const m = rest.match(/MCP:\s*\d+\s*servers?\s*enabled/i);
+										return `${acc("\uf233")} ${secondarySoft(m ? m[0] : rest || "MCP")}`;
+									}
+									if (s.includes("ponytail")) return ponytailStatusLine(s, acc, dim, secondarySoft);
+									if (isJevEyeStatus(s)) return jevEyeStatusLine(s, acc, dim, secondarySoft, theme);
+									let clean = stripAnsi(s);
+									clean = clean.replace(/\uFFFD/g, "").replace(/\?{1,2}\s*/g, "");
+									return secondarySoft(clean.trim());
+								};
+
+								const groups: string[] = [];
+								const mcp = statuses.get("mcp");
+								if (mcp !== undefined) groups.push(cleanStatus(mcp));
+								for (const [k, s] of statuses) {
+									if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
+								}
+
+								let usageStr = "";
+								try {
+									usageStr = getUsage(ctx, acc, secondarySoft);
+								} catch {
+									// fallback
+								}
+								const opt = parseOptimizer(rawCache) ?? piCacheHit();
+								const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${secondarySoft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
+								const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${secondarySoft(opt)}` : "", usageStr].filter(Boolean);
+
+								// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
+								// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
+								// and reveals the same rows on click/keypress, one side at a time.
+								const leftRows = isMinimal && !open.left ? [] : groups;
+								const rightRows = isMinimal && !open.right ? [] : metricCells;
+								if (isMinimal) {
+									// Own head row: it reports the zones measured from what it actually placed.
+									const placed = placeMinimalHead(left1, right1, width);
+									minimalRanges = { left: placed.left, right: placed.right };
+									const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, ` ${dim("·")} `, width).slice(1);
+									return [placed.row, ...rest];
+								}
+								minimalRanges = null;
+								return layoutFooterGrid(left1, right1, leftRows, rightRows, sep, ` ${dim("·")} `, width);
+							},
+							handleMouse(event: TuiMouseEvent) {
+								// Clicks only reach here in fullscreen mode; the keyboard shortcut covers
+								// regular mode. Return handled on press so pi records the target — without
+								// that it never dispatches the follow-up click.
+								if (event.button !== "left" || event.y !== 0) return undefined;
+								const ranges = minimalRanges;
+								if (!ranges) return undefined;
+								const inside = (r: [number, number]) => event.x >= r[0] && event.x <= r[1];
+								const hit = inside(ranges.left) ? "left" : inside(ranges.right) ? "right" : null;
+								if (!hit) return undefined;
+								if (event.type === "press") return { handled: true, render: false };
+								if (event.type !== "click") return undefined;
+								const state = minimalExpanded();
+								state[hit] = !state[hit];
+								poke();
+								return { handled: true, render: true };
+							},
+							};
+						},
+						{ placement: "aboveEditor" },
+					);
+
+				};
 			(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = registerArnative;
 			applyFooterPreset(ctx);
 			class ArnativeEditor extends CustomEditor {

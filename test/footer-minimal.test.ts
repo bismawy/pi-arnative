@@ -17,6 +17,8 @@ type Footer = { render(width: number): string[]; handleMouse?(e: unknown): unkno
 /** Build the extension once: its handlers are registered per process. */
 const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
 let footerFactory: ((tui: unknown, theme: unknown, data: unknown) => Footer) | null = null;
+let widgetFactory: ((tui: unknown, theme: unknown) => Footer) | null = null;
+let widgetPlacement: string | undefined;
 
 const pi = {
 	on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, fn),
@@ -64,6 +66,11 @@ const ctx = {
 		setFooter: (f: unknown) => {
 			if (typeof f === "function") footerFactory = f as never;
 		},
+		setWidget: (key: string, content: unknown, options?: { placement?: string }) => {
+			if (key !== "arnative-info" || typeof content !== "function") return;
+			widgetFactory = content as never;
+			widgetPlacement = options?.placement;
+		},
 		setEditorComponent: () => {},
 		setWorkingIndicator: (options?: Record<string, unknown>) => ui.calls.push(options),
 		theme,
@@ -82,12 +89,16 @@ await handlers.get("session_start")!({ reason: "startup" }, ctx);
 // The wiring, not just the helper: session_start must seed the clock from the log.
 assert.equal(clock.active, SEED_GAP_MS, "session_start seeds active time from the session log");
 
-/** A footer component built for the given preset. */
+/** The above-editor info strip for the given preset (the footer slot now bridges). */
 function footerFor(preset: string): Footer {
 	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = preset;
 	delete (globalThis as Record<symbol, unknown>)[EXPAND_KEY];
-	assert.ok(footerFactory, "session_start registered a footer factory");
-	return footerFactory(tui, theme, footerData);
+	assert.ok(footerFactory, "session_start registered a footer bridge");
+	const bridge = footerFactory(tui, theme, footerData) as Footer;
+	assert.deepEqual(bridge.render(100), [], "the footer slot renders empty — the strip lives above the editor");
+	assert.ok(widgetFactory, "session_start registered the above-editor widget");
+	assert.equal(widgetPlacement, "aboveEditor", "the strip is placed above the chat column");
+	return widgetFactory(tui, theme);
 }
 
 const mouse = (type: string, x: number) => ({
