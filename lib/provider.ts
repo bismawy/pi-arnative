@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
 import { screenTitle, type ScreenText } from "../lib/box.ts";
 import { stripAnsi } from "../lib/ansi.ts";
-import { LIST_LEGEND_MOVE, ListPicker, rowText, type ListRow } from "./list-picker.ts";
+import { INPUT_LEGEND, InputPicker, LIST_LEGEND_MOVE, ListPicker, rowText, type ListRow } from "./list-picker.ts";
 
 // ---------------------------------------------------------------- flavors
 
@@ -452,8 +452,34 @@ const pickModels = async (
 	return { picked, flavor };
 };
 
-const readInput = async (ctx: ExtensionCommandContext, title: string, placeholder: string): Promise<string | undefined> => {
-	const value = await ctx.ui.input(title, placeholder);
+const readInput = async (
+	ctx: ExtensionCommandContext,
+	/** The arnative screen name — the box title becomes `<screen> - Arnative⠙`. */
+	screen: string,
+	/** What the field is, shown as the description under the title. */
+	field: string,
+	placeholder: string,
+	initial = "",
+): Promise<string | undefined> => {
+	if (ctx.mode === "tui") {
+		const value = await ctx.ui.custom<string | null>((tui, theme, _kb, done) =>
+			new InputPicker(
+				theme,
+				{ title: screenTitle(screen), description: field, legend: INPUT_LEGEND },
+				initial,
+				{
+					done: (v) => done(v),
+					cancel: () => done(null),
+					requestRender: () => tui.requestRender(),
+				},
+				placeholder,
+				ctx.thinkingLevel,
+			),
+		);
+		return value === null ? undefined : value.trim();
+	}
+	// No custom screens (RPC/headless): the native prompt.
+	const value = await ctx.ui.input(`${screen} · ${field}`, initial || placeholder);
 	return value === undefined ? undefined : value.trim();
 };
 
@@ -461,7 +487,7 @@ const readInput = async (ctx: ExtensionCommandContext, title: string, placeholde
 const manualModels = async (ctx: ExtensionCommandContext): Promise<{ picked: string[]; flavor: ApiFlavor } | undefined> => {
 	const picked: string[] = [];
 	for (;;) {
-		const id = await readInput(ctx, `Model id ${picked.length + 1}`, "paste an id — empty to finish");
+		const id = await readInput(ctx, "Models", `Model id ${picked.length + 1} — empty to finish`, "paste an id");
 		if (id === undefined) return undefined;
 		if (id === "") break;
 		picked.push(id);
@@ -473,14 +499,14 @@ const manualModels = async (ctx: ExtensionCommandContext): Promise<{ picked: str
 };
 
 const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
-	const endpointRaw = await readInput(ctx, "Provider · Endpoint API", "https://api.example.com/v1");
+	const endpointRaw = await readInput(ctx, "Provider", "Endpoint API — the base URL", "https://api.example.com/v1");
 	if (!endpointRaw) return;
 	const endpoint = normalizeBase(endpointRaw);
 
-	const key = await readInput(ctx, "Provider · API Key", "empty for local or keyless endpoints");
+	const key = await readInput(ctx, "Provider", "API key — empty for local or keyless endpoints", "sk-…");
 
 	const suggested = guessProviderName(endpoint);
-	const name = await readInput(ctx, "Provider · Name", suggested) || suggested;
+	const name = await readInput(ctx, "Provider", "a provider id (letters, digits, - and _)", suggested, suggested) || suggested;
 	if (!/^[A-Za-z0-9_-]+$/.test(name)) {
 		ctx.ui.notify(`[arnative] "${name}" is not a usable provider id (letters, digits, - and _ only).`, "warning");
 		return;
@@ -504,7 +530,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 			({ picked, flavor } = chosen);
 		} else {
 			// No custom screens (RPC/headless): the ids as one editable list, empty = all.
-			const answer = await readInput(ctx, "Model ids (comma/space separated; empty = all)", result.models.join(", "));
+			const answer = await readInput(ctx, "Models", "ids comma/space separated — empty = all", "", result.models.join(", "));
 			if (answer === undefined) return;
 			picked = answer === "" ? result.models : answer.split(/[\s,]+/).filter(Boolean);
 			flavor = result.flavor;
@@ -573,7 +599,7 @@ const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entr
 		if (!chosen) return;
 		picked = chosen.picked;
 	} else {
-		const answer = await readInput(ctx, "Model ids (comma/space; empty = keep)", ids.join(", "));
+		const answer = await readInput(ctx, "Models", "ids comma/space — empty = keep", "", ids.join(", "));
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
@@ -605,7 +631,7 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 		if (!chosen) return;
 		picked = chosen.picked;
 	} else {
-		const answer = await readInput(ctx, "Model ids (comma/space; empty = keep)", union.join(", "));
+		const answer = await readInput(ctx, "Models", "ids comma/space — empty = keep", "", union.join(", "));
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
@@ -659,7 +685,7 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 		saved = outcome === true;
 	} else {
 		// No custom screens (RPC/headless): `id:level` pairs, e.g. `o1-mini:low`.
-		const answer = await readInput(ctx, "Thinking levels as id:level (comma/space; empty = cancel)", [...levels].map(([id, l]) => `${id}:${l}`).join(", "));
+		const answer = await readInput(ctx, "Thinking", "levels as id:level pairs — empty = cancel", "", [...levels].map(([id, l]) => `${id}:${l}`).join(", "));
 		if (answer === undefined || answer === "") return;
 		for (const pair of answer.split(/[\s,]+/).filter(Boolean)) {
 			const [id, level] = pair.split(":");

@@ -4,7 +4,7 @@
  * rows, Space toggles) for the Providers model list. Lives in its own module so screens
  * can import it without importing the settings menu back (no import cycle).
  */
-import { matchesKey, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Input, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { softSecondaryOf, thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
@@ -16,6 +16,8 @@ import { LEGEND_LIVE, LEGEND_MOVE, LEGEND_ROOT, matchesBack } from "../lib/short
 export const LIST_LEGEND_ROOT = LEGEND_ROOT;
 export const LIST_LEGEND_MOVE = LEGEND_MOVE;
 export const LIST_LEGEND_LIVE = LEGEND_LIVE;
+/** A text field: Enter keeps the value, Esc leaves it untouched. */
+export const INPUT_LEGEND = "[Enter] Save  [Esc] Cancel";
 
 /** One picker row: `Label · Note`. `note` is absent on the preset lists (themes, headers,
  *  footers), which are bare names. */
@@ -230,6 +232,81 @@ export class ListPicker implements Component {
 	}
 }
 
+export interface InputPickerHooks {
+	/** Enter: submit the field's value. */
+	done: (value: string) => void;
+	/** Esc or ctrl+c: leave without a value. */
+	cancel: () => void;
+	requestRender: () => void;
+}
+
+/** An arnative-styled text field: the pi-tui `Input` editor — arrows, word motions,
+ *  paste, undo — inside the same rounded box every other arnative screen uses, so a
+ *  wizard prompt does not drop the user into a foreign full-width dialog. */
+export class InputPicker implements Component, Focusable {
+	private readonly input: Input;
+	private readonly theme: { fg(c: string, t: string): string; bold?(t: string): string };
+	private readonly text: ScreenText;
+	private readonly hooks: InputPickerHooks;
+	/** Border painter, from the session's thinking level — the box follows the model. */
+	private readonly edge: (s: string) => string;
+	/** Set by the TUI; forwarded so the editor draws its cursor. */
+	focused = false;
+
+	constructor(
+		theme: { fg(c: string, t: string): string; bold?(t: string): string },
+		text: ScreenText,
+		initial: string,
+		hooks: InputPickerHooks,
+		/** Dim example shown while the field is empty. */
+		placeholder?: string,
+		thinkingLevel?: string,
+	) {
+		this.theme = theme;
+		this.text = text;
+		this.hooks = hooks;
+		this.edge = thinkingColorOf(theme, thinkingLevel);
+		this.input = new Input({
+			prompt: "> ",
+			placeholder,
+			placeholderStyle: (t: string) => theme.fg("dim", t),
+		});
+		this.input.setValue(initial);
+	}
+
+	/** The field's current text — what Enter would submit. */
+	getValue(): string {
+		return this.input.getValue();
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, "enter")) {
+			this.hooks.done(this.input.getValue());
+			return;
+		}
+		if (matchesKey(data, "escape") || data === "\x03") {
+			this.hooks.cancel();
+			return;
+		}
+		this.input.handleInput(data);
+		this.hooks.requestRender();
+	}
+
+	render(width: number): string[] {
+		this.input.focused = this.focused;
+		const body = this.input.render(Math.max(8, width - 4));
+		return renderScreen(this.theme, width, this.text, body, this.edge);
+	}
+
+	invalidate(): void {
+		this.input.invalidate();
+	}
+
+	dispose(): void {
+		/* the editor holds nothing that outlives the screen */
+	}
+}
+
 /** Title of a sub-screen, derived from `screenTitle` so the format lives in one place. */
 export const pickerTitle = (setting: string): ScreenText["title"] => screenTitle(setting);
 
@@ -285,5 +362,29 @@ if (isMain(import.meta.url)) {
 	assert(frame.some((l) => l.includes("→ m24")) && frame.some((l) => l.includes("↑ 15 more")) && !frame.some((l) => l.includes("↓")), "the bottom of the list announces only what is above");
 	const short = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false, undefined, 10);
 	assert(!short.render(50).some((l) => l.includes("more")), "a short list shows no scroll indicators");
+
+	// The text field: the pi-tui editor drives, the arnative box frames it.
+	let submitted: string | null | undefined;
+	let inputCancelled = false;
+	const field = new InputPicker(fakeTheme, { title: screenTitle("Provider"), description: "Endpoint API — the base URL", legend: INPUT_LEGEND }, "", {
+		done: (v) => { submitted = v; },
+		cancel: () => { inputCancelled = true; },
+		requestRender: quiet,
+	}, "https://api.example.com/v1");
+	field.focused = true;
+	const fieldLines = field.render(60);
+	const plain = (s: string): string => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\x1b_pi:c\x07/g, "");
+	assert(fieldLines[0]!.startsWith("╭") && fieldLines[1]!.includes("Provider - Arnative"), "the input renders in the arnative box");
+	assert(fieldLines.some((l) => plain(l).includes("> https://api.example.com/v1")), "an empty field shows its dim placeholder");
+	assert(fieldLines.some((l) => l.includes(INPUT_LEGEND)), "the input legend is pinned");
+	for (const ch of "https://x.io") field.handleInput(ch);
+	field.handleInput("\x1b[D");
+	field.handleInput("io");
+	assert(field.getValue() === "https://x.iioo", "typing with a moved cursor edits at the cursor");
+	field.handleInput("\r");
+	assert(submitted === "https://x.iioo", "Enter submits the value");
+	assert(!inputCancelled, "Enter is not a cancel");
+	field.handleInput("\x1b");
+	assert(inputCancelled, "Esc cancels the field");
 	console.log("list-picker.ts self-check OK");
 }
