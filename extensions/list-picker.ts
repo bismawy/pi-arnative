@@ -1,0 +1,233 @@
+/**
+ * The live-preview picker shared by every arnative screen (`/arnative` and friends):
+ * ↑↓ previews instantly, Enter keeps, Esc reverts — plus a multi-select mode (`marked`
+ * rows, Space toggles) for the Providers model list. Lives in its own module so screens
+ * can import it without importing the settings menu back (no import cycle).
+ */
+import { matchesKey, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { softSecondaryOf, thinkingColorOf } from "../lib/ansi.ts";
+import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
+import { assert, isMain } from "../lib/check.ts";
+import { ROW_DIVIDER } from "../lib/format.ts";
+import { LEGEND_LIVE, LEGEND_MOVE, matchesBack } from "../lib/shortcuts.ts";
+
+// Legends come from the `KeySet`s the handlers match, so a key cannot be advertised on a
+// screen that does not handle it; the root menu has nothing behind it and omits `←`.
+export const LIST_LEGEND_MOVE = LEGEND_MOVE;
+export const LIST_LEGEND_LIVE = LEGEND_LIVE;
+
+/** One picker row: `Label · Note`. `note` is absent on the preset lists (themes, headers,
+ *  footers), which are bare names. */
+export interface ListRow {
+	label: string;
+	note?: string;
+}
+
+/** One row as a flat string — the headless/RPC `ctx.ui.select` fallback, which has no columns. */
+export function rowText(row: ListRow): string {
+	return row.note ? `${row.label} · ${row.note}` : row.label;
+}
+
+/** Bare names (preset lists) as rows; the cursor's `→` marks the live value. */
+export const nameRows = (names: readonly string[]): ListRow[] => names.map((label) => ({ label }));
+
+interface ListPickerHooks {
+	/** Apply a value on every selection move (live preview). */
+	preview: (name: string) => void;
+	/** Restore the value the picker opened with (Esc). */
+	revert: () => void;
+	done: () => void;
+	requestRender: () => void;
+	/** Esc, when it must be told apart from Enter (a menu selects, it does not revert). */
+	cancel?: () => void;
+	/** `←`: leave this screen for its parent (the menu, or the chat when there is none).
+	 *  Distinct from `cancel`/Esc, which closes or reverts the screen it is on. */
+	back?: () => void;
+	/** `g`: toggle a screen-level switch (Animations → gradient). Only a screen that passes
+	 *  this hook reacts to the key, so `g` stays a plain letter everywhere else. */
+	toggleGradient?: () => void;
+	/** Note re-read on every render, so a row can animate (Animations → a moving frame).
+	 *  Returning undefined keeps the row's static note. */
+	note?: (label: string) => string | undefined;
+	/** Space: toggle the row under the cursor (a multi-select screen). Only a screen that
+	 *  passes this hook reacts to Space, so every other screen keeps its meaning. */
+	toggle?: () => void;
+	/** Row check state for a multi-select screen; rows then render `[x]`/`[ ]` in front of
+	 *  the label. A screen without this hook renders no checkbox column at all. */
+	marked?: (label: string) => boolean;
+	/** Every key the picker does not handle, forwarded to the screen (a letter switch like
+	 *  `[a]` on the model list). The screen matches and acts; the picker only routes. */
+	press?: (keyData: string) => void;
+	/** Repaint cadence for an animated note. The frame itself is read from the clock, so a
+	 *  missed repaint costs one frame and never desynchronises the animation. */
+	tickMs?: number;
+	/** Legend re-read on every render, for a key row that states live state
+	 *  (`[g] Gradient on`). A constant legend would keep advertising the value it opened with. */
+	legend?: () => string;
+	/** Description re-read on every render, so the line under the title can follow screen
+	 *  state (the model list shows the API flavor `a` switched to). */
+	description?: () => string;
+}
+
+/** Box copy, so one picker serves every menu ("Themes - Arnative⠙", "Headers - Arnative⠙", …).
+ *  The same shape every arnative screen uses — see {@link renderScreen}. */
+export type ListPickerText = ScreenText;
+
+/** Live-preview picker: ↑↓ previews instantly, Enter keeps, Esc reverts. A caller whose
+ *  preview does nothing (`livePreview: false`) gets a plain menu: no revert on Esc, and
+ *  Esc is reported through `cancel` so "chose nothing" stays distinguishable from Enter. */
+export class ListPicker implements Component {
+	private theme: { fg(c: string, t: string): string; bold?(t: string): string };
+	private rows: ListRow[];
+	private hooks: ListPickerHooks;
+	private text: ListPickerText;
+	private selected: number;
+	private applied: string | undefined;
+	private readonly livePreview: boolean;
+	private readonly opened: string | undefined;
+	private readonly tick: ReturnType<typeof setInterval> | undefined;
+	/** Border painter, from the session's thinking level — the box follows the model. */
+	private readonly edge: (s: string) => string;
+
+	constructor(
+		theme: { fg(c: string, t: string): string; bold?(t: string): string },
+		rows: ListRow[],
+		current: string | undefined,
+		hooks: ListPickerHooks,
+		text: ListPickerText,
+		/** False for a menu: the selection is applied only on Enter, never while moving. */
+		livePreview = true,
+		/** The session's thinking level; colors the box border (theme `thinking*` slot). */
+		thinkingLevel?: string,
+	) {
+		this.theme = theme;
+		this.rows = rows;
+		this.hooks = hooks;
+		this.text = text;
+		this.livePreview = livePreview;
+		this.opened = current;
+		this.applied = current;
+		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
+		this.edge = thinkingColorOf(theme, thinkingLevel);
+		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
+	}
+
+	invalidate(): void {}
+	dispose(): void {
+		if (this.tick) clearInterval(this.tick);
+	}
+
+	/** Selected row, for callers that need the choice after `done()` resolves. */
+	get index(): number {
+		return this.selected;
+	}
+
+	private move(delta: number): void {
+		const next = Math.min(this.rows.length - 1, Math.max(0, this.selected + delta));
+		if (next === this.selected) return;
+		this.selected = next;
+		if (!this.livePreview) {
+			this.hooks.requestRender();
+			return;
+		}
+		this.applied = this.rows[next]!.label;
+		this.hooks.preview(this.applied);
+		this.hooks.requestRender();
+	}
+
+	handleInput(keyData: string): void {
+		if (matchesBack(keyData)) {
+			// Leave for the parent without touching the preview: `back` owns the revert of an
+			// uncommitted preview, because "cancel" here means "close", not "undo".
+			if (this.hooks.back) {
+				this.hooks.back();
+				return;
+			}
+			// No parent (the root menu): ← behaves like Esc — close, reverting a live preview.
+			if (this.applied !== this.opened) this.hooks.revert();
+			(this.hooks.cancel ?? this.hooks.done)();
+			return;
+		}
+		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q") || matchesKey(keyData, "escape")) {
+			if (this.applied !== this.opened) this.hooks.revert();
+			(this.hooks.cancel ?? this.hooks.done)();
+			return;
+		}
+		if (matchesKey(keyData, "up") || matchesKey(keyData, "k")) {
+			this.move(-1);
+			return;
+		}
+		if (matchesKey(keyData, "down") || matchesKey(keyData, "j")) {
+			this.move(1);
+			return;
+		}
+		if (matchesKey(keyData, "enter")) {
+			this.hooks.done();
+			return;
+		}
+		if (this.hooks.toggle && matchesKey(keyData, "space")) this.hooks.toggle();
+		if (this.hooks.toggleGradient && matchesKey(keyData, "g")) this.hooks.toggleGradient();
+		if (this.hooks.press) this.hooks.press(keyData);
+	}
+
+	render(width: number): string[] {
+		const th = this.theme;
+		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
+		const soft = softSecondaryOf(th);
+		const edge = (text: string) => this.edge(text);
+		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
+		const body: string[] = [];
+		for (let i = 0; i < this.rows.length; i++) {
+			const item = this.rows[i]!;
+			const isSelected = i === this.selected;
+			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
+			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
+			const noteText = this.hooks.note?.(item.label) ?? item.note;
+			const note = noteText ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", noteText)}` : "";
+			// A checked state marker is chrome like the cursor: `[x]` accent, `[ ]` dim.
+			const mark = this.hooks.marked
+				? this.hooks.marked(item.label)
+					? th.fg("accent", "[x] ")
+					: th.fg("dim", "[ ] ")
+				: "";
+			// Extract parenthetical suffix to render softly
+			const suffix = /(\(.*\))$/.exec(item.label)?.[1] ?? "";
+			const head = suffix ? item.label.slice(0, item.label.length - suffix.length) : item.label;
+			const tail = suffix ? th.fg("dim", suffix) : "";
+			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${mark}${paint(head)}${tail}${pad}${note}`;
+			body.push(truncateToWidth(content, width - 4, ""));
+		}
+		return renderScreen(
+			th,
+			width,
+			{
+				...this.text,
+				legend: this.hooks.legend ? this.hooks.legend() : this.text.legend,
+				description: this.hooks.description ? this.hooks.description() : this.text.description,
+			},
+			body,
+			edge,
+		);
+	}
+}
+
+/** Title of a sub-screen, derived from `screenTitle` so the format lives in one place. */
+export const pickerTitle = (setting: string): ScreenText["title"] => screenTitle(setting);
+
+// Self-check: `node extensions/list-picker.ts`
+if (isMain(import.meta.url)) {
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Close", "menu legend pinned");
+	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
+	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
+	const picker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", {
+		preview: () => {},
+		revert: () => {},
+		done: () => {},
+		requestRender: () => {},
+	}, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
+	const lines = picker.render(50);
+	assert(lines[0]!.startsWith("╭") && lines[lines.length - 1]!.startsWith("╰"), "picker framed");
+	assert(lines.every((l) => visibleWidth(l) === 50), "picker lines fit width 50");
+	assert(lines.some((l) => l.includes("→ a")), "the cursor marks the selection");
+	console.log("list-picker.ts self-check OK");
+}

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Providers: a custom endpoint from three inputs.** `/arnative` → **Providers** asks for the endpoint URL, API key, and name, then probes the endpoint once (Ollama `/api/tags`, Gemini `/v1beta/models`, OpenAI/Anthropic `/models` lists), lists the models it answered with, and saves on Space-picked selection — the key into `auth.json` (the file `/login` writes), the declaration into `models.json`. `[a]` switches the API flavor when a relay answers in an ambiguous shape; no answer falls back to manual ids. Opening `/model` picks up the saved provider (`extensions/provider.ts`).
+- **Multi-select for the shared picker.** `ListPicker` gains `marked`/`toggle`/`press` hooks and a dynamic description, so a screen can run a checkbox list without leaving the arnative chrome (`extensions/list-picker.ts`, extracted from `arnative.ts` to keep the provider screen cycle-free).
+
 ## [0.6.2] - 2026-10-20
 
 ### Fixed

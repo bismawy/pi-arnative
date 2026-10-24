@@ -6,12 +6,11 @@
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth, type AutocompleteItem, type Component } from "@earendil-works/pi-tui";
-import { softSecondaryOf, stripAnsi, thinkingColorOf } from "../lib/ansi.ts";
-import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
+import { visibleWidth, type AutocompleteItem } from "@earendil-works/pi-tui";
+import { stripAnsi } from "../lib/ansi.ts";
+import { screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markedLabels, ROW_DIVIDER } from "../lib/format.ts";
-import { LEGEND_LIVE, LEGEND_MOVE, matchesBack } from "../lib/shortcuts.ts";
 import { SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
 import {
 	activeSpinnerGradient,
@@ -25,6 +24,8 @@ import {
 } from "./animations.ts";
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
+import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "./list-picker.ts";
+import { openProviders } from "./provider.ts";
 import { openUsage } from "./usage.ts";
 
 export interface ArnativeMenu {
@@ -35,185 +36,15 @@ export interface ArnativeMenu {
 	open: (ctx: ExtensionCommandContext) => Promise<boolean | void>;
 }
 
-/** One picker row: `Label · Note`. `note` is absent on the preset lists (themes, headers,
- *  footers), which are bare names. */
-export interface ListRow {
-	label: string;
-	note?: string;
-}
-
 /** Menu rows: `Label · description` (same rhythm as /jev-eye's menu). */
 export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): ListRow[] {
 	return menus.map((m) => ({ label: m.label, note: m.description }));
 }
 
-// Legends come from the `KeySet`s the handlers match, so a key cannot be advertised on a
-// screen that does not handle it; the root menu has nothing behind it and omits `←`.
-export const LIST_LEGEND_MOVE = LEGEND_MOVE;
-export const LIST_LEGEND_LIVE = LEGEND_LIVE;
-
-/** One row as a flat string — the headless/RPC `ctx.ui.select` fallback, which has no columns. */
-export function rowText(row: ListRow): string {
-	return row.note ? `${row.label} · ${row.note}` : row.label;
-}
-
-/** Bare names (preset lists) as rows; the cursor's `→` marks the live value. */
-const nameRows = (names: readonly string[]): ListRow[] => names.map((label) => ({ label }));
-
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
 export const MENU_TITLE = screenTitle("Settings");
 /** One-line description under the menu title. */
-export const MENU_DESC = "Themes, headers, footers, animations, usage";
-
-interface ListPickerHooks {
-	/** Apply a value on every selection move (live preview). */
-	preview: (name: string) => void;
-	/** Restore the value the picker opened with (Esc). */
-	revert: () => void;
-	done: () => void;
-	requestRender: () => void;
-	/** Esc, when it must be told apart from Enter (a menu selects, it does not revert). */
-	cancel?: () => void;
-	/** `←`: leave this screen for its parent (the menu, or the chat when there is none).
-	 *  Distinct from `cancel`/Esc, which closes or reverts the screen it is on. */
-	back?: () => void;
-	/** `g`: toggle a screen-level switch (Animations → gradient). Only a screen that passes
-	 *  this hook reacts to the key, so `g` stays a plain letter everywhere else. */
-	toggleGradient?: () => void;
-	/** Note re-read on every render, so a row can animate (Animations → a moving frame).
-	 *  Returning undefined keeps the row's static note. */
-	note?: (label: string) => string | undefined;
-	/** Repaint cadence for an animated note. The frame itself is read from the clock, so a
-	 *  missed repaint costs one frame and never desynchronises the animation. */
-	tickMs?: number;
-	/** Legend re-read on every render, for a key row that states live state
-	 *  (`[g] Gradient on`). A constant legend would keep advertising the value it opened with. */
-	legend?: () => string;
-}
-
-/** Box copy, so one picker serves every menu ("Themes - Arnative⠙", "Headers - Arnative⠙", …).
- *  The same shape every arnative screen uses — see {@link renderScreen}. */
-export type ListPickerText = ScreenText;
-
-/** Live-preview picker: ↑↓ previews instantly, Enter keeps, Esc reverts. A caller whose
- *  preview does nothing (`livePreview: false`) gets a plain menu: no revert on Esc, and
- *  Esc is reported through `cancel` so "chose nothing" stays distinguishable from Enter. */
-export class ListPicker implements Component {
-	private theme: { fg(c: string, t: string): string; bold?(t: string): string };
-	private rows: ListRow[];
-	private hooks: ListPickerHooks;
-	private text: ListPickerText;
-	private selected: number;
-	private applied: string | undefined;
-	private readonly livePreview: boolean;
-	private readonly opened: string | undefined;
-	private readonly tick: ReturnType<typeof setInterval> | undefined;
-	/** Border painter, from the session's thinking level — the box follows the model. */
-	private readonly edge: (s: string) => string;
-
-	constructor(
-		theme: { fg(c: string, t: string): string; bold?(t: string): string },
-		rows: ListRow[],
-		current: string | undefined,
-		hooks: ListPickerHooks,
-		text: ListPickerText,
-		/** False for a menu: the selection is applied only on Enter, never while moving. */
-		livePreview = true,
-		/** The session's thinking level; colors the box border (theme `thinking*` slot). */
-		thinkingLevel?: string,
-	) {
-		this.theme = theme;
-		this.rows = rows;
-		this.hooks = hooks;
-		this.text = text;
-		this.livePreview = livePreview;
-		this.opened = current;
-		this.applied = current;
-		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
-		this.edge = thinkingColorOf(theme, thinkingLevel);
-		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
-	}
-
-	invalidate(): void {}
-	dispose(): void {
-		if (this.tick) clearInterval(this.tick);
-	}
-
-	/** Selected row, for callers that need the choice after `done()` resolves. */
-	get index(): number {
-		return this.selected;
-	}
-
-	private move(delta: number): void {
-		const next = Math.min(this.rows.length - 1, Math.max(0, this.selected + delta));
-		if (next === this.selected) return;
-		this.selected = next;
-		if (!this.livePreview) {
-			this.hooks.requestRender();
-			return;
-		}
-		this.applied = this.rows[next]!.label;
-		this.hooks.preview(this.applied);
-		this.hooks.requestRender();
-	}
-
-	handleInput(keyData: string): void {
-		if (matchesBack(keyData)) {
-			// Leave for the parent without touching the preview: `back` owns the revert of an
-			// uncommitted preview, because "cancel" here means "close", not "undo".
-			if (this.hooks.back) {
-				this.hooks.back();
-				return;
-			}
-			// No parent (the root menu): ← behaves like Esc — close, reverting a live preview.
-			if (this.applied !== this.opened) this.hooks.revert();
-			(this.hooks.cancel ?? this.hooks.done)();
-			return;
-		}
-		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q") || matchesKey(keyData, "escape")) {
-			if (this.applied !== this.opened) this.hooks.revert();
-			(this.hooks.cancel ?? this.hooks.done)();
-			return;
-		}
-		if (matchesKey(keyData, "up") || matchesKey(keyData, "k")) {
-			this.move(-1);
-			return;
-		}
-		if (matchesKey(keyData, "down") || matchesKey(keyData, "j")) {
-			this.move(1);
-			return;
-		}
-		if (matchesKey(keyData, "enter")) {
-			this.hooks.done();
-			return;
-		}
-		if (this.hooks.toggleGradient && matchesKey(keyData, "g")) this.hooks.toggleGradient();
-	}
-
-	render(width: number): string[] {
-		const th = this.theme;
-		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		const soft = softSecondaryOf(th);
-		const edge = (text: string) => this.edge(text);
-		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
-		const body: string[] = [];
-		for (let i = 0; i < this.rows.length; i++) {
-			const item = this.rows[i]!;
-			const isSelected = i === this.selected;
-			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
-			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
-			const noteText = this.hooks.note?.(item.label) ?? item.note;
-			const note = noteText ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", noteText)}` : "";
-			// Extract parenthetical suffix to render softly
-			const suffix = /(\(.*\))$/.exec(item.label)?.[1] ?? "";
-			const head = suffix ? item.label.slice(0, item.label.length - suffix.length) : item.label;
-			const tail = suffix ? th.fg("dim", suffix) : "";
-			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${paint(head)}${tail}${pad}${note}`;
-			body.push(truncateToWidth(content, width - 4, ""));
-		}
-		return renderScreen(th, width, this.hooks.legend ? { ...this.text, legend: this.hooks.legend() } : this.text, body, edge);
-	}
-}
+export const MENU_DESC = "Themes, headers, footers, animations, providers, usage";
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
@@ -435,6 +266,12 @@ export const MENUS: ArnativeMenu[] = [
 		open: openAnimations,
 	},
 	{
+		value: "providers",
+		label: "Providers",
+		description: "custom endpoints: endpoint, key, name — the rest is automatic",
+		open: openProviders,
+	},
+	{
 		value: "usage",
 		label: "Usage",
 		description: "open the token & cost dashboard (same as /usage)",
@@ -525,7 +362,7 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setTheme(DEFAULT_THEME);
 	});
 	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, usage",
+		description: "Arnative settings menu: themes, headers, footers, providers, usage",
 		getArgumentCompletions: arnativeCompletions,
 		handler: arnativeHandler,
 	});
@@ -541,11 +378,11 @@ if (isMain(import.meta.url)) {
 	assert(rowText(labels[0]!) === "Themes · list & apply themes (the /settings → Theme list)", "menu row text format");
 	assert(labels[0]!.label === "Themes" && labels[0]!.note === "list & apply themes (the /settings → Theme list)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
-	assert(MENU_DESC === "Themes, headers, footers, animations, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
+	assert(MENU_DESC === "Themes, headers, footers, animations, providers, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 5, "five settings screens");
-	for (const label of ["Themes", "Headers", "Footers", "Animations", "Usage"]) {
+	assert(MENUS.length === 6, "six settings screens");
+	for (const label of ["Themes", "Headers", "Footers", "Animations", "Providers", "Usage"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
@@ -558,6 +395,8 @@ if (isMain(import.meta.url)) {
 	assert(arnativeCompletions("he")![0]!.value === "headers", "headers menu has completions");
 	assert(arnativeCompletions("fo")![0]!.value === "footers", "footers menu has completions");
 	assert(MENUS.some((m) => m.value === "footers"), "footers menu registered");
+	assert(arnativeCompletions("pr")![0]!.value === "providers", "providers menu has completions");
+	assert(MENUS.some((m) => m.value === "providers"), "providers menu registered");
 	// Usage is reachable from /arnative even though it is a dashboard, not a setting.
 	assert(MENUS.some((m) => m.value === "usage"), "usage menu registered");
 	assert(arnativeCompletions("us")![0]!.value === "usage", "usage menu has completions");
@@ -768,6 +607,55 @@ if (isMain(import.meta.url)) {
 	assert(gradientPicker.index === 0, "g is not a row key: the cursor stays put");
 	mainPicker.handleInput("g");
 	assert(gradientOn, "a screen without the hook ignores g");
+
+	// Multi-select (Providers → model list): Space toggles, `[x]` marks, the cursor still moves.
+	const picked: string[] = [];
+	const chosen = new Set<string>(["a"]);
+	const multiRows = nameRows(["a", "b", "c"]);
+	const multiPicker = new ListPicker(fakeTheme, multiRows, "a", {
+		preview: quiet,
+		revert: quiet,
+		done: quiet,
+		requestRender: quiet,
+		toggle: () => {
+			const label = multiRows[multiPicker.index]!.label;
+			if (chosen.has(label)) chosen.delete(label);
+			else chosen.add(label);
+			picked.push(label);
+		},
+		marked: (label) => chosen.has(label),
+	}, { title: screenTitle("Providers"), description: "pick models", legend: "[Space] Toggle" }, false);
+	const multiLines = multiPicker.render(50).map(stripAnsi);
+	assert(multiLines.some((l) => l.includes("→ [x] a")), "a checked row shows [x] behind the cursor");
+	assert(multiLines.some((l) => l.includes("[ ] b")), "unchecked rows show [ ]");
+	multiPicker.handleInput(" ");
+	assert(picked[0] === "a" && !chosen.has("a"), "Space toggles the row under the cursor");
+	multiPicker.handleInput("\x1b[B");
+	multiPicker.handleInput(" ");
+	assert(chosen.has("b"), "Space toggles the row the cursor moved to");
+	assert(multiPicker.render(50).map(stripAnsi).some((l) => l.includes("→ [x] b")), "the check follows the cursor");
+	mainPicker.handleInput(" ");
+	assert(chosen.has("b") && picked.length === 2, "a screen without the toggle hook ignores Space");
+
+	// Unhandled keys reach the screen's own switch (`press`), and no hook means no route.
+	let pressed: string[] = [];
+	const pressPicker = new ListPicker(fakeTheme, nameRows(["a", "b", "c"]), "a", {
+		preview: quiet,
+		revert: quiet,
+		done: quiet,
+		requestRender: quiet,
+		press: (keyData) => pressed.push(keyData),
+	}, { title: screenTitle("Providers"), description: "pick models", legend: "[a] API" }, false);
+	pressPicker.handleInput("a");
+	assert(pressed.length === 1 && pressed[0] === "a", "an unhandled key reaches the screen via press");
+	const routed = new ListPicker(fakeTheme, nameRows(["a"]), undefined, {
+		preview: quiet,
+		revert: quiet,
+		done: quiet,
+		requestRender: quiet,
+	});
+	routed.handleInput("a");
+	assert(pressed.length === 1, "a screen without press ignores stray letters");
 
 	console.log("arnative.ts self-check OK");
 }

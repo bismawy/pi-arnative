@@ -18,6 +18,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 - Enhanced Footer: 3-row status grid tracking branch, active duration (30s idle freeze), and token speed.
 - Transcript Clock: Timestamps for conversation messages with clean bubble backgrounds.
 - Usage Dashboard: Real-time token counts and cost tracking across all local sessions via `/usage`.
+- Custom Providers: any OpenAI-, Anthropic-, Gemini- or Ollama-compatible endpoint from three inputs — URL, key, name; models are probed and picked, saved to pi's own `models.json`/`auth.json`.
 
 <details>
 <summary><b>Configuration & Presets</b></summary>
@@ -58,7 +59,7 @@ npm run dev
 | `ctrl+alt+n` · `alt+n` | New session (`/new`) |
 | `ctrl+alt+m` · `alt+m` | Toggle Minimal footer |
 | `/usage` | Token & cost dashboard (or `/arnative` → **Usage**) |
-| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Usage) |
+| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Providers, Usage) |
 | Click tool / `ctrl+o` | Toggle tool output box |
 | `←` | Back — step back from submenus/dashboard to menu |
 
@@ -92,6 +93,8 @@ To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 | `extensions/animations.ts` | Working spinner presets and `/arnative` → Animations picker |
 | `lib/spinner.ts` | Spinner preset catalog: frames, cadence, and painters |
 | `extensions/arnative.ts` | Settings menu with live preview and navigation |
+| `extensions/provider.ts` | Custom provider wizard: probe, model pick, `models.json`/`auth.json` save |
+| `extensions/list-picker.ts` | The live-preview/multi-select picker every arnative screen shares |
 | `extensions/timestamps.ts` | Message timestamps and bubble backgrounds |
 | `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection style, and UI polish |
 | `extensions/usage.ts` | Token and cost dashboard (`/usage`) |
