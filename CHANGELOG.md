@@ -16,6 +16,9 @@
 - **All pi-arnative files in one folder, cache 55% smaller.** Everything the package writes now lives under `~/.pi/agent/arnative/` — `config.json` (preset choices) and `usage-cache.json` (the `/usage` scan cache) — instead of three flat `arnative-*.json` files in `~/.pi/agent/`; existing files are migrated in automatically on first read. The cache gained a compact disk shape: keys are session-dir-relative paths, rollups store one row per provider+model (provider rows are derived on load), and one-letter field names — 90 KB shrank to 40 KB on a real machine with identical answers. The legacy `arnative-prices.json` is gone entirely: pricing has long come from `cost` fields in pi's `models.json`, which the provider wizard fills in (`lib/preset-store.ts`, `lib/usage-store.ts`).
 - **Footer diff stat now tracks edits as they land.** The git refresh ran only at session and turn start, so a session that edits or commits inside a turn (the normal pattern when each step is committed) kept showing the pre-turn snapshot — often clean — and the `+X -Y` working-tree diff never appeared. The footer now re-reads git state whenever a tool call finishes (edit, write, or a commit through bash); concurrent refreshes still coalesce into at most two `git` runs per burst (`extensions/footer.ts`).
 
+### Fixed
+- **Provider config writes are atomic.** `writeJson` wrote `models.json` and `auth.json` with a direct `writeFileSync`, so a crash or power loss mid-write could truncate them — a truncated `auth.json` breaks the stored credentials of every provider, and the wizard then refuses to save until the file is repaired by hand. It now writes a temp file and renames it over the target, the same pattern `preset-store.ts` and `usage-store.ts` already use, and the self-check proves an interrupted save leaves the previous config intact (`lib/provider.ts`).
+
 ## [0.6.2] - 2026-10-20
 
 ### Fixed

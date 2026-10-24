@@ -9,9 +9,9 @@
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext, Theme, TUI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
 import { screenTitle, type ScreenText } from "../lib/box.ts";
 import { stripAnsi } from "../lib/ansi.ts";
@@ -335,8 +335,14 @@ function readJson(path: string): unknown {
 }
 
 function writeJson(path: string, value: unknown): void {
-	mkdirSync(join(path, ".."), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	mkdirSync(dirname(path), { recursive: true });
+	// Temp + rename, the package's own standard (preset-store.ts, usage-store.ts): a crash
+	// mid-write must never truncate models.json or auth.json — a corrupted auth.json breaks
+	// the stored credentials of every provider, and the wizard refuses to save until it is
+	// repaired by hand.
+	const tmp = `${path}.${process.pid}.tmp`;
+	writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+	renameSync(tmp, path);
 }
 
 export function loadModelsConfig(): unknown {
@@ -997,6 +1003,22 @@ if (isMain(import.meta.url)) {
 	saveProvider("t1", { name: "t1", baseUrl: "https://x.com/v1", api: "openai-completions", models: [{ id: "m" }] }, "sk-x");
 	assert(readAuthKey("t1") === "sk-x", "readAuthKey returns the stored key");
 	assert(readAuthKey("missing") === undefined, "readAuthKey misses cleanly");
+	// Atomicity: a save interrupted at the temp write (a directory sits where the temp file
+	// should go) must leave the previous config intact — the direct-write code it replaces
+	// truncated models.json on any mid-write failure.
+	const blockedTmp = join(tmp, `models.json.${process.pid}.tmp`);
+	mkdirSync(blockedTmp);
+	let interrupted = false;
+	try {
+		saveProvider("t2", { name: "t2", baseUrl: "https://y.com/v1", api: "openai-completions", models: [{ id: "m" }] }, "sk-y");
+	} catch {
+		interrupted = true;
+	}
+	assert(interrupted, "a blocked temp write surfaces the error instead of passing silently");
+	assert(providerNames(loadModelsConfig()).join() === "t1", "the previous config survives the interrupted save");
+	assert(readAuthKey("t2") === undefined, "the interrupted save never reached auth.json");
+	rmSync(blockedTmp, { recursive: true, force: true });
+	assert(readdirSync(tmp).every((f) => !f.endsWith(".tmp")), "a completed save leaves no temp files behind");
 	delete process.env.PI_CODING_AGENT_DIR;
 	rmSync(tmp, { recursive: true, force: true });
 
