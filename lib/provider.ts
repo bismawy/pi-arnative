@@ -7,7 +7,7 @@
  * Opening /model reloads both files. Nothing is hand-edited by the user.
  */
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, Theme, TUI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -498,6 +498,29 @@ const manualModels = async (ctx: ExtensionCommandContext): Promise<{ picked: str
 	return { picked, flavor: API_FLAVORS[API_FLAVORS.map((f) => FLAVOR_LABELS[f]).indexOf(label)]! };
 };
 
+/** Transient probe status, pinned above the chat column (pi's aboveEditor widget
+ *  slot) for exactly as long as the request is in flight — a one-line dim "probing
+ *  endpoint…" right where the user is about to type, instead of a status row in the
+ *  bottom footer. Removed the moment the probe settles. */
+const PROBE_WIDGET_KEY = "arnative-probe";
+function probingStatus(ctx: ExtensionCommandContext, text: string | undefined): void {
+	if (!text) {
+		ctx.ui.setWidget?.(PROBE_WIDGET_KEY, undefined);
+		return;
+	}
+	ctx.ui.setWidget?.(
+		PROBE_WIDGET_KEY,
+		(_tui: TUI, theme: Theme) => ({
+			dispose() { /* no listeners, no timers — nothing to clean up */ },
+			invalidate() { /* a static line, recomputed on every render anyway */ },
+			render(_width: number): string[] {
+				return [theme.fg("dim", text)];
+			},
+		}),
+		{ placement: "aboveEditor" },
+	);
+}
+
 const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 	const endpointRaw = await readInput(ctx, "Provider", "Endpoint API — the base URL", "https://api.example.com/v1");
 	if (!endpointRaw) return;
@@ -512,12 +535,12 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		return;
 	}
 
-	ctx.ui.setStatus("arnative", "probing endpoint…");
+	probingStatus(ctx, "probing endpoint…");
 	let result: ProbeResult | undefined;
 	try {
 		result = await probeEndpoint(endpoint, key ?? "");
 	} finally {
-		ctx.ui.setStatus("arnative", undefined);
+		probingStatus(ctx, undefined);
 	}
 
 	let picked: string[];
@@ -611,12 +634,12 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 	const stored = readAuthKey(name);
 	const inline = entry.apiKey && entry.apiKey !== "dummy" && entry.apiKey !== "ollama" ? entry.apiKey : "";
 	const key = stored ?? inline;
-	ctx.ui.setStatus("arnative", "probing endpoint…");
+	probingStatus(ctx, "probing endpoint…");
 	let result: ProbeResult | undefined;
 	try {
 		result = await probeEndpoint(entry.baseUrl, key ?? "");
 	} finally {
-		ctx.ui.setStatus("arnative", undefined);
+		probingStatus(ctx, undefined);
 	}
 	if (!result) {
 		ctx.ui.notify("[arnative] The endpoint did not answer a model list (key or URL wrong?).", "warning");
