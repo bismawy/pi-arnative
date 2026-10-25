@@ -1042,7 +1042,7 @@ if (isMain(import.meta.url)) {
 	);
 
 	// pi-fff override mode: find/grep re-registered with own renderers, no renderShell
-	const fffCall = { render: () => ["\x1b[1mfind \x1b[22m\x1b[36m*.ts in D:/Pi/x\x1b[39m"] };
+	const fffCall = { render: () => ["\x1b[1mfind \x1b[22m\x1b[36m*.ts in /tmp/work\x1b[39m"] };
 	const fffRes = { render: () => ["src/a.ts \x1b[2m... (6 more lines)\x1b[22m"] };
 	const fffFind = { toolName: "find", toolDefinition: { renderCall: () => fffCall, renderResult: () => fffRes } };
 	assert(
@@ -1053,10 +1053,10 @@ if (isMain(import.meta.url)) {
 		{ content: [{ type: "text", text: "src/a.ts\nsrc/b.ts" }] },
 		{ expanded: false, isPartial: false },
 		th,
-		{ args: { pattern: "*.ts", path: "D:/Pi/x" }, state: {} },
+		{ args: { pattern: "*.ts", path: "/tmp/work" }, state: {} },
 	).render(60);
 	assert(fffOut[0].startsWith("╭") && fffOut[fffOut.length - 1].startsWith("╰"), "pi-fff find: result wrapped in a box");
-	assert(fffOut.some((l: string) => l.includes("*.ts in D:/Pi/x")), "pi-fff find: renderCall title goes in the box");
+	assert(fffOut.some((l: string) => l.includes("*.ts in /tmp/work")), "pi-fff find: renderCall title goes in the box");
 	assert(fffOut.some((l: string) => l.includes("6 more lines")), "pi-fff find: renderResult summary goes in the box");
 
 	// pi-fff default mode (`ffgrep`/`fffind`): same renderer shape, different names.

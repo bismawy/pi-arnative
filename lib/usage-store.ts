@@ -634,7 +634,7 @@ const canonicalModel = (id: string): string => {
  *
  *  The rule used to also match a bare tail (`target.endsWith("/" + name)`), so the first run
  *  under a new provider inherited the history of every other provider whose id ended the same
- *  way: `river/deepseek-ai/DeepSeek-V4.1-Flash` reported wally+yarz's deepseek totals
+ *  way: `team/deepseek-ai/DeepSeek-V4.1-Flash` reported two other providers' deepseek totals
  *  (29.5M in / 3.2M out / 360.5M cache) as its own (2026-10-17). Two ids that differ are two
  *  routes — billed, rate-limited and counted apart — and only the vendor knows whether a short
  *  id and a path id are the same model, so the tab shows the tokens of the id it names. */
