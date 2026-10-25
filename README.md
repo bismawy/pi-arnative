@@ -18,7 +18,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 - Enhanced Footer: 3-row status grid tracking branch, active duration (30s idle freeze), and token speed.
 - Transcript Clock: Timestamps for conversation messages with clean bubble backgrounds.
 - Usage Dashboard: Real-time token counts and cost tracking across all local sessions via `/usage`.
-- Custom Providers: any OpenAI-, Anthropic-, Gemini- or Ollama-compatible endpoint from three inputs — URL, key, name; models are probed and picked, saved to pi's own `models.json`/`auth.json`. Enter on a stored provider edits: reselect models, re-probe the endpoint, cycle per-model thinking levels (off → auto → minimal → low → medium → high → xhigh → max, auto-detected from ids), or delete.
+- Custom Providers: any OpenAI-, Anthropic-, Gemini- or Ollama-compatible endpoint from three inputs — URL, key, name; models are probed and picked, saved to pi's own `models.json`/`auth.json`, together with the context window and output cap the probe answered and the compat flags the endpoint needs. Enter on a stored provider edits: reselect models, re-probe the endpoint, cycle per-model thinking levels (off → auto → minimal → low → medium → high → xhigh → max, auto-detected from ids), set all of them at once (`[A]` auto, `[R]` off), probe which effort levels the channel really accepts (`p`), or delete.
 
 <details>
 <summary><b>Configuration & Presets</b></summary>

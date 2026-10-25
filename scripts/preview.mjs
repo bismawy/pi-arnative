@@ -2,7 +2,7 @@
 // Launches pi with working-tree extensions via absolute paths and -ne (isolated from
 // global installs), stamping .git/arnative-preview on clean exit for pre-push verification.
 import { execFileSync, spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,6 +31,28 @@ function fingerprint(rev) {
 
 const porcelain = () => execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim();
 
+// `pi` is an npm wrapper: a sh script on POSIX, a .cmd on Windows — and Node's spawnSync
+// cannot launch either on Windows (ENOENT for the extensionless script, EINVAL for the
+// .cmd without a shell). Resolve the real entry once: `where pi` gives the global npm
+// bin dir, and the package it installs lives one level over. Node itself runs it fine.
+function resolvePi() {
+	const direct = spawnSync("pi", ["--version"], { encoding: "utf8" });
+	if (!direct.error) return { file: "pi", prefix: [] };
+	if (process.platform !== "win32") {
+		throw new Error(`Cannot launch pi: ${direct.error.message}`);
+	}
+	const where = spawnSync("where", ["pi"], { encoding: "utf8" });
+	const firstLine = where.stdout.trim().split(/\r?\n/)[0];
+	if (where.status !== 0 || !firstLine) {
+		throw new Error("Cannot launch pi: 'pi' not found on PATH (spawnSync failed and `where pi` found nothing)");
+	}
+	const cli = join(dirname(firstLine), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
+	if (!existsSync(cli)) {
+		throw new Error(`Cannot launch pi: resolved the npm bin dir from 'where pi', but no entry script at ${cli}`);
+	}
+	return { file: process.execPath, prefix: [cli] };
+}
+
 // Looking at uncommitted work is allowed and useful. *Certifying* it is not: the stamp is
 // keyed to a commit's tree, so a dirty tree can be previewed but never stamped. The push
 // gate stays closed until a commit is previewed — which is the rule, enforced at the
@@ -50,11 +72,14 @@ const args = [
 	...process.argv.slice(2),
 ];
 
-const run = spawnSync("pi", args, { cwd: root, stdio: "inherit" });
-if (run.error) {
-	console.error(`Cannot launch pi: ${run.error.message}`);
+let launcher;
+try {
+	launcher = resolvePi();
+} catch (error) {
+	console.error(error instanceof Error ? error.message : String(error));
 	process.exit(1);
 }
+const run = spawnSync(launcher.file, [...launcher.prefix, ...args], { cwd: root, stdio: "inherit" });
 if (run.status !== 0) {
 	console.error(`\npi exited with code ${run.status} — nothing stamped, the preview did not complete.`);
 	process.exit(run.status ?? 1);

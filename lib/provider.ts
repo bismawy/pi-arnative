@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
+import { buildEffortMap, isEffortProbeable, mergeMeta, parseModelMeta, probeEffort, suggestCompat, type Compat, type ModelMeta } from "./compat.ts";
 import { screenTitle, type ScreenText } from "../lib/box.ts";
 import { stripAnsi } from "../lib/ansi.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_MOVE, ListPicker, rowText, type ListRow } from "./list-picker.ts";
@@ -130,6 +131,8 @@ export interface ProbeResult {
 	/** Chat base for the flavor (`chatBaseUrl`). */
 	baseUrl: string;
 	models: string[];
+	/** `contextWindow`/`maxTokens` from the same answer — no second request. */
+	meta: Map<string, ModelMeta>;
 	/** Path that answered, for the notify line. */
 	via: string;
 	keyless: boolean;
@@ -152,19 +155,21 @@ export async function probeEndpoint(base: string, key: string, fetchImpl: FetchL
 				signal: AbortSignal.timeout(timeoutMs),
 			});
 			if (!response.ok) throw new Error(`HTTP ${response.status ?? "error"}`);
-			const models = parseModelList(candidate, await response.json());
+			const body = await response.json();
+			const models = parseModelList(candidate, body);
 			if (!models || models.length === 0) throw new Error("no models");
-			return { candidate, models };
+			return { candidate, models, meta: parseModelMeta(body) };
 		}),
 	);
 	for (let i = 0; i < candidates.length; i++) {
 		const result = settled[i];
 		if (result?.status !== "fulfilled") continue;
-		const { candidate, models } = result.value;
+		const { candidate, models, meta } = result.value;
 		return {
 			flavor: candidate.flavor,
 			baseUrl: chatBaseUrl(candidate.flavor, base),
 			models: [...new Set(models)],
+			meta,
 			via: new URL(candidate.url).pathname,
 			keyless: candidate.keyless,
 		};
@@ -187,6 +192,11 @@ export interface ProviderModel {
 	id: string;
 	/** Thinking level; undefined means chat (no `reasoning` flag). */
 	level?: ThinkingSetting;
+	/** An effort map a probe produced; it wins over the level's own single pin. */
+	map?: Record<string, string | null>;
+	/** Stopped in the stored entry, so a reselect never loses it. */
+	meta?: ModelMeta;
+	compat?: Compat;
 }
 
 export interface ProviderEntry {
@@ -199,9 +209,10 @@ export interface ProviderEntry {
 }
 
 /** Level heuristic over a relay catalog id: the catalogs expose only ids, so an explicit
- *  level suffix (`-high`, `-xhigh`, `-max`…) pins that level, a `thinking`/`reasoner`
- *  token or an o1/o3/o4/r1-style generation means flexible thinking, anything else is
- *  chat. */
+ *  level suffix (`-high`, `-xhigh`, `-max`…) pins that level, and everything else starts at
+ *  `auto` — the endpoint decides. A chat-only model is switched to `off` by hand in the
+ *  Thinking screen; pi passes an unmapped level through, so an endpoint that rejects
+ *  reasoning parameters only breaks when `/think` is above `off`. */
 export function detectLevel(id: string): ThinkingSetting {
 	const s = id.toLowerCase();
 	if (/-x-?high$/.test(s)) return "xhigh";
@@ -210,9 +221,7 @@ export function detectLevel(id: string): ThinkingSetting {
 	if (/-med(ium)?$/.test(s)) return "medium";
 	if (/-low$/.test(s)) return "low";
 	if (/-min(imal)?$/.test(s)) return "minimal";
-	if (/(^|[^a-z0-9])(thinking|reasoner|reasoning)([^a-z0-9]|$)/.test(s)) return "auto";
-	if (/(^|[^a-z0-9])[or][134]([^0-9]|$)/.test(s)) return "auto";
-	return "off";
+	return "auto";
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -223,7 +232,7 @@ export function withProvider(config: unknown, name: string, entry: ProviderEntry
 	const providers = isObj(root.providers) ? { ...root.providers } : {};
 	// The same wire serialization every edit uses, so a first save and a later edit of the
 	// same provider produce the same models.json shape.
-	providers[name] = { ...entry, models: entry.models.map((m) => ({ id: m.id, ...levelToWire(m.level) })) };
+	providers[name] = { ...entry, models: wireModels(name, entry, entry.models, []) };
 	root.providers = providers;
 	return root;
 }
@@ -294,16 +303,42 @@ export function withProviderModels(config: unknown, name: string, models: Provid
 	const root = isObj(config) ? { ...config } : {};
 	const providers = isObj(root.providers) ? { ...root.providers } : {};
 	const base = isObj(providers[name]) ? providers[name] : {};
-	providers[name] = { ...base, models: models.map((m) => ({ id: m.id, ...levelToWire(m.level) })) };
+	const stated: Record<string, unknown>[] = Array.isArray(base.models) ? base.models.filter(isObj) : [];
+	providers[name] = { ...base, models: wireModels(name, base, models, stated) };
 	root.providers = providers;
 	return root;
 }
 
-/** A stored selection keeps its level; a new id gets the detected one. */
-export function mergeLevels(entry: ProviderEntry, ids: string[]): ProviderModel[] {
+/** One model in pi's wire shape: the level (or a probed map), the compat flags the rules
+ *  imply, and the limits the probe found. Every other key of the stored entry survives —
+ *  only `reasoning` and `thinkingLevelMap` are rewritten, because the level owns them. */
+function wireModels(name: string, provider: { api?: unknown; baseUrl?: unknown }, models: ProviderModel[], stated: Record<string, unknown>[]): Record<string, unknown>[] {
+	const api = typeof provider.api === "string" ? provider.api : undefined;
+	const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl : "";
+	return models.map((m) => {
+		const prev = stated.find((s) => s.id === m.id);
+		const next: Record<string, unknown> = { ...(prev ?? {}) };
+		next.id = m.id;
+		delete next.reasoning;
+		delete next.thinkingLevelMap;
+		Object.assign(next, m.map ? { reasoning: true, thinkingLevelMap: m.map } : levelToWire(m.level));
+		const stored = isObj(next.compat) ? next.compat : {};
+		const compat = { ...stored, ...suggestCompat({ provider: name, id: m.id, api, baseUrl, reasoning: next.reasoning === true, compat: stored }), ...(m.compat ?? {}) };
+		if (Object.keys(compat).length > 0) next.compat = compat;
+		const meta = m.meta ?? (prev && typeof prev === "object" ? { contextWindow: prev.contextWindow as number | undefined, maxTokens: prev.maxTokens as number | undefined } : undefined);
+		if (meta?.contextWindow !== undefined) next.contextWindow = meta.contextWindow;
+		if (meta?.maxTokens !== undefined) next.maxTokens = meta.maxTokens;
+		return next;
+	});
+}
+
+/** A stored selection keeps its level; a new id gets the detected one. A probed limit is
+ *  merged into the stored one, so a reselect never loses what an earlier probe learned. */
+export function mergeLevels(entry: ProviderEntry, ids: string[], meta?: Map<string, ModelMeta>): ProviderModel[] {
 	return ids.map((id) => {
 		const existing = entry.models.find((m) => m.id === id);
-		return { id, level: existing?.level ?? detectLevel(id) };
+		const found = meta?.get(id);
+		return { id, level: existing?.level ?? detectLevel(id), meta: found ? mergeMeta(existing?.meta, found) : existing?.meta };
 	});
 }
 
@@ -381,7 +416,10 @@ export function loadProviderEntry(config: unknown, name: string): ProviderEntry 
 		? (value.models as unknown[]).flatMap((m): ProviderModel[] => {
 				if (!isObj(m) || typeof m.id !== "string") return [];
 				const level = wireToLevel(m.reasoning, m.thinkingLevelMap);
-				return level === "off" ? [{ id: m.id }] : [{ id: m.id, level }];
+				const contextWindow = typeof m.contextWindow === "number" ? m.contextWindow : undefined;
+				const maxTokens = typeof m.maxTokens === "number" ? m.maxTokens : undefined;
+				const meta = contextWindow === undefined && maxTokens === undefined ? undefined : { contextWindow, maxTokens };
+				return [{ id: m.id, ...(level === "off" ? {} : { level }), ...(meta ? { meta } : {}), ...(isObj(m.compat) ? { compat: m.compat } : {}) }];
 			})
 		: [];
 	return {
@@ -584,7 +622,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		name,
 		baseUrl: chatBaseUrl(flavor, endpoint),
 		api: flavor,
-		models: mergeLevels({ name, baseUrl: "", api: flavor, models: [] }, picked),
+		models: mergeLevels({ name, baseUrl: chatBaseUrl(flavor, endpoint), api: flavor, models: [] }, picked, result?.meta),
 	};
 	// A keyless endpoint still needs a resolvable credential for pi to list the models.
 	if (!key) entry.apiKey = result?.keyless ? "ollama" : "dummy";
@@ -669,25 +707,86 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
-	saveModelsNamed(ctx, name, mergeLevels(entry, picked));
+	saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
-const THINKING_LEGEND = "[↑↓] Move  [Space] Cycle  [Enter] Save  [Esc] Cancel";
+const THINKING_LEGEND = "[↑↓] Move  [Space] Cycle  [A] All auto  [R] All off  [p] Probe  [Enter] Save  [Esc] Cancel";
 
 /** Space cycles one model through off → auto → minimal → … → max. `auto` means
  *  `reasoning: true` with no map (every `/think` level passes through unchanged); an
- *  explicit level pins `thinkingLevelMap` to that single value. */
+ *  explicit level pins `thinkingLevelMap` to that single value. `p` asks the channel which
+ *  effort names it really accepts and stores the answer as the model's map. */
 const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
 	const levels = new Map(entry.models.map((m) => [m.id, m.level ?? detectLevel(m.id)] as const));
+	const probed = new Map<string, Record<string, string | null>>();
 	const cycle = (label: string): void => {
 		const current = levels.get(label) ?? "off";
 		const next = THINKING_SETTINGS[(THINKING_SETTINGS.indexOf(current) + 1) % THINKING_SETTINGS.length]!;
 		levels.set(label, next);
+		// A probed map belongs to `auto` only: a pinned level states its own answer.
+		if (next !== "auto") probed.delete(label);
 	};
 	const rows: ListRow[] = entry.models.map((m) => ({ label: m.id }));
+	/** "medium→high, max off" — what a probed map actually changed. */
+	const summary = (map: Record<string, string | null>): string => {
+		const parts = Object.entries(map)
+			.filter(([level, value]) => value !== level && !(value === null && level === "off"))
+			.map(([level, value]) => (value === null ? `${level} off` : `${level}→${value}`));
+		return parts.length === 0 ? "all levels accepted" : parts.join(", ");
+	};
+	let busy: string | undefined;
+	let progress: string | undefined;
+	let warn: string | undefined;
+	let refresh: () => void = () => {};
+	let closed = false;
+	const probe = async (label: string): Promise<void> => {
+		const model = entry.models.find((m) => m.id === label);
+		const compat = model?.compat ?? {};
+		if (!isEffortProbeable({ provider: name, id: label, api: entry.api, baseUrl: entry.baseUrl, reasoning: true, compat }, compat)) {
+			warn = `${label}: this channel does not take a probing request (not an OpenAI-compatible reasoning model).`;
+			return;
+		}
+		busy = label;
+		progress = "starting…";
+		refresh();
+		const inline = entry.apiKey && entry.apiKey !== "dummy" && entry.apiKey !== "ollama" ? entry.apiKey : undefined;
+		try {
+			const supported = await probeEffort(
+				{ provider: name, id: label, api: entry.api, baseUrl: entry.baseUrl, reasoning: true, compat },
+				{
+					baseUrl: entry.baseUrl,
+					key: readAuthKey(name) ?? inline,
+					onLevel: (level, _accepted, index) => {
+						progress = `${level} · ${index + 1}/7`;
+						refresh();
+					},
+				},
+			);
+			if (supported.length === 0) {
+				warn = `${label}: no effort level answered — the map is unchanged.`;
+				return;
+			}
+			const current = probed.get(label) ?? levelToWire(levels.get(label))?.thinkingLevelMap;
+			const next = buildEffortMap(current, supported);
+			if (next) probed.set(label, next);
+			levels.set(label, "auto");
+			warn = `${label}: ${next ? summary(next) : "every level is accepted as-is"}.`;
+		} finally {
+			busy = undefined;
+			progress = undefined;
+			refresh();
+		}
+	};
 	let saved: boolean;
 	if (ctx.mode === "tui") {
 		const outcome = await ctx.ui.custom<boolean | null>((tui, theme, _kb, done) => {
+			refresh = () => {
+				if (!closed) tui.requestRender();
+			};
+			const close = (value: boolean | null) => {
+				closed = true;
+				done(value);
+			};
 			const picker = new ListPicker(
 				theme,
 				rows,
@@ -695,16 +794,43 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 				{
 					preview: () => {},
 					revert: () => {},
-					done: () => done(true),
-					cancel: () => done(null),
+					// A probe is a round trip, but it never owns the screen: leaving mid-probe just
+					// discards the answer, because the save reads `probed` before it lands.
+					done: () => close(true),
+					cancel: () => close(null),
 					// A fill screen: `←` is hidden — it must not throw away half-set levels.
 					back: false,
-					requestRender: () => tui.requestRender(),
+					requestRender: () => refresh(),
 					toggle: () => {
 						const label = rows[picker.index]?.label;
-						if (label) cycle(label);
+						if (label && !busy) cycle(label);
 					},
-					note: (label) => levels.get(label) ?? "off",
+					press: (keyData) => {
+						if (busy) return;
+						// Plain letters only: Ctrl/Alt/F-keys are swallowed or remapped by some
+						// terminals, so the two bulk keys stay on the same key everywhere. Shift keeps
+						// them deliberate — pi-tui lowercases a key id, so "A" would mean plain `a`.
+						if (matchesKey(keyData, "shift+a")) {
+							for (const id of levels.keys()) levels.set(id, "auto");
+							probed.clear();
+							refresh();
+							return;
+						}
+						if (matchesKey(keyData, "shift+r")) {
+							for (const id of levels.keys()) levels.set(id, "off");
+							probed.clear();
+							refresh();
+							return;
+						}
+						const label = rows[picker.index]?.label;
+						if (!label || !matchesKey(keyData, "p")) return;
+						void probe(label);
+					},
+					note: (label) => {
+						if (busy === label) return `probing ${progress ?? ""}`.trim();
+						const map = probed.get(label);
+						return `${levels.get(label) ?? "off"}${map ? ` · ${summary(map)}` : ""}`;
+					},
 					description: () => `cycle: ${THINKING_SETTINGS.join(" → ")}`,
 					legend: () =>
 						`${theme.fg("accent", `${[...levels.values()].filter((l) => l !== "off").length}/${rows.length} thinking`)}${theme.fg("dim", ` · ${THINKING_LEGEND}`)}`,
@@ -728,7 +854,16 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 		saved = true;
 	}
 	if (!saved) return;
-	saveModelsNamed(ctx, name, entry.models.map((m) => ({ id: m.id, level: levels.get(m.id) })));
+	saveModelsNamed(
+		ctx,
+		name,
+		entry.models.map((m) => {
+			const level = levels.get(m.id);
+			const map = level === "off" ? undefined : probed.get(m.id);
+			return { id: m.id, level, ...(map ? { map } : {}) };
+		}),
+	);
+	if (warn) ctx.ui.notify(`[arnative] ${warn}`, "info");
 };
 
 const ACTION_SELECT = "Select models";
@@ -881,7 +1016,7 @@ if (isMain(import.meta.url)) {
 	assert(paths.includes("https://x.com/v1/models") && paths.includes("https://x.com/api/tags") && paths.includes("https://x.com/v1beta/models"), "a bare base probes the common layouts");
 	const authed = buildCandidates("https://x.com", "sk-1")[0]!;
 	assert(authed.url === "https://x.com/api/tags", "the ollama probe comes first");
-	const openaiShape = { data: [{ id: "m1" }, { id: "m2" }] };
+	const openaiShape = { data: [{ id: "m1", context_length: 262_144, max_output_tokens: 32_000 }, { id: "m2" }] };
 	const geminiShape = { models: [{ name: "models/gemini-x" }] };
 	const ollamaShape = { models: [{ name: "qwen:7b" }] };
 	assert(parseModelList(listPath, openaiShape)!.join() === "m1,m2", "data[].id parses");
@@ -907,6 +1042,7 @@ if (isMain(import.meta.url)) {
 	assert(probeGemini?.flavor === "google-generative-ai" && probeGemini.models[0] === "gemini-x", "a gemini answer is detected");
 	const probeOpenai = await probeEndpoint("https://api.x.com/v1", "k", route({ "/v1/models": openaiShape }));
 	assert(probeOpenai?.flavor === "openai-completions" && probeOpenai.baseUrl === "https://api.x.com/v1", "an openai answer is detected");
+	assert(probeOpenai?.meta.get("m1")?.contextWindow === 262_144 && probeOpenai.meta.get("m1")?.maxTokens === 32_000, "the same answer carries the limits, so no second request is needed");
 	const none = await probeEndpoint("https://api.x.com", "", route({}));
 	assert(none === undefined, "no answer → undefined, the caller falls back to manual entry");
 	const empty = await probeEndpoint("https://api.x.com/v1", "", route({ "/v1/models": { data: [] } }));
@@ -965,10 +1101,8 @@ if (isMain(import.meta.url)) {
 	assert(detectLevel("deepseek-reasoner") === "auto", "reasoner means flexible thinking");
 	assert(detectLevel("o1-mini") === "auto", "an o-generation id means flexible thinking");
 	assert(detectLevel("deepseek-r1") === "auto", "r1 means flexible thinking");
-	assert(detectLevel("ocz/mimo-v2.6-flash-free") === "off", "a plain flash id is chat");
-	assert(detectLevel("wally/glm-5.3-flash") === "off", "glm flash is chat");
-	assert(detectLevel("oc/big-pickle") === "off", "an unrelated id is chat");
-	assert(detectLevel("river/Qwen/Qwen3.8-27B-FP8") === "off", "qwen without a thinking token is chat");
+	assert(detectLevel("ocz/mimo-v2.6-flash-free") === "auto", "a plain flash id starts at auto");
+	assert(detectLevel("oc/big-pickle") === "auto", "an unrelated id starts at auto");
 
 	// Levels serialize to pi's wire shape and read back unchanged.
 	const wireHigh = levelToWire("high") as { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> };
@@ -989,9 +1123,25 @@ if (isMain(import.meta.url)) {
 	assert(savedProvider.compat !== undefined && savedProvider.name === "R", "withProviderModels keeps sibling fields");
 	const savedModels = savedProvider.models as { id: string; reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }[];
 	assert(savedModels[0]!.id === "m2" && savedModels[0]!.reasoning === true && savedModels[0]!.thinkingLevelMap?.high === "high", "withProviderModels serializes the level");
-	const merged = mergeLevels({ name: "n", baseUrl: "b", api: "openai-completions", models: [{ id: "m1", level: "auto" }, { id: "m2" }] }, ["m2", "x-thinking"]);
+	const savedCompat = (savedModels[0] as { compat?: Record<string, unknown> }).compat;
+	assert(savedCompat?.supportsLongCacheRetention === false && savedCompat?.sendSessionAffinityHeaders === true, "a save writes the compat flags a relay needs");
+
+	// A probe's limits land in the entry and survive a later edit that does not mention them.
+	const withMeta = withProviderModels(rich, "r", [{ id: "m1", level: "auto", meta: { contextWindow: 1_000_000, maxTokens: 64_000 } }]);
+	const metaModels = (withMeta.providers as Record<string, { models: { id: string; contextWindow?: number; maxTokens?: number }[] }>).r!.models;
+	assert(metaModels[0]!.contextWindow === 1_000_000 && metaModels[0]!.maxTokens === 64_000, "a probed window and cap are written");
+	const keptMeta = withProviderModels(withMeta, "r", [{ id: "m1", level: "high" }]);
+	const keptModel = (keptMeta.providers as Record<string, { models: { contextWindow?: number; maxTokens?: number }[] }>).r!.models[0]!;
+	assert(keptModel.contextWindow === 1_000_000 && keptModel.maxTokens === 64_000, "an edit that says nothing about limits keeps them");
+	assert((loadProviderEntry(withMeta, "r")?.models[0]!.meta?.contextWindow ?? 0) === 1_000_000, "the limits load back as meta");
+	const probedMap = withProviderModels(rich, "r", [{ id: "m1", level: "auto", map: { medium: "high", xhigh: null } }]);
+	const probedModel = (probedMap.providers as Record<string, { models: { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> }[] }>).r!.models[0]!;
+	assert(probedModel.reasoning === true && probedModel.thinkingLevelMap?.medium === "high", "a probed map wins over the level's own pin");
+	const levelAfterProbe = withProviderModels(probedMap, "r", [{ id: "m1", level: "high" }]);
+	assert((levelAfterProbe.providers as Record<string, { models: { thinkingLevelMap?: Record<string, string | null> }[] }>).r!.models[0]!.thinkingLevelMap?.high === "high", "changing the level replaces the probed map");
+	const merged = mergeLevels({ name: "n", baseUrl: "b", api: "openai-completions", models: [{ id: "m1", level: "auto" }, { id: "m2", level: "off" }] }, ["m2", "x-thinking"]);
 	assert(merged[0]!.id === "m2" && merged[0]!.level === "off", "a stored chat model stays chat");
-	assert(merged[1]!.level === "auto", "a new thinking id is detected");
+	assert(merged[1]!.level === "auto", "a new id defaults to auto");
 	const keptFlag = mergeLevels({ name: "n", baseUrl: "b", api: "openai-completions", models: [{ id: "m1", level: "low" }] }, ["m1"]);
 	assert(keptFlag[0]!.level === "low", "a stored level survives a reselect");
 	const entryLoaded = loadProviderEntry(rich, "r");
@@ -1001,6 +1151,10 @@ if (isMain(import.meta.url)) {
 	assert(roundTrip?.models[0]!.level === "xhigh", "a saved level loads back as itself");
 	assert(levelsSummary([{ id: "a" }, { id: "b", level: "high" }, { id: "c", level: "auto" }]) === "2 thinking (high, auto)", "the save notify names the registered levels");
 	assert(levelsSummary([{ id: "a" }]) === "0 thinking", "an all-chat save says so plainly");
+	// The Thinking screen's bulk keys are Shift+letter: pi-tui lowercases a key id, so this
+	// pins that they stay distinct from the plain letters navigation already uses.
+	assert(matchesKey("A", "shift+a") && !matchesKey("a", "shift+a"), "Shift+A is its own key, not plain a");
+	assert(matchesKey("R", "shift+r") && !matchesKey("r", "shift+r"), "Shift+R is its own key, not plain r");
 
 	// The stored key is read back from auth.json in an isolated agent dir (never the user's).
 	const tmp = mkdtempSync(join(tmpdir(), "arnative-providers-"));
