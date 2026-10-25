@@ -109,7 +109,7 @@ function groupByProvider(models: RtModel[]): Map<string, RtModel[]> {
 let backedUp = false;
 
 /** Read, mutate, write once. A corrupt models.json throws in the read and is never
- *  rewritten; the first write of a process keeps one backup of the file it replaced. */
+ *  rewritten; the first write keeps one backup of the original file, never replaced later. */
 function edit(mutate: (cfg: Obj) => string[]): HealResult {
 	let cfg: unknown;
 	try {
@@ -124,7 +124,7 @@ function edit(mutate: (cfg: Obj) => string[]): HealResult {
 	try {
 		const path = join(getAgentDir(), "models.json");
 		if (!backedUp && existsSync(path)) {
-			copyFileSync(path, `${path}.bak-model-heal`);
+			if (!existsSync(`${path}.bak-model-heal`)) copyFileSync(path, `${path}.bak-model-heal`);
 			backedUp = true;
 		}
 		saveModelsConfig(cfg);
@@ -280,7 +280,8 @@ function resolveSecret(value: unknown): string | undefined {
 	if (value.startsWith("$")) return process.env[value.slice(1)]?.trim() || undefined;
 	if (value.startsWith("!")) {
 		try {
-			return execSync(value.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
+			// A hanging or prompting command must not freeze pi: give up after 5 s.
+			return execSync(value.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }).trim() || undefined;
 		} catch {
 			return undefined;
 		}
@@ -292,7 +293,8 @@ interface Channel {
 	provider: string;
 	baseUrl: string;
 	api: string;
-	key?: string;
+	// Resolved on first use, so a !cmd key never runs for a channel the TTL skips.
+	key: () => string | undefined;
 	headers: Record<string, string>;
 	compat: Compat;
 	ids: string[];
@@ -310,12 +312,13 @@ function channelsOf(cfg: Obj, deps: HealDeps): Channel[] {
 		if (typeof baseUrl !== "string" || !baseUrl) continue;
 		const headers: Record<string, string> = {};
 		if (isObj(entry.headers)) for (const [k, v] of Object.entries(entry.headers)) if (typeof v === "string") headers[k] = v;
+		let key: { value: string | undefined } | undefined;
 		const stated = Array.isArray(entry.models) ? (entry.models as unknown[]).flatMap((m) => (isObj(m) && m.id ? [String(m.id)] : [])) : [];
 		out.push({
 			provider,
 			baseUrl,
 			api: lower(entry.api ?? merged[0]?.api),
-			key: readAuthKey(provider) ?? resolveSecret(entry.apiKey),
+			key: () => (key ??= { value: readAuthKey(provider) ?? resolveSecret(entry.apiKey) }).value,
 			headers,
 			compat: { ...(isObj(entry.compat) ? entry.compat : {}), ...(merged[0]?.compat ?? {}) },
 			ids: [...new Set([...stated, ...merged.map((m) => m.id)])].sort(),
@@ -326,7 +329,8 @@ function channelsOf(cfg: Obj, deps: HealDeps): Channel[] {
 
 async function fetchMeta(channel: Channel, fetchImpl: typeof fetch): Promise<Map<string, ModelMeta>> {
 	const headers: Record<string, string> = { accept: "application/json", "accept-encoding": "identity", ...channel.headers };
-	if (channel.key) headers.authorization = `Bearer ${channel.key}`;
+	const key = channel.key();
+	if (key) headers.authorization = `Bearer ${key}`;
 	const response = await fetchImpl(`${channel.baseUrl.replace(/\/+$/, "")}/models`, { headers, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
 	if (!response.ok) throw new Error(`HTTP ${response.status}`);
 	const text = await response.text();
@@ -418,7 +422,9 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 			}
 			return detail;
 		});
-		saveState({ providers: state.providers, sources: state.sources }); // fetchedAt is kept even when nothing changed, so the TTL holds
+		// fetchedAt is kept even when nothing changed, so the TTL holds. A failed write keeps no
+		// stamp: a stamped value missing from models.json would read as a hand edit forever.
+		if (result.errors.length === 0) saveState({ providers: state.providers, sources: state.sources });
 		return { ...result, errors: [...errors, ...result.errors] };
 	} finally {
 		metaInFlight = false;
@@ -470,7 +476,7 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 			const channel = channels.get(lower(model.provider))!;
 			const supported = await probeEffort(
 				{ ...model, compat: { ...channel.compat, ...(model.compat ?? {}) } },
-				{ baseUrl: channel.baseUrl, key: channel.key, headers: channel.headers, fetchImpl: deps.fetchImpl },
+				{ baseUrl: channel.baseUrl, key: channel.key(), headers: channel.headers, fetchImpl: deps.fetchImpl },
 			);
 			if (supported.length === 0) {
 				// Stamped as failed so the next run waits the short TTL instead of re-sending.
@@ -569,6 +575,25 @@ if (isMain(import.meta.url)) {
 		writeFileSync(file, JSON.stringify(edited));
 		await healMeta(metaDeps, true);
 		assert(modelIn("relay", "gpt-x").contextWindow === 200_000, "a hand-edited window stays manual");
+
+		// A write that fails must not stamp the state: the next run would read the unchanged
+		// value as a hand edit and never sync it again. A directory at the temp path fails
+		// the atomic write on every OS (EISDIR).
+		const locked = JSON.parse(readFileSync(file, "utf8")) as Obj;
+		(locked.providers as Record<string, Obj>).lock = { ...relay, models: [{ id: "m", contextWindow: 128_000 }] };
+		writeFileSync(file, JSON.stringify(locked));
+		const lockDeps: HealDeps = {
+			models: () => [{ provider: "lock", id: "m", ...relay }],
+			ownsModels: () => false,
+			fetchImpl: (async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ data: [{ id: "m", context_length: 400_000 }] }) })) as unknown as typeof fetch,
+		};
+		const blocker = file + "." + process.pid + ".tmp";
+		mkdirSync(blocker);
+		const failed = await healMeta(lockDeps, true);
+		rmSync(blocker, { recursive: true, force: true });
+		assert(!failed.changed && failed.errors.some((e) => e.startsWith("write failed")), "a failed write is reported");
+		await healMeta(lockDeps, true);
+		assert(modelIn("lock", "m").contextWindow === 400_000, "a failed write leaves no stamp, so the next run still syncs");
 
 		// Effort: a relay that 400s medium remaps it upward; a shaped map is left alone.
 		const effortFetch = (async (_url: string, init?: { body?: string }) => {
