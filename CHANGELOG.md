@@ -10,6 +10,9 @@
 ### Changed
 - **Thinking now starts at `auto` for every model.** The provider wizard's id heuristic used to fall back to `off`, so a relay catalog with no effort suffix in its ids saved every model as chat and the Thinking screen showed almost nothing to do. The fallback is now `auto` (`reasoning: true`, no `thinkingLevelMap`), so `/think` passes the level straight to the endpoint for all of them; an explicit `-high`/`-xhigh`/`-max`/`-medium`/`-low`/`-minimal` suffix still pins that level, and Space in the Thinking screen still sets a model to `off` by hand (`lib/provider.ts`, `detectLevel`).
 
+### Fixed
+- **The preview gate launches pi again on Windows.** `scripts/preview.mjs` spawned `pi` directly, which Node cannot do on Windows — the npm launcher is a sh script (ENOENT) or a `.cmd` (needs a shell) — so `npm run preview` crashed before pi ever opened and no push could ever be stamped. It now resolves the real entry (`where pi` → the global npm dir → `dist/bundle/cli.js`) and runs it with Node directly, args unquoted and intact; POSIX behavior is unchanged (`pi` still spawns directly when that works).
+
 ## [0.7.0] - 2026-10-24
 
 ### Added
