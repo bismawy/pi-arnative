@@ -78,10 +78,31 @@ export function formatTimeBadge(timeStr: string, th: { fg(color: string, text: s
 // \x1b[0m (full reset), so padding AFTER the reset loses the bubble bg and renders
 // dark for the rest of the line. Re-apply the bubble bg after every reset and close
 // it at end of line so it cannot leak. Same pattern as InputBgEditor below.
+//
+// The repair is pure per (line, bgOpen) pair, and pi's Markdown cache hands the render
+// patch the SAME string references frame after frame — so a Map keyed by the source
+// line turns every frame after the first into lookups instead of split/join rebuilds.
+// Only the patched render closure calls this, so module-local state is correct even
+// across /reload (the closure keeps this module instance alive). Reset when the bg
+// code changes (theme switch); past the cap the whole map is dropped, because a
+// session's user lines are far below it and correctness never depends on a hit.
+const BUBBLE_BG_CACHE_MAX = 8192;
+let bubbleBgOpen = "";
+let bubbleBgCache = new Map<string, string>();
+
 export function repairBubbleBg(line: string, bgOpen: string): string {
 	if (!bgOpen || (!line.includes("\x1b[0m") && !line.includes("\x1b[49m"))) return line;
+	if (bgOpen !== bubbleBgOpen) {
+		bubbleBgOpen = bgOpen;
+		bubbleBgCache = new Map();
+	}
+	const hit = bubbleBgCache.get(line);
+	if (hit !== undefined) return hit;
 	const patched = line.split("\x1b[0m").join(`\x1b[0m${bgOpen}`).split("\x1b[49m").join(`\x1b[49m${bgOpen}`);
-	return patched.endsWith(bgOpen) ? `${patched}\x1b[49m` : patched;
+	const result = patched.endsWith(bgOpen) ? `${patched}\x1b[49m` : patched;
+	if (bubbleBgCache.size >= BUBBLE_BG_CACHE_MAX) bubbleBgCache.clear();
+	bubbleBgCache.set(line, result);
+	return result;
 }
 
 /**
@@ -249,6 +270,14 @@ if (isMain(import.meta.url)) {
 	assert(clean.includes(`\x1b[0m${bg}`), "bg re-applied after the reset");
 	assert(clean.endsWith("\x1b[49m"), "bubble bg closed at end of line");
 	assert(repairBubbleBg("plain", "") === "plain", "no bgOpen: unchanged");
+
+	// memoized repair: a different bg code resets the cache, so nothing repairs
+	// against a stale bubble background after a theme switch
+	const dirty2 = `${bg}Second\x1b[0m pad \x1b[49m`;
+	const otherBg = "\x1b[48;2;1;2;3m";
+	assert(repairBubbleBg(dirty2, otherBg).includes(`\x1b[0m${otherBg}`), "a new bg code repairs against that bg");
+	assert(repairBubbleBg(dirty2, bg).includes(`\x1b[0m${bg}`), "and back to the previous bg after another reset");
+	assert(repairBubbleBg(dirty2, bg) === repairBubbleBg(dirty2, bg), "repeat repair stays stable");
 	assert(ansiBgOpen(null, "userMessageBg") === "", "no theme: empty bgOpen");
 	assert(
 		ansiBgOpen({ bg: (_c, t) => `\x1b[48;2;52;53;61m${t}\x1b[49m` }, "userMessageBg") === "\x1b[48;2;52;53;61m",
