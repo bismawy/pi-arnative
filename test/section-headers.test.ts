@@ -196,7 +196,7 @@ test("section-headers visual suite", () => {
 		stripAnsi(lines100[1]!).includes(HEADER_BRAND) && HEADER_BRAND === "Arnative\u2819",
 		"info line 1: brand carries the Braille glyph (U+2819)",
 	);
-	assert(new RegExp(`Arnative\u2819 v\\d+\\.\\d+\\.\\d+ · Welcome back, \\S`).test(stripAnsi(lines100[1]!)), "info line 1: Arnative⠙ version · Welcome back, user");
+	assert(new RegExp(`Arnative\u2819 v\\d+\\.\\d+\\.\\d+(?:-[\\w.]+)? · Welcome back, \\S`).test(stripAnsi(lines100[1]!)), "info line 1: Arnative⠙ version · Welcome back, user");
 	assert(!stripAnsi(lines100[2]!).includes("Menu"), "tab box border carries no label");
 	// Tab box separators join its borders: ┬ above and ┴ below each "│". Compare by display
 	// column, not string index: the tab icons are astral (2 code units, 1 column).
