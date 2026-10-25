@@ -24,6 +24,7 @@ import {
 } from "./animations.ts";
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
+import { AUTO_COMPACT_CHOICES, activeAutoCompact, setAutoCompact, type AutoCompactChoice } from "./autocompact.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
@@ -44,7 +45,7 @@ export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): 
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
 export const MENU_TITLE = screenTitle("Settings");
 /** One-line description under the menu title. */
-export const MENU_DESC = "Themes, headers, footers, animations, providers, usage";
+export const MENU_DESC = "Themes, headers, footers, animations, auto-compact, providers, usage";
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
@@ -241,6 +242,71 @@ const openAnimations = async (ctx: ExtensionCommandContext): Promise<boolean | v
 	return goBack === true;
 };
 
+const AUTOCOMPACT_PICKER_TEXT: ListPickerText = {
+	title: screenTitle("Auto-compact"),
+	description: "Smart tiers the trigger by context window; manual budgets fire at one absolute size.",
+	legend: LIST_LEGEND_MOVE,
+};
+
+/** One note per row: Smart states its tier table, a manual budget its window-independence. */
+const AUTO_COMPACT_NOTES: Record<AutoCompactChoice, string> = {
+	Off: "never — pi's own compaction stays in charge",
+	Smart: "by window: 1M→20% · 512k→40% · 256k→80% · <192k→pi core",
+	"100k": "always above 100k tokens, any window",
+	"150k": "always above 150k tokens, any window",
+	"200k": "always above 200k tokens, any window",
+	"300k": "always above 300k tokens, any window",
+	"400k": "always above 400k tokens, any window",
+};
+
+/** Rows for the Auto-compact picker: the saved choice ends its row with a green ✓. */
+export function autoCompactRows(opened: AutoCompactChoice): ListRow[] {
+	return AUTO_COMPACT_CHOICES.map((c) => ({ label: c, note: AUTO_COMPACT_NOTES[c], chosen: c === opened }));
+}
+
+/** A plain (non-live) picker: the choice is committed by Enter, nothing previews. The
+ *  trigger itself lives in `extensions/autocompact.ts` and fires on the next settle. */
+const openAutoCompact = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	const opened = activeAutoCompact();
+
+	if (ctx.mode !== "tui") {
+		// No custom components (RPC/headless): fall back to the blocking picker.
+		const labels = AUTO_COMPACT_CHOICES.map((c) => (c === opened ? `${c} ✓` : c));
+		const pick = await ctx.ui.select(AUTOCOMPACT_PICKER_TEXT.title, labels);
+		if (pick === undefined) return;
+		setAutoCompact(AUTO_COMPACT_CHOICES[labels.indexOf(pick)]!);
+		ctx.ui.notify(
+			`[arnative] Auto-compact: ${pick === "Off" ? "off" : pick === "Smart" ? "smart (tiered by context window)" : `above ${pick} tokens of context`}`,
+			"info",
+		);
+		return;
+	}
+
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		const picker = new ListPicker(
+			theme,
+			autoCompactRows(opened),
+			opened,
+			{
+				preview: () => {},
+				revert: () => {},
+				done: () => {
+					setAutoCompact(AUTO_COMPACT_CHOICES[picker.index]!);
+					done(false);
+				},
+				cancel: () => done(false),
+				back: () => done(true),
+				requestRender: () => tui.requestRender(),
+			},
+			AUTOCOMPACT_PICKER_TEXT,
+			false,
+			ctx.thinkingLevel,
+		);
+		return picker;
+	});
+	return goBack === true;
+};
+
 export const MENUS: ArnativeMenu[] = [
 	{
 		value: "themes",
@@ -265,6 +331,12 @@ export const MENUS: ArnativeMenu[] = [
 		label: "Animations",
 		description: "choose the working spinner",
 		open: openAnimations,
+	},
+	{
+		value: "compact",
+		label: "Auto-compact",
+		description: "smart by window or a fixed token budget (off by default)",
+		open: openAutoCompact,
 	},
 	{
 		value: "providers",
@@ -389,11 +461,11 @@ if (isMain(import.meta.url)) {
 	assert(rowText(labels[0]!) === "Themes · arnative themes only (all themes: /settings → Theme)", "menu row text format");
 	assert(labels[0]!.label === "Themes" && labels[0]!.note === "arnative themes only (all themes: /settings → Theme)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
-	assert(MENU_DESC === "Themes, headers, footers, animations, providers, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
+	assert(MENU_DESC === "Themes, headers, footers, animations, auto-compact, providers, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 6, "six settings screens");
-	for (const label of ["Themes", "Headers", "Footers", "Animations", "Providers", "Usage"]) {
+	assert(MENUS.length === 7, "seven settings screens");
+	for (const label of ["Themes", "Headers", "Footers", "Animations", "Auto-compact", "Providers", "Usage"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
@@ -406,6 +478,15 @@ if (isMain(import.meta.url)) {
 	assert(arnativeCompletions("he")![0]!.value === "headers", "headers menu has completions");
 	assert(arnativeCompletions("fo")![0]!.value === "footers", "footers menu has completions");
 	assert(MENUS.some((m) => m.value === "footers"), "footers menu registered");
+	assert(arnativeCompletions("co")![0]!.value === "compact", "compact menu has completions");
+	assert(MENUS.some((m) => m.value === "compact"), "compact menu registered");
+
+	// The Auto-compact picker marks the saved choice with a green ✓ at the row's end.
+	const acRows = autoCompactRows("Smart");
+	assert(acRows[0]!.label === "Off" && acRows[1]!.label === "Smart", "labels stay clean — the marker is not part of the label");
+	assert(acRows[1]!.chosen === true && acRows[0]!.chosen !== true, "the ✓ follows the saved choice");
+	assert(acRows.every((r) => r.note!.length > 0), "every Auto-compact row carries its note");
+	assert(autoCompactRows("Off")[0]!.chosen === true, "the marker moves when the saved choice changes");
 	assert(arnativeCompletions("pr")![0]!.value === "providers", "providers menu has completions");
 	assert(MENUS.some((m) => m.value === "providers"), "providers menu registered");
 	// Usage is reachable from /arnative even though it is a dashboard, not a setting.
@@ -493,12 +574,14 @@ if (isMain(import.meta.url)) {
 		cancel: () => { menuCancelled = true; },
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
-	const menuLines = mainPicker.render(60);
+	// 80 columns: the description names all seven screens (a tripwire — a screen added
+	// to MENUS must be added to the copy too), and that one-liner no longer fits 60.
+	const menuLines = mainPicker.render(80);
 	assert(menuLines.some((l) => l.includes(MENU_TITLE)), "the main menu renders its title");
 	assert(menuLines.some((l) => l.includes("[Esc] Close") && !l.includes("←")), "the root menu legend renders without a back key");
 	assert(menuLines.some((l) => l.includes(MENU_DESC)), "the main menu renders the description under the title");
 	assert(menuLines.findIndex((l) => l.includes(MENU_TITLE)) < menuLines.findIndex((l) => l.includes(MENU_DESC)), "description sits below the title");
-	assert(menuLines.every((l) => visibleWidth(l) === 60), "main menu lines fit the width");
+	assert(menuLines.every((l) => visibleWidth(l) === 80), "main menu lines fit the width");
 	// The pinned /arnative layout: `→ Themes  ·  note`, every `·` in one column (skill rule 10).
 	const plainMenu = menuLines.map(stripAnsi);
 	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("→ Themes"))!;

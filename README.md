@@ -33,6 +33,14 @@ Configurable via `/arnative` → **Footers**:
 - `Arnative (Minimal)` (single collapsible head row; click or `ctrl+alt+m` to toggle)
 - `Pi (system)` (built-in footer)
 
+### Auto-compact
+Configurable via `/arnative` → **Auto-compact** (saved to `~/.pi/agent/arnative/config.json`).
+When the context crosses the chosen threshold after a run settles, pi's own compaction fires — the same machinery and summary as `/compact`, keeping long sessions light without the manual step. Two shapes of control:
+- **Smart** (tiered by context window): ≥768k→20% · ≥384k→40% · ≥192k→80% · below 192k→pi core. Every tier lands the trigger near the same ~200k-token transcript ceiling — a 1M window trips at a fifth of its window, a 256k at 80%, and a 128k model defers entirely to pi's own near-full compaction (the behavior that is already safe there).
+- **A manual token budget** (`100k`–`400k`): one absolute number, whatever the window.
+
+Off by default. Guards: no re-trigger while a compaction runs, a growth-margin wait (5% of the threshold) after an attempt that freed too little or failed, and a full reset on session start. Pi's own `compaction.reserveTokens` threshold, including per-model overrides, is unaffected; whichever fires first wins.
+
 </details>
 
 ## Install
@@ -59,7 +67,7 @@ npm run dev
 | `ctrl+alt+n` · `alt+n` | New session (`/new`) |
 | `ctrl+alt+m` · `alt+m` | Toggle Minimal footer |
 | `/usage` | Token & cost dashboard (or `/arnative` → **Usage**) |
-| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Providers, Usage) |
+| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Providers, Usage) |
 | Click tool / `ctrl+o` | Toggle tool output box |
 | `←` | Back — step back from submenus/dashboard to menu |
 
@@ -91,6 +99,7 @@ To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 | `extensions/section-headers.ts` | Tabbed header and resource box (preset: `/arnative headers`) |
 | `extensions/footer.ts` | 3-row status grid footer and boxed editor (preset: `/arnative footers`) |
 | `extensions/animations.ts` | Working spinner presets and `/arnative` → Animations picker |
+| `extensions/autocompact.ts` | Auto-compact: Smart tiers by window or a fixed token budget (`/arnative` → Auto-compact) |
 | `lib/spinner.ts` | Spinner preset catalog: frames, cadence, and painters |
 | `extensions/arnative.ts` | Settings menu with live preview and navigation |
 | `lib/provider.ts` | Custom provider wizard: probe, model pick, edit actions, `models.json`/`auth.json` save |
