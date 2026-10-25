@@ -24,6 +24,8 @@ export const INPUT_LEGEND = "[Enter] Save  [Esc] Cancel";
 export interface ListRow {
 	label: string;
 	note?: string;
+	/** The saved value among the choices, marked with a green ✓ at the end of the row. */
+	chosen?: boolean;
 }
 
 /** One row as a flat string — the headless/RPC `ctx.ui.select` fallback, which has no columns. */
@@ -202,6 +204,7 @@ export class ListPicker implements Component {
 			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
 			const noteText = this.hooks.note?.(item.label) ?? item.note;
 			const note = noteText ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", noteText)}` : "";
+			const chosen = item.chosen ? th.fg("success", " ✓") : "";
 			// A checked state marker is chrome like the cursor: `[x]` accent, `[ ]` dim.
 			const mark = this.hooks.marked
 				? this.hooks.marked(item.label)
@@ -212,7 +215,7 @@ export class ListPicker implements Component {
 			const suffix = /(\(.*\))$/.exec(item.label)?.[1] ?? "";
 			const head = suffix ? item.label.slice(0, item.label.length - suffix.length) : item.label;
 			const tail = suffix ? th.fg("dim", suffix) : "";
-			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${mark}${paint(head)}${tail}${pad}${note}`;
+			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${mark}${paint(head)}${tail}${pad}${note}${chosen}`;
 			body.push(truncateToWidth(content, width - 4, ""));
 		}
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
@@ -322,6 +325,19 @@ if (isMain(import.meta.url)) {
 	assert(lines[0]!.startsWith("╭") && lines[lines.length - 1]!.startsWith("╰"), "picker framed");
 	assert(lines.every((l) => visibleWidth(l) === 50), "picker lines fit width 50");
 	assert(lines.some((l) => l.includes("→ a")), "the cursor marks the selection");
+
+	// The chosen marker: ✓ ends the saved row only, colored by the theme's success slot.
+	const chosenPicker = new ListPicker(
+		fakeTheme,
+		[{ label: "a" }, { label: "b", note: "nb", chosen: true }],
+		"b",
+		{ preview: quiet, revert: quiet, done: quiet, requestRender: quiet },
+		{ title: screenTitle("Test"), description: "d", legend: "l" },
+		false,
+	);
+	const chosenLines = chosenPicker.render(50);
+	assert(chosenLines.some((l) => l.includes("nb ✓")), "a chosen row ends with the ✓ marker");
+	assert(chosenLines.every((l) => !l.includes("a ✓")), "unchosen rows carry no marker");
 
 	// `←` behavior is owned by the screen: a parent gets the back call, `false` swallows
 	// the key (a fill screen keeps its work), and a root menu closes like Esc.

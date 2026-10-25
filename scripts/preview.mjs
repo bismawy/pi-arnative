@@ -16,6 +16,7 @@ const EXTENSIONS = [
 	"ui-render-tweaks.ts",
 	"usage.ts",
 	"animations.ts",
+	"autocompact.ts",
 	"arnative.ts",
 ];
 
@@ -72,6 +73,13 @@ const args = [
 	...process.argv.slice(2),
 ];
 
+// Say what is being previewed BEFORE pi takes the screen: a preview run from the wrong
+// branch looks identical to a broken one from inside the session (this exact trap: a
+// feature "missing" that was simply never in the previewed tree).
+const branch = execFileSync("git", ["branch", "--show-current"], { cwd: root, encoding: "utf8" }).trim();
+const shortRev = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+console.log(`Previewing ${branch || "(detached)"} @ ${shortRev} — commit first, or the stamp will not match this tree.\n`);
+
 let launcher;
 try {
 	launcher = resolvePi();
@@ -80,6 +88,10 @@ try {
 	process.exit(1);
 }
 const run = spawnSync(launcher.file, [...launcher.prefix, ...args], { cwd: root, stdio: "inherit" });
+if (run.error) {
+	console.error(`Cannot launch pi: ${run.error.message}`);
+	process.exit(1);
+}
 if (run.status !== 0) {
 	console.error(`\npi exited with code ${run.status} — nothing stamped, the preview did not complete.`);
 	process.exit(run.status ?? 1);
