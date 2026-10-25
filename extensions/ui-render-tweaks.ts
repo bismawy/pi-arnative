@@ -50,12 +50,19 @@ const activeTheme = () => getActiveTheme<Exclude<ActiveTheme, null>>();
 // (hardcoded in handleReloadCommand, no auto-hide). Patches Container.render
 // through the prototype chain (Container is not exported) and drops the whole box on match.
 const RELOAD_TEXT = "Reloading keybindings, extensions, skills, prompts, themes, and context files...";
+/** The reload box is a fixed 5-child container (2 borders, 2 spacers, one 78-char line), so it
+ *  renders at most ~9 rows even wrapped. Anything larger cannot be the box, and this predicate
+ *  runs per frame on every plain Container — including a transcript of tens of thousands of
+ *  lines, where the substring scan is the single most expensive arnative render patch. */
+const RELOAD_BOX_MAX_LINES = 64;
 /**
  * True only for the box itself: border rows, blank spacers and (possibly wrapped) copy of the
  * message. The patch sits on every plain Container, so a bare substring test would blank a
- * whole chat the moment a transcript line mentioned the phrase.
+ * whole chat the moment a transcript line mentioned the phrase. Containers larger than
+ * {@link RELOAD_BOX_MAX_LINES} are refused before any scanning starts.
  */
 export function shouldHideReloadBox(lines: readonly string[]): boolean {
+	if (lines.length > RELOAD_BOX_MAX_LINES) return false;
 	if (!lines.some((l) => l.includes("Reloading keybindings"))) return false;
 	const rows = lines.map((l) => stripAnsi(l).trim());
 	return rows.every((r) => r === "" || /^[─-]+$/.test(r) || RELOAD_TEXT.includes(r));
@@ -373,6 +380,10 @@ if (isMain(import.meta.url)) {
 	assert(shouldHideReloadBox(["────", "", " Reloading keybindings, extensions,", " skills, prompts, themes, and context files...", "", "────"]) === true, "wrapped reload box detected");
 	assert(shouldHideReloadBox(["hello", "the log says Reloading keybindings", "world"]) === false, "chat lines that mention the phrase stay visible");
 	assert(shouldHideReloadBox(["hello", "world"]) === false, "normal lines pass through");
+	assert(
+		shouldHideReloadBox([...Array(RELOAD_BOX_MAX_LINES + 1).fill(""), " Reloading keybindings, extensions, skills, prompts, themes, and context files... "]) === false,
+		"a container larger than any reload box is refused before scanning",
+	);
 
 	// selection: reverse video replaced with explicit colors (bg selectedBg + fg text)
 	assert(

@@ -12,6 +12,7 @@
 
 ### Fixed
 - **The preview gate launches pi again on Windows.** `scripts/preview.mjs` spawned `pi` directly, which Node cannot do on Windows — the npm launcher is a sh script (ENOENT) or a `.cmd` (needs a shell) — so `npm run preview` crashed before pi ever opened and no push could ever be stamped. It now resolves the real entry (`where pi` → the global npm dir → `dist/bundle/cli.js`) and runs it with Node directly, args unquoted and intact; POSIX behavior is unchanged (`pi` still spawns directly when that works).
+- **Large-session render cost: the per-frame patches are bounded now.** Both render patches scaled with the whole transcript on every frame, which made long sessions (a 1M-context model past ~20%) feel heavy in the terminal. The reload-box scan ran inside every `Container.render` — measured at 0.76 ms against pi's own 0.59 ms layout pass at 12.6k lines — and now refuses containers larger than 64 lines before scanning, because the reload box is a fixed ~9-line container (`extensions/ui-render-tweaks.ts`, `shouldHideReloadBox`). The user-bubble bg repair rebuilt every styled line on every frame and is now memoized per source line — pi's Markdown cache returns the same string references frame after frame — reset on a theme change and capped at 8192 entries (`extensions/timestamps.ts`, `repairBubbleBg`).
 
 ## [0.7.0] - 2026-10-24
 
