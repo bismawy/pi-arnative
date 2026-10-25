@@ -501,7 +501,7 @@ if (isMain(import.meta.url)) {
 	mkdirSync(join(fixture, "sessions", "ui"), { recursive: true });
 	const freeAsstOf = (provider: string, model: string, input: number) =>
 		JSON.stringify({ message: { role: "assistant", provider, model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0 } } } });
-	const freeAsst = (model: string, input: number) => freeAsstOf("wally", model, input);
+	const freeAsst = (model: string, input: number) => freeAsstOf("alpha", model, input);
 	writeFileSync(
 		join(fixture, "sessions", "ui", "rows.jsonl"),
 		[
@@ -509,50 +509,50 @@ if (isMain(import.meta.url)) {
 			freeAsst("other-model", 7),
 			// The shipped shape of the collision: a bare id and, on another provider, a path id
 			// that merely ENDS with it. Suffix matching folded the second into the first, so a first
-			// run under `river/…` showed wally+yarz's 29.5M/3.2M/360.5M as if it were its own.
+			// run under a shared alias showed two providers' usage as if it were one provider's own.
 			freeAsst("deepseek-v4.1-flash", 300),
-			freeAsstOf("9router", "river/deepseek-ai/DeepSeek-V4.1-Flash", 200),
+			freeAsstOf("shared", "team/deepseek-ai/DeepSeek-V4.1-Flash", 200),
 		].join(String.fromCharCode(10)),
 	);
 	collectUsageSummary(true);
 
 	// Per-id totals: a model id reports its own tokens only, whatever it is a suffix of.
 	assert(getModelAllTimeUsage("deepseek-v4.1-flash").input === 300, "a bare id does not absorb a longer id that ends with it");
-	assert(getModelAllTimeUsage("river/deepseek-ai/DeepSeek-V4.1-Flash").input === 200, "a path id counts its own provider's tokens only");
-	assert(getModelAllTimeUsage("RIVER/DeepSeek-AI/deepseek-V4.1-Flash").input === 200, "case still does not split one model's history");
+	assert(getModelAllTimeUsage("team/deepseek-ai/DeepSeek-V4.1-Flash").input === 200, "a path id counts its own provider's tokens only");
+	assert(getModelAllTimeUsage("TEAM/DeepSeek-AI/deepseek-V4.1-Flash").input === 200, "case still does not split one model's history");
 	assert(getModelAllTimeUsage("deepseek-v4.1-flash:free").input === 300, "a route tag folds into the model it tags");
 
 	// Cost estimation: unpriced pairs use rates declared automatically in models.json.
 	assert(loadPriceTable() !== null && Object.keys(loadPriceTable()).length === 0, "no models.json rates means an empty table");
-	assert(!hasPrice("wally", "gemini-3.8-flash"), "a pair absent from models.json has no price");
-	assert(estimateCost(1000, 100, 0, "gemini-3.8-flash", "wally") === null, "an unknown pair estimates nothing");
+	assert(!hasPrice("alpha", "gemini-3.8-flash"), "a pair absent from models.json has no price");
+	assert(estimateCost(1000, 100, 0, "gemini-3.8-flash", "alpha") === null, "an unknown pair estimates nothing");
 	assert(collectUsageSummary(true).totals.estimatedCost === 0, "nothing is estimated without rates");
-	assert(estimateCost(1000, 100, 0, "other-model", "wally") === null, "a second unpriced pair estimates nothing either");
+	assert(estimateCost(1000, 100, 0, "other-model", "alpha") === null, "a second unpriced pair estimates nothing either");
 
 	writeFileSync(
 		join(fixture, "models.json"),
 		JSON.stringify({
 			providers: {
-				wally: { models: [{ id: "gemini-3.8-flash", cost: { input: 1, output: 2, cacheRead: 0.1 } }] },
-				yarz: { models: [{ id: "gemini-3.8-flash", cost: { input: 10, output: 20 } }] },
+				alpha: { models: [{ id: "gemini-3.8-flash", cost: { input: 1, output: 2, cacheRead: 0.1 } }] },
+				beta: { models: [{ id: "gemini-3.8-flash", cost: { input: 10, output: 20 } }] },
 			},
 		}),
 	);
-	assert(hasPrice("wally", "gemini-3.8-flash"), "a priced provider+model is found in the table");
+	assert(hasPrice("alpha", "gemini-3.8-flash"), "a priced provider+model is found in the table");
 	assert(!hasPrice("enclave", "gemini-3.8-flash"), "another provider with no entry is not priced");
-	assert(estimateCost(1_000_000, 0, 0, "gemini-3.8-flash", "wally") === 1, "1M input tokens at wally's $1/M costs $1");
+	assert(estimateCost(1_000_000, 0, 0, "gemini-3.8-flash", "alpha") === 1, "1M input tokens at alpha's $1/M costs $1");
 	assert(
-		estimateCost(1_000_000, 0, 0, "gemini-3.8-flash", "yarz") === 10,
-		"the SAME model at yarz costs 10x (rates are per provider, not per model)",
+		estimateCost(1_000_000, 0, 0, "gemini-3.8-flash", "beta") === 10,
+		"the SAME model at beta costs 10x (rates are per provider, not per model)",
 	);
-	assert(estimateCost(0, 1_000_000, 0, "gemini-3.8-flash", "wally") === 2, "1M output tokens at $2/M costs $2");
-	assert(Math.abs(estimateCost(0, 0, 1_000_000, "gemini-3.8-flash", "wally")! - 0.1) < 1e-9, "cache reads use their own rate");
-	assert(estimateCost(1_000_000, 0, 0, "vendor/gemini-3.8-flash", "wally") === 1, "a vendor/my-model id matches the model rate");
+	assert(estimateCost(0, 1_000_000, 0, "gemini-3.8-flash", "alpha") === 2, "1M output tokens at $2/M costs $2");
+	assert(Math.abs(estimateCost(0, 0, 1_000_000, "gemini-3.8-flash", "alpha")! - 0.1) < 1e-9, "cache reads use their own rate");
+	assert(estimateCost(1_000_000, 0, 0, "vendor/gemini-3.8-flash", "alpha") === 1, "a vendor/my-model id matches the model rate");
 	const withPrices = collectUsageSummary(true);
 	assert(withPrices.totals.estimatedCost > 0, "models.json rates produce an estimate");
 	assert(withPrices.totals.reportedCost === 0, "the reported total stays at the provider's own number");
 	assert(withPrices.totals.cost === withPrices.totals.reportedCost, "the headline cost never absorbs the estimate");
-	assert(estimateCost(1_000_000, 0, 0, "other-model", "wally") === null, "a pair with no rate stays unpriced even when others are priced");
+	assert(estimateCost(1_000_000, 0, 0, "other-model", "alpha") === null, "a pair with no rate stays unpriced even when others are priced");
 
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m`,
@@ -661,7 +661,7 @@ if (isMain(import.meta.url)) {
 	// The unpriced notice is gone: the `-` in Cost already says it.
 	assert(!body.includes("unpriced"), "the unpriced notice line is removed");
 	// Provider rows are capitalized so they read as names, not raw ids.
-	assert(plain(lines[firstRow]!).includes("Wally") || plain(lines[firstRow]!).includes("Google"), "provider rows are capitalized");
+	assert(plain(lines[firstRow]!).includes("Alpha") || plain(lines[firstRow]!).includes("Google"), "provider rows are capitalized");
 
 	// Thinking level -> theme slot is unit-tested in lib/ansi.ts (one definition); here we
 	// only prove the box border actually takes its color from that slot at render time.
@@ -776,20 +776,20 @@ if (isMain(import.meta.url)) {
 		join(fixture, "models.json"),
 		JSON.stringify({
 			providers: {
-				wally: { models: [{ id: "gemini-3.8-flash", cost: { input: 0.28, output: 0.42, cacheRead: 0.028 } }] },
-				yarz: { models: [{ id: "gemini-3.8-flash" }] },
+				alpha: { models: [{ id: "gemini-3.8-flash", cost: { input: 0.28, output: 0.42, cacheRead: 0.028 } }] },
+				beta: { models: [{ id: "gemini-3.8-flash" }] },
 			},
 		}),
 	);
 	const fromModels = collectUsageSummary(true);
-	const wally = fromModels.providers.find((p) => p.name === "wally")!;
+	const alpha = fromModels.providers.find((p) => p.name === "alpha")!;
 	const expected = (100 / 1e6) * 0.28 + (5 / 1e6) * 0.42 + (1 / 1e6) * 0.028;
-	assert(Math.abs(wally.estimatedCost - expected) < 1e-12, `models.json cost prices the provider, got ${wally.estimatedCost}`);
+	assert(Math.abs(alpha.estimatedCost - expected) < 1e-12, `models.json cost prices the provider, got ${alpha.estimatedCost}`);
 	assert(
-		Math.abs(wally.models.reduce((n, m) => n + m.estimatedCost, 0) - wally.estimatedCost) < 1e-9,
+		Math.abs(alpha.models.reduce((n, m) => n + m.estimatedCost, 0) - alpha.estimatedCost) < 1e-9,
 		"a provider's estimate is the sum of its models' estimates",
 	);
-	assert(wally.models.find((m) => m.name === "other-model")!.estimatedCost === 0, "a model without a declared cost stays unpriced");
+	assert(alpha.models.find((m) => m.name === "other-model")!.estimatedCost === 0, "a model without a declared cost stays unpriced");
 	writeFileSync(join(fixture, "models.json"), "{}", "utf8");
 	collectUsageSummary(true);
 
@@ -800,7 +800,7 @@ if (isMain(import.meta.url)) {
 	(estModal as unknown as { summary: unknown }).summary = {
 		providers: [
 			{
-				name: "wally", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000,
+				name: "alpha", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000,
 				totalTokens: 1_500_000, cost: 0, estimatedCost: 0.546,
 				models: [{ name: "deepseek-v4.1-flash", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000, totalTokens: 1_500_000, cost: 0, estimatedCost: 0.546 }],
 			},
@@ -812,14 +812,14 @@ if (isMain(import.meta.url)) {
 		],
 		totals: { sessions: 2, msgs: 3, input: 3_200_000, output: 1_126_000, cacheRead: 2_000_000, totalTokens: 4_326_000, cost: 0.65, reportedCost: 0.65, estimatedCost: 0.546 },
 	};
-	(estModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set(["wally"]);
+	(estModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set(["alpha"]);
 	const estLines = estModal.render(90);
 	const estBody = estLines.map(plain).join("\n");
 	assert(estBody.includes("~$0.55"), "a row with a rate but no reported cost shows the estimate with `~`");
 	assert(estBody.includes("$0.65") && !estBody.includes("~$0.65"), "a reported cost is shown as-is, never with `~`");
 	assert(estBody.includes("estimated (models.json)"), "the estimate line names models.json");
 	// Only the two table rows — the detail line also carries the estimate.
-	const estRows = estLines.map(plain).filter((l) => /^\u2502 [\u25be\u25b8 ] (Wally|deepseek)/.test(l));
+	const estRows = estLines.map(plain).filter((l) => /^\u2502 [\u25be\u25b8 ] (Alpha|deepseek)/.test(l));
 	assert(estRows.length === 2 && estRows.every((l) => l.includes("~$0.55")), `the estimate shows on the provider row and its model row, got ${JSON.stringify(estRows)}`);
 
 	// Cost must survive every width: a clipped `$5` is worse than a dropped column.

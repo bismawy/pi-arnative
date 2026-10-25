@@ -599,7 +599,7 @@ function parseOptimizer(raw: string | undefined): string | null {
 }
 
 // Pi's own per-message usage: shown when pi-cache-optimizer has no adapter for the
-// provider (a custom one like hark.ts publishes no pi-cache-stats status).
+// provider (a custom one like mytool.ts publishes no pi-cache-stats status).
 let usageTotals = { inp: 0, read: 0 };
 export function piCacheHit(): string | null {
 	const total = usageTotals.inp + usageTotals.read;
@@ -1265,8 +1265,8 @@ export default function (pi: ExtensionAPI) {
 
 // Self-check: `node extensions/footer.ts`
 if (isMain(import.meta.url)) {
-	assert(shortenCwd("/run/media/bisma/DATA/Pi/pi-arnative") === "\u2026/Pi/pi-arnative", "cwd inside -> last 2 segments");
-	assert(shortenCwd("/home/bisma") === "/home/bisma", "shallow cwd left unchanged");
+	assert(shortenCwd("/run/media/dev/DATA/work/app") === "\u2026/work/app", "cwd inside -> last 2 segments");
+	assert(shortenCwd("/home/dev") === "/home/dev", "shallow cwd left unchanged");
 	assert(shortenCwd("D:\\Pi\\a\\pi-arnative") === "D:/\u2026/a/pi-arnative", "long Windows path: drive kept");
 	assert(shortenCwd("D:\\Pi\\pi-arnative") === "D:\\Pi\\pi-arnative", "shallow Windows path left unchanged");
 	assert(shortenCwd("/a/x/y/z") === "\u2026/y/z", "long path -> tail");
