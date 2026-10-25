@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.0-rc.1] - 2026-10-25
 
 ### Added
 - **Auto-compact keeps long sessions light.** `/arnative` → **Auto-compact** picks **Smart** — a tier table by context window (≥768k→20%, ≥384k→40%, ≥192k→80%, below 192k→pi core; every tier lands the trigger near the same ~200k-token transcript ceiling) — or a **manual token budget** (`100k`–`400k`, one absolute number for any window). When a run settles with the context at or above the threshold, pi's own compaction fires through `ctx.compact()` — the same machinery and summary as `/compact`, never mid-run. Small windows defer entirely: a 128k model keeps pi's near-full `reserveTokens` compaction untouched. The saved choice is marked with a green ✓ at the end of its picker row. Guards: no re-trigger while a compaction runs, a growth-margin wait (5% of the threshold) after an attempt that freed too little or failed (usage oscillating at the threshold cannot re-summarize every turn), and a full reset on session start (`extensions/autocompact.ts`).
