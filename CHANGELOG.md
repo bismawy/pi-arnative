@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **The Extensions tab lists packages, not every module inside them.** The header used to print one row per loaded entry point (`@bismawy/pi-arnative@0.8.0:footer.ts`, `:model-heal.ts`, …), so a twelve-module package filled the box on its own. The `:subpath` is dropped and each package appears once with its version — the count matches what `pi list` shows. Local single-file extensions (`hark.ts`) are unchanged (`extensions/section-headers.ts`, `extractItemsFromBody`).
+
 ## [0.8.0] - 2026-10-26
 
 ### Added
