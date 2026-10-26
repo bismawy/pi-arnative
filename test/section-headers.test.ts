@@ -77,6 +77,11 @@ test("section-headers visual suite", () => {
 	// Parsing & wrapping
 	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody splits 3 comma items");
 	assert(extractItemsFromBody("  x\n  y\n  z").length === 3, "extractItemsFromBody returns 3 lines");
+	assert(
+		JSON.stringify(extractItemsFromBody("pkg@1.0.0:a.ts, pkg@1.0.0:b.ts, other@2.0.0:dist, hark.ts", true)) ===
+			JSON.stringify(["pkg@1.0.0", "other@2.0.0", "hark.ts"]),
+		"extensions collapse to one row per package",
+	);
 
 	// Directory path wrapping: never truncated, always the full path
 	const wp = wrapPath("/run/media/bisma/DATA/Pi/pi-arnative", 20);

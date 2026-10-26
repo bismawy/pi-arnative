@@ -514,6 +514,22 @@ export function shouldApplyDefaultTheme(
 	return themeSetting === undefined && themes.some((t) => t.name === DEFAULT_THEME);
 }
 
+/** Register every slash command this package owns. Exported so the self-check can assert the
+ *  set without starting a session. */
+export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): void {
+	pi.registerCommand("arnative", {
+		description: "Arnative settings menu: themes, headers, footers, providers, usage",
+		getArgumentCompletions: arnativeCompletions,
+		handler: arnativeHandler,
+	});
+	// Shortcut for the screen people reach for by name: it goes through the same handler, so
+	// `/providers` and `/arnative providers` cannot drift apart.
+	pi.registerCommand("providers", {
+		description: "Custom endpoints: add, edit or remove a provider (same as /arnative providers)",
+		handler: (_args: string, ctx: ExtensionCommandContext) => arnativeHandler("providers", ctx),
+	});
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		// `setTheme` writes the choice into pi's settings, so this runs once per install and the
@@ -521,11 +537,7 @@ export default function (pi: ExtensionAPI) {
 		if (!shouldApplyDefaultTheme(pi.getSettings()?.theme, ctx.ui.getAllThemes())) return;
 		ctx.ui.setTheme(DEFAULT_THEME);
 	});
-	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, providers, usage",
-		getArgumentCompletions: arnativeCompletions,
-		handler: arnativeHandler,
-	});
+	registerCommands(pi);
 }
 
 // Self-check: `node extensions/arnative.ts`
@@ -573,6 +585,14 @@ if (isMain(import.meta.url)) {
 	assert(autoCompactRows("Off")[0]!.chosen === true, "the marker moves when the saved choice changes");
 	assert(arnativeCompletions("pr")![0]!.value === "providers", "providers menu has completions");
 	assert(MENUS.some((m) => m.value === "providers"), "providers menu registered");
+	// Every slash command, and the one alias: `/providers` must land on the providers screen.
+	{
+		const registered = new Map<string, { description: string; handler: unknown }>();
+		registerCommands({ registerCommand: (name, options) => { registered.set(name, options as never); } } as never);
+		assert([...registered.keys()].join(",") === "arnative,providers", "two commands: /arnative and /providers");
+		assert(typeof registered.get("providers")!.handler === "function", "/providers has a handler");
+		assert(MENUS.some((m) => m.value === "providers"), "/providers routes to a menu row that exists");
+	}
 	// Usage is reachable from /arnative even though it is a dashboard, not a setting.
 	assert(MENUS.some((m) => m.value === "usage"), "usage menu registered");
 	assert(arnativeCompletions("us")![0]!.value === "usage", "usage menu has completions");

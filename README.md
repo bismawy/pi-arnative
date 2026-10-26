@@ -77,6 +77,7 @@ npm run dev
 | `ctrl+alt+m` · `alt+m` | Toggle Minimal footer |
 | `/usage` | Token & cost dashboard (or `/arnative` → **Usage**) |
 | `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Model heal, Providers, Usage) |
+| `/providers` | Provider screen (or `/arnative` → **Providers**) |
 | `/model-heal` | Heal `models.json` now (or `/arnative` → **Model heal**) |
 | Click tool / `ctrl+o` | Toggle tool output box |
 | `←` | Back — step back from submenus/dashboard to menu |

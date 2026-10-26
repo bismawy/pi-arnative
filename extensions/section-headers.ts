@@ -214,14 +214,16 @@ export function extractItemsFromBody(body: string, isExtensions = false): string
 		}
 	}
 	if (!isExtensions) return items;
-	return items.map((item) => {
+	// One row per package (like `pi list`): drop the `:subpath` of every module inside a
+	// package and repeat nothing. Local single-file extensions (`hark.ts`) stay as they are.
+	const labels = new Set<string>();
+	for (const item of items) {
 		const colon = item.indexOf(":");
-		const name = (colon === -1 ? item : item.slice(0, colon)).trim();
-		const ver = installedVersion(name);
-		if (!ver) return item;
-		const at = colon === -1 ? item.length : colon;
-		return item.slice(0, at) + `@${ver}` + item.slice(at);
-	});
+		const base = (colon === -1 ? item : item.slice(0, colon)).trim();
+		const ver = installedVersion(base);
+		labels.add(ver ? `${base}@${ver}` : base);
+	}
+	return [...labels];
 }
 
 // Cheatsheet for the Shortcut tab. Mirrors README "Shortcuts" plus the bindings the

@@ -38,6 +38,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
+import { statusRows } from "../lib/status-widget.ts";
 import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softSecondaryOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
@@ -272,6 +273,36 @@ if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKA
 }
 
 // arnative box border helper -> lib/box.ts (one definition for every box)
+
+// 7. Status rows above the chat column (pi's `aboveEditor` widget slot). pi turns a string
+// array into unstyled `Text`, so an extension's status line ignores the theme and lands in
+// the default foreground. Every such array is handed to a component factory instead, which
+// receives the live theme: the arnative mark leads the block and every row is `dim`.
+const STATUS_WIDGET_KEY = Symbol.for("pi-arnative.statusWidgetRows");
+if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[STATUS_WIDGET_KEY]) {
+	(globalThis as Record<symbol, boolean>)[STATUS_WIDGET_KEY] = true;
+	const proto = InteractiveMode.prototype as unknown as {
+		setExtensionWidget(key: string, content: unknown, options?: { placement?: string }): void;
+	};
+	const origSetWidget = proto.setExtensionWidget;
+	proto.setExtensionWidget = function (key: string, content: unknown, options?: { placement?: string }) {
+		if (Array.isArray(content) && content.every((line) => typeof line === "string")) {
+			const rows = content as string[];
+			content = (_tui: unknown, th: Parameters<typeof statusRows>[0]) => ({
+				dispose() {
+					/* no listeners, no timers */
+				},
+				invalidate() {
+					/* the rows are fixed at set time */
+				},
+				render(width: number): string[] {
+					return statusRows(th ?? activeTheme(), rows, width);
+				},
+			});
+		}
+		return origSetWidget.call(this, key, content, options);
+	};
+}
 
 export class JevReviewBoxComponent implements Component {
 	private text: string;

@@ -16,6 +16,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { buildEffortMap, isEffortProbeable, mergeMeta, parseModelMeta, probeEffort, suggestCompat, type Compat, type ModelMeta } from "./compat.ts";
 import { screenTitle, type ScreenText } from "../lib/box.ts";
 import { stripAnsi } from "../lib/ansi.ts";
+import { statusRows } from "./status-widget.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_MOVE, ListPicker, rowText, type ListRow } from "./list-picker.ts";
 
 // ---------------------------------------------------------------- flavors
@@ -562,8 +563,8 @@ function probingStatus(ctx: ExtensionCommandContext, text: string | undefined): 
 		(_tui: TUI, theme: Theme) => ({
 			dispose() { /* no listeners, no timers — nothing to clean up */ },
 			invalidate() { /* a static line, recomputed on every render anyway */ },
-			render(_width: number): string[] {
-				return [theme.fg("dim", text)];
+			render(width: number): string[] {
+				return statusRows(theme, [text], width);
 			},
 		}),
 		{ placement: "aboveEditor" },
