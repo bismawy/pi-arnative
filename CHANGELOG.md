@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.1] - 2026-10-26
 
 ### Changed
 - **`/providers` is its own command.** The provider screen was reachable only as `/arnative providers`; it now also answers to `/providers`, through the same handler, so the two cannot drift. Both are registered in `registerCommands` and the self-check pins the set (`extensions/arnative.ts`).
