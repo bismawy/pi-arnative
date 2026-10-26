@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+- **`/providers` is its own command.** The provider screen was reachable only as `/arnative providers`; it now also answers to `/providers`, through the same handler, so the two cannot drift. Both are registered in `registerCommands` and the self-check pins the set (`extensions/arnative.ts`).
+- **Status rows above the chat column now use the arnative mark and the theme's `dim` token.** pi renders a `setWidget` string array as unstyled `Text`, so every status line (model heal, the provider probe, other extensions' `setWidget` calls) landed in the default foreground. A render patch turns those arrays into a component factory that receives the live theme: the `\ueb1b` mark leads the block with one space, rows align under it, and a row another extension already painted keeps its own colour (an error row stays red). `lib/status-widget.ts`.
+
 ### Fixed
 - **The Extensions tab lists packages, not every module inside them.** The header used to print one row per loaded entry point (`@bismawy/pi-arnative@0.8.0:footer.ts`, `:model-heal.ts`, …), so a twelve-module package filled the box on its own. The `:subpath` is dropped and each package appears once with its version — the count matches what `pi list` shows. Local single-file extensions (`hark.ts`) are unchanged (`extensions/section-headers.ts`, `extractItemsFromBody`).
 
