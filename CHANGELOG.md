@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Model heal keeps `models.json` correct with no command (adopted from pi-auto-compat).** On `session_start`, `model_select`, a change to `models.json` (debounced watcher) and an assistant error that names a rejected parameter, three passes run on the rules the provider wizard already uses: flags (missing compat flags and a default `thinkingLevelMap`, offline), meta (`contextWindow`/`maxTokens` from each channel's `GET /models`, 6 h TTL, unit anomalies rejected, caps clamped to the window) and effort (the `reasoning_effort` levels a relay accepts, remapped to the nearest accepted one, 24 h TTL). Each pass is one read-modify-write that writes only real differences: an explicit value (even `false`) is never overwritten, a hand-edited network value stays manual, a user-shaped map is never probed, a corrupt file is reported and never rewritten, and the first write keeps a backup. Channel-wide flags land at provider level; extension-owned providers are fixed through `modelOverrides`. `/arnative` → **Model heal** picks `Full` (default), `Flags` (offline only) or `Off`; `/model-heal` forces every pass now, and `/auto-compat` stays as an alias once pi-auto-compat is uninstalled. While pi-auto-compat is still installed, pi-arnative defers to it and says so once, so two healers never write the same file. State lives in `<agent>/arnative/model-heal.json` (`lib/model-heal.ts`, `extensions/model-heal.ts`).
+
 ## [0.8.0-rc.1] - 2026-10-25
 
 ### Added

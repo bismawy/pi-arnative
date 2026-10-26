@@ -197,7 +197,7 @@ const PROBE_TOKENS = 16;
 const RETRY_PAUSE_MS = 1000;
 // Only a parameter rejection indicts the level. Auth, quota and transport errors say
 // nothing, and marking a level accepted without an answer would be a lie.
-const REJECTION_RE = /provider.?error|invalid.?request|http 400|400[.:]|reasoning.?effort|thinking|unsupported|not supported|invalid (?:value|option|parameter|enum)|bad request/i;
+export const REJECTION_RE = /provider.?error|invalid.?request|http 400|400[.:]|reasoning.?effort|thinking|unsupported|not supported|invalid (?:value|option|parameter|enum)|bad request/i;
 
 /** A reasoning model on a relay that expects `reasoning_effort` and does not publish its
  *  own level support — the only case a probe can fix. */

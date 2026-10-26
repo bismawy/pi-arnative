@@ -19,6 +19,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified, cohesive vis
 - Transcript Clock: Timestamps for conversation messages with clean bubble backgrounds.
 - Usage Dashboard: Real-time token counts and cost tracking across all local sessions via `/usage`.
 - Custom Providers: any OpenAI-, Anthropic-, Gemini- or Ollama-compatible endpoint from three inputs — URL, key, name; models are probed and picked, saved to pi's own `models.json`/`auth.json`, together with the context window and output cap the probe answered and the compat flags the endpoint needs. Enter on a stored provider edits: reselect models, re-probe the endpoint, cycle per-model thinking levels (off → auto → minimal → low → medium → high → xhigh → max, auto-detected from ids), set all of them at once (`[A]` auto, `[R]` off), probe which effort levels the channel really accepts (`p`), or delete.
+- Model Heal: keeps `models.json` correct with no command (adopted from pi-auto-compat) — missing compat flags, the context window and output cap each channel's `/models` publishes, and the effort levels a relay really accepts. Explicit values always win.
 
 <details>
 <summary><b>Configuration & Presets</b></summary>
@@ -40,6 +41,14 @@ When the context crosses the chosen threshold after a run settles, pi's own comp
 - **A manual token budget** (`100k`–`400k`): one absolute number, whatever the window.
 
 Off by default. Guards: no re-trigger while a compaction runs, a growth-margin wait (5% of the threshold) after an attempt that freed too little or failed, and a full reset on session start. Pi's own `compaction.reserveTokens` threshold, including per-model overrides, is unaffected; whichever fires first wins.
+
+### Model heal
+Configurable via `/arnative` → **Model heal** (saved to `~/.pi/agent/arnative/config.json`). Runs on its own on session start, model select, a change to `models.json`, and an error that names a rejected parameter:
+- **Full** (default): compat flags offline, plus `contextWindow`/`maxTokens` from each channel's `GET /models` (6 h TTL) and the accepted `reasoning_effort` levels written as a `thinkingLevelMap` (24 h TTL).
+- **Flags**: the offline compat pass only, no network.
+- **Off**: nothing.
+
+`/model-heal` forces every pass now, ignoring the TTLs (`/auto-compat` is an alias once pi-auto-compat is uninstalled). A value you set by hand — even `false` — is never overwritten, a corrupt `models.json` is reported and never rewritten, and the first write keeps a backup. While pi-auto-compat is still installed, pi-arnative defers to it and says so once.
 
 </details>
 
@@ -67,7 +76,8 @@ npm run dev
 | `ctrl+alt+n` · `alt+n` | New session (`/new`) |
 | `ctrl+alt+m` · `alt+m` | Toggle Minimal footer |
 | `/usage` | Token & cost dashboard (or `/arnative` → **Usage**) |
-| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Providers, Usage) |
+| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Model heal, Providers, Usage) |
+| `/model-heal` | Heal `models.json` now (or `/arnative` → **Model heal**) |
 | Click tool / `ctrl+o` | Toggle tool output box |
 | `←` | Back — step back from submenus/dashboard to menu |
 
@@ -100,6 +110,8 @@ To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 | `extensions/footer.ts` | 3-row status grid footer and boxed editor (preset: `/arnative footers`) |
 | `extensions/animations.ts` | Working spinner presets and `/arnative` → Animations picker |
 | `extensions/autocompact.ts` | Auto-compact: Smart tiers by window or a fixed token budget (`/arnative` → Auto-compact) |
+| `extensions/model-heal.ts` | Model heal triggers: session start, model select, `models.json` watcher, rejected-parameter errors, `/model-heal` |
+| `lib/model-heal.ts` | Model heal passes: compat flags, `/models` limits sync, effort probe |
 | `lib/spinner.ts` | Spinner preset catalog: frames, cadence, and painters |
 | `extensions/arnative.ts` | Settings menu with live preview and navigation |
 | `lib/provider.ts` | Custom provider wizard: probe, model pick, edit actions, `models.json`/`auth.json` save |

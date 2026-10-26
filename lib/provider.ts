@@ -384,6 +384,11 @@ export function loadModelsConfig(): unknown {
 	return readJson(modelsPath());
 }
 
+/** Replace models.json whole, atomically (Model Heal writes a config it read and edited). */
+export function saveModelsConfig(value: unknown): void {
+	writeJson(modelsPath(), value);
+}
+
 export function saveProvider(name: string, entry: ProviderEntry, key: string | undefined): void {
 	writeJson(modelsPath(), withProvider(readJson(modelsPath()), name, entry));
 	if (key) writeJson(authPath(), withAuth(readJson(authPath()), name, key));

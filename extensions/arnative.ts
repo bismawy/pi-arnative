@@ -25,6 +25,8 @@ import {
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
 import { AUTO_COMPACT_CHOICES, activeAutoCompact, setAutoCompact, type AutoCompactChoice } from "./autocompact.ts";
+import { healNow } from "./model-heal.ts";
+import { MODEL_HEAL_CHOICES, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
@@ -307,6 +309,75 @@ const openAutoCompact = async (ctx: ExtensionCommandContext): Promise<boolean | 
 	return goBack === true;
 };
 
+const MODEL_HEAL_PICKER_TEXT: ListPickerText = {
+	title: screenTitle("Model heal"),
+	description: "Keeps models.json correct on its own: session start, model switch, file change, rejected parameter.",
+	legend: LIST_LEGEND_MOVE,
+};
+
+const MODEL_HEAL_RUN_NOW = "Run now";
+
+const MODEL_HEAL_NOTES: Record<ModelHealChoice, string> = {
+	Full: "flags + limits from /models + probed thinking levels",
+	Flags: "offline compat flags only, no network",
+	Off: "never touch models.json",
+};
+
+/** Rows for the Model heal picker: the saved mode ends its row with a green check; the
+ *  last row is an action, never a saved choice. */
+export function modelHealRows(opened: ModelHealChoice): ListRow[] {
+	return [
+		...MODEL_HEAL_CHOICES.map((c) => ({ label: c, note: MODEL_HEAL_NOTES[c], chosen: c === opened })),
+		{ label: MODEL_HEAL_RUN_NOW, note: "heal every channel now, ignoring the 6h/24h TTLs" },
+	];
+}
+
+const openModelHeal = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	const opened = activeModelHeal();
+
+	if (ctx.mode !== "tui") {
+		const labels = [...MODEL_HEAL_CHOICES, MODEL_HEAL_RUN_NOW].map((c) => (c === opened ? c + " ✓" : c));
+		const pick = await ctx.ui.select(MODEL_HEAL_PICKER_TEXT.title, labels);
+		if (pick === undefined) return;
+		const index = labels.indexOf(pick);
+		if (index === MODEL_HEAL_CHOICES.length) {
+			await healNow(ctx);
+			return;
+		}
+		setModelHeal(MODEL_HEAL_CHOICES[index]!);
+		ctx.ui.notify("[arnative] Model heal: " + MODEL_HEAL_CHOICES[index]!, "info");
+		return;
+	}
+
+	let runNow = false;
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		const picker = new ListPicker(
+			theme,
+			modelHealRows(opened),
+			opened,
+			{
+				preview: () => {},
+				revert: () => {},
+				done: () => {
+					if (picker.index === MODEL_HEAL_CHOICES.length) runNow = true;
+					else setModelHeal(MODEL_HEAL_CHOICES[picker.index]!);
+					done(false);
+				},
+				cancel: () => done(false),
+				back: () => done(true),
+				requestRender: () => tui.requestRender(),
+			},
+			MODEL_HEAL_PICKER_TEXT,
+			false,
+			ctx.thinkingLevel,
+		);
+		return picker;
+	});
+	// After the picker closed: the run notifies, and a notice under an open overlay is lost.
+	if (runNow) await healNow(ctx);
+	return goBack === true;
+};
+
 export const MENUS: ArnativeMenu[] = [
 	{
 		value: "themes",
@@ -337,6 +408,12 @@ export const MENUS: ArnativeMenu[] = [
 		label: "Auto-compact",
 		description: "smart by window or a fixed token budget (off by default)",
 		open: openAutoCompact,
+	},
+	{
+		value: "heal",
+		label: "Model heal",
+		description: "auto-fix models.json: compat flags, limits, thinking levels (on by default)",
+		open: openModelHeal,
 	},
 	{
 		value: "providers",
@@ -464,7 +541,14 @@ if (isMain(import.meta.url)) {
 	assert(MENU_DESC === "Themes, headers, footers, animations, auto-compact, providers, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 7, "seven settings screens");
+	assert(MENUS.length === 8, "eight settings screens");
+	{
+		const values = MENUS.map((m) => m.value);
+		assert(values.indexOf("heal") === values.indexOf("compact") + 1, "Model heal row sits right after Auto-compact");
+		const heal = modelHealRows("Flags");
+		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
+		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
+	}
 	for (const label of ["Themes", "Headers", "Footers", "Animations", "Auto-compact", "Providers", "Usage"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
