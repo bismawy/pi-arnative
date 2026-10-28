@@ -250,7 +250,12 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 // extension in the same process), so a UI fix applies without restarting pi. The
 // originals therefore live ON the prototype under a symbol: a globalThis guard
 // skipped the second install, and every closure from the first load stayed in place.
+//
+// Only an UNMARKED method can be an original. Without the mark a reload captured the
+// previous arnative patch as "the original", chained a second box around it and drew
+// every tool twice (`✓ memory_write` inside a box inside a box).
 const ORIGINALS_KEY = Symbol.for("pi-arnative.protoOriginals");
+const PATCHED_KEY = Symbol.for("pi-arnative.patchedMethod");
 type PrototypeOriginals = {
 	render?: (this: any, width: number) => string[];
 	getCallRenderer?: (this: any) => any;
@@ -260,17 +265,33 @@ type PrototypeOriginals = {
 };
 const protoOriginals = (proto: any): PrototypeOriginals => (proto[ORIGINALS_KEY] ??= {});
 
+/** The pi method behind a patched slot. A marked method is ours, so it is never the original. */
+function originalOf<K extends keyof PrototypeOriginals>(
+	proto: any,
+	key: K,
+): PrototypeOriginals[K] {
+	const originals = protoOriginals(proto);
+	const current = proto[key];
+	if (current && !current[PATCHED_KEY]) originals[key] = current;
+	return originals[key];
+}
+
+/** Install `fn` in place of `key`; the mark keeps the next reload from chaining onto it. */
+function markPatched<T extends Function>(fn: T): T {
+	(fn as any)[PATCHED_KEY] = true;
+	return fn;
+}
+
 if (ToolExecutionComponent?.prototype?.render) {
 	const proto = ToolExecutionComponent.prototype as any;
-	const originals = protoOriginals(proto);
-	originals.render ??= proto.render;
-	const origRender = originals.render!;
-	proto.render = function (width: number): string[] {
-		const lines = origRender.call(this, width);
-		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
-			? stripEdgesKeepingImages(lines)
-			: lines;
-	};
+	const origRender = originalOf(proto, "render");
+	if (origRender)
+		proto.render = markPatched(function (width: number): string[] {
+			const lines = origRender.call(this, width);
+			return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
+				? stripEdgesKeepingImages(lines)
+				: lines;
+		});
 }
 
 // --- Tools without their own renderer: same box, one-line summary ---
@@ -389,14 +410,9 @@ export const boxBgOf = (name: string): string | undefined => (name === "memory_w
 
 if (ToolExecutionComponent?.prototype?.render) {
 	const proto = ToolExecutionComponent.prototype as any;
-	const originals = protoOriginals(proto);
-	originals.getCallRenderer ??= proto.getCallRenderer;
-	originals.getResultRenderer ??= proto.getResultRenderer;
-	originals.getRenderShell ??= proto.getRenderShell;
-	originals.hasRendererDefinition ??= proto.hasRendererDefinition;
-	const origCall = originals.getCallRenderer!;
-	const origResult = originals.getResultRenderer!;
-	const origShell = originals.getRenderShell!;
+	const origCall = originalOf(proto, "getCallRenderer");
+	const origResult = originalOf(proto, "getResultRenderer");
+	const origShell = originalOf(proto, "getRenderShell");
 	const hasOwnRenderer = (self: any): boolean =>
 		!boxTheirRenderers(self) && Boolean(origCall.call(self) || origResult.call(self));
 	// pi-fff splits title (renderCall) and result (renderResult) — both merge into one box.
@@ -409,20 +425,23 @@ if (ToolExecutionComponent?.prototype?.render) {
 	// getCallRenderer/getResultRenderer — our patch is bypassed and the call renders
 	// as bare name + pretty-printed args. Claim those calls as defined so they take
 	// the same box path as any other renderer-less tool.
-	const origHasRendererDefinition = originals.hasRendererDefinition!;
-	proto.hasRendererDefinition = function (): boolean {
-		return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
-	};
+	const origHasRendererDefinition = originalOf(proto, "hasRendererDefinition");
+	if (origHasRendererDefinition)
+		proto.hasRendererDefinition = markPatched(function (): boolean {
+			return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
+		});
 
-	proto.getRenderShell = function (): string {
-		if (boxTheirRenderers(this)) return "self";
-		return hasOwnRenderer(this) ? origShell.call(this) : "self";
-	};
+	if (origShell)
+		proto.getRenderShell = markPatched(function (): string {
+			if (boxTheirRenderers(this)) return "self";
+			return hasOwnRenderer(this) ? origShell.call(this) : "self";
+		});
 
-	proto.getCallRenderer = function () {
-		const name: string = this.toolName;
-		const mine = boxTheirRenderers(this);
-		const own = origCall.call(this);
+	if (origCall)
+		proto.getCallRenderer = markPatched(function () {
+			const name: string = this.toolName;
+			const mine = boxTheirRenderers(this);
+			const own = origCall.call(this);
 		// Chrome DevTools' own renderCall is a bare line and pi-mcp-adapter's compact one
 		// is the same flat text; ours replaces both (icon + name + invoked MCP tool).
 		if (own && !mine && !CDP_NAME.has(name)) return own;
@@ -442,11 +461,11 @@ if (ToolExecutionComponent?.prototype?.render) {
 				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), mcpInfo(name, args, th), inner, "", false);
 				return box(th, width, rows, boxBgOf(name));
 			});
-	};
+	});
 
-	proto.getResultRenderer = function () {
+	proto.getResultRenderer = markPatched(function () {
 		const name: string = this.toolName;
-		const own = origResult.call(this);
+		const own = origResult!.call(this);
 		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
 		const fff = FFF_TOOLS.includes(name) && this.toolDefinition?.renderShell !== "self";
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).
@@ -507,7 +526,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 				return box(th, width, rows, boxBgOf(name));
 			});
 		};
-	};
+	});
 }
 
 // todo line format: \uf14a icon (success color) in the title, resHead prefix on the status line.
@@ -1457,6 +1476,24 @@ if (isMain(import.meta.url)) {
 		await import(`${import.meta.url}?reload=1`);
 		const after = ToolExecutionComponent.prototype.getResultRenderer;
 		assert(after !== before, "/reload: the prototype patch reinstalls on re-evaluation");
+		// The stored original must stay pi's own method: capturing our previous patch
+		// wrapped every box in a second one (double border + double ✓).
+		const stored = (ToolExecutionComponent.prototype as any)[Symbol.for("pi-arnative.protoOriginals")];
+		const patchedMark = Symbol.for("pi-arnative.patchedMethod");
+		assert(
+			!stored.render[patchedMark] && !stored.getResultRenderer[patchedMark],
+			"/reload: originals stay pi's own methods, never a previous patch",
+		);
+		const plainAfter = (ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any)(
+			{ content: [{ type: "text", text: "Appended to MEMORY.md" }] },
+			{ expanded: false, isPartial: false },
+			th,
+			{ args: {}, state: {} },
+		).render(60);
+		assert(
+			plainAfter.filter((l: string) => l.startsWith("\u256d")).length === 1,
+			"/reload: a plain tool draws one box, not a box inside a box",
+		);
 		const mcpAfter = (after as any).call(mcpCompact);
 		assert(mcpAfter !== mcpTheirs, "/reload: MCP stays boxed after re-evaluation");
 		const out2 = mcpAfter(
