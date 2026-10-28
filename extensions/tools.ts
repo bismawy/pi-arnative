@@ -42,6 +42,7 @@ import { renderBoxLines as box } from "../lib/box.ts";
 import { stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { expandKeyName } from "../lib/format.ts";
+import { markPatched, originalOf } from "../lib/patch.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
@@ -247,51 +248,17 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 }
 
 // The patches below reinstall on every module load (pi's /reload re-evaluates the
-// extension in the same process), so a UI fix applies without restarting pi. The
-// originals therefore live ON the prototype under a symbol: a globalThis guard
-// skipped the second install, and every closure from the first load stayed in place.
-//
-// Only an UNMARKED method can be an original. Without the mark a reload captured the
-// previous arnative patch as "the original", chained a second box around it and drew
-// every tool twice (`✓ memory_write` inside a box inside a box).
-const ORIGINALS_KEY = Symbol.for("pi-arnative.protoOriginals");
-const PATCHED_KEY = Symbol.for("pi-arnative.patchedMethod");
-type PrototypeOriginals = {
-	render?: (this: any, width: number) => string[];
-	getCallRenderer?: (this: any) => any;
-	getResultRenderer?: (this: any) => any;
-	getRenderShell?: (this: any) => string;
-	hasRendererDefinition?: (this: any) => boolean;
-};
-const protoOriginals = (proto: any): PrototypeOriginals => (proto[ORIGINALS_KEY] ??= {});
-
-/** The pi method behind a patched slot. A marked method is ours, so it is never the original. */
-function originalOf<K extends keyof PrototypeOriginals>(
-	proto: any,
-	key: K,
-): PrototypeOriginals[K] {
-	const originals = protoOriginals(proto);
-	const current = proto[key];
-	if (current && !current[PATCHED_KEY]) originals[key] = current;
-	return originals[key];
-}
-
-/** Install `fn` in place of `key`; the mark keeps the next reload from chaining onto it. */
-function markPatched<T extends Function>(fn: T): T {
-	(fn as any)[PATCHED_KEY] = true;
-	return fn;
-}
-
+// extension in the same process), so a UI fix applies without restarting pi; see
+// lib/patch.ts for the originals/mark bookkeeping that makes that safe.
 if (ToolExecutionComponent?.prototype?.render) {
 	const proto = ToolExecutionComponent.prototype as any;
-	const origRender = originalOf(proto, "render");
-	if (origRender)
-		proto.render = markPatched(function (width: number): string[] {
-			const lines = origRender.call(this, width);
-			return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
-				? stripEdgesKeepingImages(lines)
-				: lines;
-		});
+	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
+	proto.render = markPatched(function (this: any, width: number): string[] {
+		const lines = origRender.call(this, width);
+		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
+			? stripEdgesKeepingImages(lines)
+			: lines;
+	});
 }
 
 // --- Tools without their own renderer: same box, one-line summary ---
@@ -410,9 +377,9 @@ export const boxBgOf = (name: string): string | undefined => (name === "memory_w
 
 if (ToolExecutionComponent?.prototype?.render) {
 	const proto = ToolExecutionComponent.prototype as any;
-	const origCall = originalOf(proto, "getCallRenderer");
-	const origResult = originalOf(proto, "getResultRenderer");
-	const origShell = originalOf(proto, "getRenderShell");
+	const origCall = originalOf<(this: any) => any>(proto, "getCallRenderer");
+	const origResult = originalOf<(this: any) => any>(proto, "getResultRenderer");
+	const origShell = originalOf<(this: any) => string>(proto, "getRenderShell");
 	const hasOwnRenderer = (self: any): boolean =>
 		!boxTheirRenderers(self) && Boolean(origCall.call(self) || origResult.call(self));
 	// pi-fff splits title (renderCall) and result (renderResult) — both merge into one box.
@@ -425,20 +392,17 @@ if (ToolExecutionComponent?.prototype?.render) {
 	// getCallRenderer/getResultRenderer — our patch is bypassed and the call renders
 	// as bare name + pretty-printed args. Claim those calls as defined so they take
 	// the same box path as any other renderer-less tool.
-	const origHasRendererDefinition = originalOf(proto, "hasRendererDefinition");
-	if (origHasRendererDefinition)
-		proto.hasRendererDefinition = markPatched(function (): boolean {
-			return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
-		});
+	const origHasRendererDefinition = originalOf<(this: any) => boolean>(proto, "hasRendererDefinition");
+	proto.hasRendererDefinition = markPatched(function (this: any): boolean {
+		return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
+	});
 
-	if (origShell)
-		proto.getRenderShell = markPatched(function (): string {
-			if (boxTheirRenderers(this)) return "self";
-			return hasOwnRenderer(this) ? origShell.call(this) : "self";
-		});
+	proto.getRenderShell = markPatched(function (this: any): string {
+		if (boxTheirRenderers(this)) return "self";
+		return hasOwnRenderer(this) ? origShell.call(this) : "self";
+	});
 
-	if (origCall)
-		proto.getCallRenderer = markPatched(function () {
+	proto.getCallRenderer = markPatched(function (this: any) {
 			const name: string = this.toolName;
 			const mine = boxTheirRenderers(this);
 			const own = origCall.call(this);
@@ -463,9 +427,9 @@ if (ToolExecutionComponent?.prototype?.render) {
 			});
 	});
 
-	proto.getResultRenderer = markPatched(function () {
+	proto.getResultRenderer = markPatched(function (this: any) {
 		const name: string = this.toolName;
-		const own = origResult!.call(this);
+		const own = origResult.call(this);
 		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
 		const fff = FFF_TOOLS.includes(name) && this.toolDefinition?.renderShell !== "self";
 		// MCP: their result renderer is deliberately skipped (unbounded error dump).

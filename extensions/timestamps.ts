@@ -14,6 +14,7 @@ import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } fr
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { ansiBgOpen, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
+import { markPatched, originalOf } from "../lib/patch.ts";
 
 // Shared across reloads: /reload re-imports this module (moduleCache: false), but the
 // prototype patches below survive on the class, so the patched closure and the newly
@@ -23,10 +24,9 @@ import { assert, isMain } from "../lib/check.ts";
 type ThemeProxy = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 const TS_STATE_KEY = Symbol.for("pi-arnative.chatTimestampState");
 const tsState = ((globalThis as Record<symbol, unknown>)[TS_STATE_KEY] ??= {
-	patched: false,
 	map: new Map<string, number>(),
 	theme: null as ThemeProxy,
-}) as { patched: boolean; map: Map<string, number>; theme: ThemeProxy };
+}) as { map: Map<string, number>; theme: ThemeProxy };
 const USER_TIMESTAMPS_MAP = tsState.map;
 
 function userTextOf(message: { content?: unknown }): string {
@@ -126,12 +126,12 @@ export function placeTimeAtRight(
 	return `${leftPart}${bgOpen}${pad}${timeBadge} ${reset}`;
 }
 
-if (!tsState.patched) {
-	tsState.patched = true;
-
+// Both patches reinstall on every load (lib/patch.ts) so a `/reload` applies them.
+if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.prototype?.render) {
 	if (UserMessageComponent?.prototype?.render) {
-		const origRender = UserMessageComponent.prototype.render;
-		UserMessageComponent.prototype.render = function (width: number): string[] {
+		const proto = UserMessageComponent.prototype as any;
+		const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
+		proto.render = markPatched(function (this: any, width: number): string[] {
 			const lines = origRender.call(this, width);
 			if (lines.length < 2) return lines;
 
@@ -167,12 +167,13 @@ if (!tsState.patched) {
 				lines[0] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, bgOpen)}`;
 			}
 			return lines;
-		};
+		});
 	}
 
 	if (AssistantMessageComponent?.prototype?.render) {
-		const origRender = AssistantMessageComponent.prototype.render;
-		AssistantMessageComponent.prototype.render = function (width: number): string[] {
+		const proto = AssistantMessageComponent.prototype as any;
+		const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
+		proto.render = markPatched(function (this: any, width: number): string[] {
 			const lines = origRender.call(this, width);
 			const lastMsg = (this as { lastMessage?: AssistantMessage }).lastMessage;
 
@@ -217,7 +218,7 @@ if (!tsState.patched) {
 				}
 			}
 			return lines;
-		};
+		});
 	}
 }
 
