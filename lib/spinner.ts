@@ -52,7 +52,7 @@ interface Preset {
  *  Only one rule decides the set: every frame must be a glyph the terminal font *itself* carries,
  *  so it advances exactly one cell. A glyph the font lacks is served by a fallback font, and
  *  fallbacks are not monospaced — measured in the terminal face (JetBrainsMono Nerd Font), the
- *  Dingbats marks `✢` `✤` `✻` `✽` `❋` advance **1.48** cells and `✳` **2.29**, against a **1.00**
+ *  Dingbats marks `✢` `✤` `✻` `✽` `❋` advance **1.48** cells and `U+2733` **2.29**, against a **1.00**
  *  native cell, which walks the label sideways on every tick that uses one. `·` `*` `⋆` `✶` all
  *  advance 1.00 in that face (and in Consolas, Cascadia, Lucida, Courier), so the four-mark swell
  *  `· → * → ⋆ → ✶` is smooth on all of them. A scan of all 86 installed families found none that

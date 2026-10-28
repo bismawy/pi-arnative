@@ -1490,7 +1490,7 @@ if (isMain(import.meta.url)) {
 	// Self-check: the ponytail glyph. \uef51 carries no outline in the Windows Nerd Font
 	// build and renders blank there, so the status silently loses its icon (this is what
 	// a past commit did). Pin the codepoint so a swap back to an invisible one fails here.
-	const ponyLine = ponytailStatusLine("⚡ ponytail: FULL", (s) => s, (s) => s, (s) => s);
+	const ponyLine = ponytailStatusLine("ponytail: FULL", (s) => s, (s) => s, (s) => s);
 	assert(ponyLine.includes("\uef04"), "the ponytail status renders the \\uef04 horse, not the blank \\uef51");
 	assert(!ponyLine.includes("\uef51"), "the blank \\uef51 glyph must never come back");
 	assert(ponytailStatusLine("ponytail: LITE", (s) => s, (s) => s, (s) => s).includes("LITE"), "the ponytail mode is read from the status text");
