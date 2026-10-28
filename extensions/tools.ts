@@ -246,11 +246,26 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 	return [...head, ...lines.slice(firstImage)];
 }
 
-const GAP_KEY = Symbol.for("pi-arnative.toolGapStripped");
-if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[GAP_KEY]) {
-	(globalThis as Record<symbol, boolean>)[GAP_KEY] = true;
-	const origRender = ToolExecutionComponent.prototype.render;
-	ToolExecutionComponent.prototype.render = function (width: number): string[] {
+// The patches below reinstall on every module load (pi's /reload re-evaluates the
+// extension in the same process), so a UI fix applies without restarting pi. The
+// originals therefore live ON the prototype under a symbol: a globalThis guard
+// skipped the second install, and every closure from the first load stayed in place.
+const ORIGINALS_KEY = Symbol.for("pi-arnative.protoOriginals");
+type PrototypeOriginals = {
+	render?: (this: any, width: number) => string[];
+	getCallRenderer?: (this: any) => any;
+	getResultRenderer?: (this: any) => any;
+	getRenderShell?: (this: any) => string;
+	hasRendererDefinition?: (this: any) => boolean;
+};
+const protoOriginals = (proto: any): PrototypeOriginals => (proto[ORIGINALS_KEY] ??= {});
+
+if (ToolExecutionComponent?.prototype?.render) {
+	const proto = ToolExecutionComponent.prototype as any;
+	const originals = protoOriginals(proto);
+	originals.render ??= proto.render;
+	const origRender = originals.render!;
+	proto.render = function (width: number): string[] {
 		const lines = origRender.call(this, width);
 		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
 			? stripEdgesKeepingImages(lines)
@@ -372,13 +387,16 @@ const boxedRows = (icon: string, lines: string[]): string[] => {
  */
 export const boxBgOf = (name: string): string | undefined => (name === "memory_write" ? "customMessageBg" : undefined);
 
-const DEFAULT_TOOL_KEY = Symbol.for("pi-arnative.defaultToolBox");
-if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY]) {
-	(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY] = true;
+if (ToolExecutionComponent?.prototype?.render) {
 	const proto = ToolExecutionComponent.prototype as any;
-	const origCall = proto.getCallRenderer;
-	const origResult = proto.getResultRenderer;
-	const origShell = proto.getRenderShell;
+	const originals = protoOriginals(proto);
+	originals.getCallRenderer ??= proto.getCallRenderer;
+	originals.getResultRenderer ??= proto.getResultRenderer;
+	originals.getRenderShell ??= proto.getRenderShell;
+	originals.hasRendererDefinition ??= proto.hasRendererDefinition;
+	const origCall = originals.getCallRenderer!;
+	const origResult = originals.getResultRenderer!;
+	const origShell = originals.getRenderShell!;
 	const hasOwnRenderer = (self: any): boolean =>
 		!boxTheirRenderers(self) && Boolean(origCall.call(self) || origResult.call(self));
 	// pi-fff splits title (renderCall) and result (renderResult) — both merge into one box.
@@ -391,7 +409,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	// getCallRenderer/getResultRenderer — our patch is bypassed and the call renders
 	// as bare name + pretty-printed args. Claim those calls as defined so they take
 	// the same box path as any other renderer-less tool.
-	const origHasRendererDefinition = proto.hasRendererDefinition;
+	const origHasRendererDefinition = originals.hasRendererDefinition!;
 	proto.hasRendererDefinition = function (): boolean {
 		return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
 	};
@@ -1430,6 +1448,28 @@ if (isMain(import.meta.url)) {
 	assert(TIMINGS.size === MAX_TIMINGS, `TIMINGS size is bounded to ${MAX_TIMINGS}`);
 	assert(!TIMINGS.has("call_0") && TIMINGS.has("call_249"), "TIMINGS evicts oldest entries");
 	TIMINGS.clear();
+
+	// /reload re-evaluates this module inside the same pi process. The prototype patches
+	// must reinstall with the new closures; a globalThis guard bailed out on the second
+	// load and kept the old ones, so a UI fix never appeared until pi restarted.
+	{
+		const before = ToolExecutionComponent.prototype.getResultRenderer;
+		await import(`${import.meta.url}?reload=1`);
+		const after = ToolExecutionComponent.prototype.getResultRenderer;
+		assert(after !== before, "/reload: the prototype patch reinstalls on re-evaluation");
+		const mcpAfter = (after as any).call(mcpCompact);
+		assert(mcpAfter !== mcpTheirs, "/reload: MCP stays boxed after re-evaluation");
+		const out2 = mcpAfter(
+			{ content: [{ type: "text", text: "ok" }], details: {} },
+			{ expanded: false, isPartial: false },
+			th,
+			{ args: { tool: "cloudflare_execute", server: "cloudflare" }, state: {} },
+		).render(96);
+		assert(
+			out2[0].startsWith("\u256d") && out2.some((l: string) => l.includes("cloudflare_execute @ cloudflare")),
+			"/reload: the box still renders (no double-patch loop, originals kept once)",
+		);
+	}
 
 	console.log("OK");
 }

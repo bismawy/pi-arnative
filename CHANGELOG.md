@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **`/reload` now applies renderer changes.** Both `ToolExecutionComponent` prototype patches (gap strip, box/boxed-renderer routing) sat behind a `globalThis` guard. That flag survives extension reload, so only the first load's closures were ever installed and a UI fix needed a full pi restart. The originals now live on the prototype under a symbol and the patches reinstall on every module load; the self-check re-imports the module once to pin it (`extensions/tools.ts`).
 - **MCP calls keep the arnative box.** pi-mcp-adapter ≥ 2.3x defaults to `toolResultRendering: "compact"`, and that mode declares `renderShell: "self"` while painting flat text (`mcp call x @ y`, no border). The generic boxing predicate read `self` as "this tool draws its own box", so every MCP call and result fell back to that flat line. The MCP names now stay boxed whatever shell they declare, and the `mcp`/`mcp__<server>` call box names the invoked tool (`✓ mcp cloudflare_execute @ cloudflare`) instead of reusing the adapter's flat line. Verified through `ToolExecutionComponent` in the self-check (`extensions/tools.ts`).
 
 ## [0.8.1] - 2026-10-26
