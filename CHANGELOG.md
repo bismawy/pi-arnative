@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.2] - 2026-10-28
 
 ### Changed
 - **Test output uses the arnative glyphs.** Those marks come from Node, not from this repo: the built-in `spec` reporter paints `U+2714 U+2716 U+2139 U+26F3` and a direct `node --test` has no hook to restyle it. `scripts/reporter.mjs` replaces the reporter instead, emitting `U+2713` pass, `U+2717` fail, `U+1F6C8` summary and `U+2691` file-level failure, with the assertion message and stack kept. `npm test` passes `--test-reporter=./scripts/reporter.mjs`; `NODE_OPTIONS=--test-reporter=./scripts/reporter.mjs node --test` applies it to every run. A failing run still exits non-zero (verified with a temporary failing test).
