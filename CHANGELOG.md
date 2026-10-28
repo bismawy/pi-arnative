@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Changed
-- **Test output has no emoji.** `npm test` ends with `node --test --test-reporter=dot`, because the default spec reporter paints U+2714, U+2716 and U+2139. Failures still print their assertion message and stack. The one emoji-presentation glyph in prose (`U+2733`, spinner comment and its CHANGELOG line) now appears as a code point.
+- **Test output uses the arnative glyphs.** `npm test` runs the suite through `scripts/test-run.mjs`, which pipes Node's spec reporter through one table: `U+2714 → U+2713`, `U+2716 → U+2717`, `U+2139 → U+1F6C8`, `U+26F3 → U+2691`. The run's own exit code is forwarded, so a failure still fails `npm test` with its assertion message and stack. The one emoji-presentation glyph in prose (`U+2733`, spinner comment and its CHANGELOG line) now appears as a code point.
 
 ### Fixed
 - **`/reload` applies every patch now, in all five patched files.** `footer.ts` (2-line footer), `timestamps.ts` (bubble clock), `section-headers.ts` (loaded-resources tabs) and `ui-render-tweaks.ts` (reload box, selection colors, accent pill, select rows, package box, status widget, compaction line) sat behind `globalThis` guards, so only the first load's closures were ever installed and a UI fix needed a full pi restart. `lib/patch.ts` holds the one implementation: pi's method is recorded on the prototype under a symbol, every installed patch is marked, and each module reinstalls on load. `test/patch-reload.test.ts` imports all five modules twice and fails if a slot keeps the old patch (proven by temporarily restoring the guard: 2/5 fail).
