@@ -43,6 +43,7 @@ import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softSec
 import { assert, isMain } from "../lib/check.ts";
 import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
+import { patchOnce } from "../lib/patch.ts";
 
 type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 const activeTheme = () => getActiveTheme<Exclude<ActiveTheme, null>>();
@@ -68,16 +69,15 @@ export function shouldHideReloadBox(lines: readonly string[]): boolean {
 	const rows = lines.map((l) => stripAnsi(l).trim());
 	return rows.every((r) => r === "" || /^[─-]+$/.test(r) || RELOAD_TEXT.includes(r));
 }
-const RELOAD_BOX_KEY = Symbol.for("pi-arnative.reloadBoxHidden");
-if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[RELOAD_BOX_KEY]) {
-	(globalThis as Record<symbol, boolean>)[RELOAD_BOX_KEY] = true;
+// Every patch below reinstalls on each load (lib/patch.ts): `/reload` re-evaluates the
+// module in the same process, so a `globalThis` guard would freeze the first load.
+if (UserMessageComponent?.prototype) {
 	const containerProto = Object.getPrototypeOf(UserMessageComponent.prototype) as { render?: (width: number) => string[] };
 	if (typeof containerProto?.render === "function") {
-		const origContainerRender = containerProto.render;
-		containerProto.render = function (width: number): string[] {
-			const lines = origContainerRender.call(this, width);
+		patchOnce(containerProto, "render", (orig) => function (this: any, width: number): string[] {
+			const lines = orig.call(this, width);
 			return shouldHideReloadBox(lines) ? [] : lines;
-		};
+		});
 	}
 }
 
@@ -86,7 +86,6 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 // Drag selection in pi fullscreen: pi only wraps the selection in reverse video
 // (\x1b[7m), unreadable in some terminals/themes. Replaced with explicit colors
 // (bg selectedBg + fg text) so text always stays visible.
-const SELECTION_COLOR_KEY = Symbol.for("pi-arnative.selectionColorsPatched");
 
 export function recolorSelection(highlighted: string, fgOpen: string, bgOpen: string): string {
 	return highlighted.split("\x1b[7m").join(fgOpen + bgOpen).split("\x1b[27m").join("\x1b[39m\x1b[49m");
@@ -107,7 +106,6 @@ export function ansiFgOpen(th: { fg?(c: string, t: string): string } | null, col
 // (grey) -> accent bg + darkened canvas text (contrast 9.6:1, WCAG AA). pi has no bg
 // token for `accent` (7 exist, see PILL_INK), so the SGR escapes are swapped;
 // `bg("accent")` would throw "Unknown theme background color" and stay unchanged.
-const PILL_KEY = Symbol.for("pi-arnative.accentPill");
 const PILL_MARK = "↓ Jump to latest message";
 const PILL_INK = "toolPendingBg";
 
@@ -143,41 +141,37 @@ export function withAccentPill<T>(
 	}
 }
 
-if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[SELECTION_COLOR_KEY]) {
-	(globalThis as Record<symbol, boolean>)[SELECTION_COLOR_KEY] = true;
-	const origHighlight = TuiAltScreen.prototype.applySelectionHighlight;
-	if (typeof origHighlight === "function") {
-		TuiAltScreen.prototype.applySelectionHighlight = function (text: string): string {
-			const highlighted = origHighlight.call(this, text);
+if (TuiAltScreen?.prototype) {
+	const proto = TuiAltScreen.prototype as any;
+	if (typeof proto.applySelectionHighlight === "function") {
+		patchOnce(proto, "applySelectionHighlight", (orig) => function (this: any, text: string): string {
+			const highlighted = orig.call(this, text);
 			const fgOpen = ansiFgOpen(activeTheme());
 			const bgOpen = ansiBgOpen(activeTheme(), "selectedBg");
 			return fgOpen && bgOpen ? recolorSelection(highlighted, fgOpen, bgOpen) : highlighted;
-		};
+		});
 	}
 }
 
-if (TuiAltScreen?.prototype && !(globalThis as Record<symbol, boolean>)[PILL_KEY]) {
-	(globalThis as Record<symbol, boolean>)[PILL_KEY] = true;
+if (TuiAltScreen?.prototype) {
 	const proto = TuiAltScreen.prototype as unknown as {
 		compositeScrollToEndIndicator?: (screen: string[], layout: unknown, width: number) => string[];
 	};
-	const origComposite = proto.compositeScrollToEndIndicator;
-	if (typeof origComposite === "function") {
-		proto.compositeScrollToEndIndicator = function (
+	if (typeof proto.compositeScrollToEndIndicator === "function") {
+		patchOnce(proto, "compositeScrollToEndIndicator", (origComposite) => function (
 			this: { scrollToEndIndicator?: (() => string) | undefined },
 			screen: string[],
 			layout: unknown,
 			width: number,
 		) {
 			return withAccentPill(this, () => origComposite.call(this, screen, layout, width), activeTheme());
-		};
+		});
 	}
 }
 
 // 6. Select menus (ctx.ui.select -> ExtensionSelectorComponent.updateList): pi colors the
 // whole selected row accent. Arnative keeps accent on the `→` marker and `·` separators
 // and moves the selected text to soft (accent on themes without the token).
-const SELECT_ROW_KEY = Symbol.for("pi-arnative.selectRowColors");
 
 /** Selected row body: `·` separators accent, the text around them soft. */
 export function selectRowText(row: string, th: { fg(c: string, t: string): string }): string {
@@ -188,16 +182,14 @@ export function selectRowText(row: string, th: { fg(c: string, t: string): strin
 		.join(th.fg("accent", "·"));
 }
 
-if (ExtensionSelectorComponent?.prototype && !(globalThis as Record<symbol, boolean>)[SELECT_ROW_KEY]) {
-	(globalThis as Record<symbol, boolean>)[SELECT_ROW_KEY] = true;
+if (ExtensionSelectorComponent?.prototype) {
 	const proto = ExtensionSelectorComponent.prototype as unknown as {
 		options: string[];
 		selectedIndex: number;
 		listContainer: { clear(): void; addChild(c: unknown): void };
 		updateList(): void;
 	};
-	const origUpdateList = proto.updateList;
-	proto.updateList = function (this: typeof proto) {
+	patchOnce(proto, "updateList", (origUpdateList) => function (this: typeof proto) {
 		const th = activeTheme();
 		if (!th) return origUpdateList.call(this); // no theme yet -> pi's default
 		this.listContainer.clear();
@@ -208,7 +200,7 @@ if (ExtensionSelectorComponent?.prototype && !(globalThis as Record<symbol, bool
 					: `  ${th.fg("text", this.options[i]!)}`;
 			this.listContainer.addChild(new Text(text, 1, 0));
 		}
-	};
+	});
 }
 
 export default function uiRenderTweaks(pi: ExtensionAPI) {
@@ -255,13 +247,11 @@ export class PackageUpdateBoxComponent implements Component {
 	}
 }
 
-const PACKAGE_BOX_KEY = Symbol.for("pi-arnative.packageUpdateBox");
-if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKAGE_BOX_KEY]) {
-	(globalThis as Record<symbol, boolean>)[PACKAGE_BOX_KEY] = true;
+if (InteractiveMode?.prototype) {
 	const proto = InteractiveMode.prototype as unknown as {
 		showPackageUpdateNotification(packages: string[]): void;
 	};
-	proto.showPackageUpdateNotification = function (packages: string[]) {
+	patchOnce(proto, "showPackageUpdateNotification", () => function (this: typeof proto, packages: string[]) {
 		const self = this as unknown as {
 			chatContainer: { addChild(c: unknown): void };
 			ui: { requestRender(): void };
@@ -269,7 +259,7 @@ if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKA
 		self.chatContainer.addChild(new Spacer(1));
 		self.chatContainer.addChild(new PackageUpdateBoxComponent(packages, activeTheme()));
 		self.ui.requestRender();
-	};
+	});
 }
 
 // arnative box border helper -> lib/box.ts (one definition for every box)
@@ -278,14 +268,16 @@ if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[PACKA
 // array into unstyled `Text`, so an extension's status line ignores the theme and lands in
 // the default foreground. Every such array is handed to a component factory instead, which
 // receives the live theme: the arnative mark leads the block and every row is `dim`.
-const STATUS_WIDGET_KEY = Symbol.for("pi-arnative.statusWidgetRows");
-if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[STATUS_WIDGET_KEY]) {
-	(globalThis as Record<symbol, boolean>)[STATUS_WIDGET_KEY] = true;
+if (InteractiveMode?.prototype) {
 	const proto = InteractiveMode.prototype as unknown as {
 		setExtensionWidget(key: string, content: unknown, options?: { placement?: string }): void;
 	};
-	const origSetWidget = proto.setExtensionWidget;
-	proto.setExtensionWidget = function (key: string, content: unknown, options?: { placement?: string }) {
+	patchOnce(proto, "setExtensionWidget", (origSetWidget) => function (
+		this: typeof proto,
+		key: string,
+		content: unknown,
+		options?: { placement?: string },
+	) {
 		if (Array.isArray(content) && content.every((line) => typeof line === "string")) {
 			const rows = content as string[];
 			content = (_tui: unknown, th: Parameters<typeof statusRows>[0]) => ({
@@ -301,7 +293,7 @@ if (InteractiveMode?.prototype && !(globalThis as Record<symbol, boolean>)[STATU
 			});
 		}
 		return origSetWidget.call(this, key, content, options);
-	};
+	});
 }
 
 export class JevReviewBoxComponent implements Component {
@@ -367,12 +359,9 @@ export function customMessageText(content: unknown): string {
 	return "";
 }
 
-const COMPACTION_KEY = Symbol.for("pi-arnative.compactionOneLine");
-if (CompactionSummaryMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[COMPACTION_KEY]) {
-	(globalThis as Record<symbol, boolean>)[COMPACTION_KEY] = true;
+if (CompactionSummaryMessageComponent?.prototype) {
 	const proto = CompactionSummaryMessageComponent.prototype as any;
-	const origUpdateDisplay = proto.updateDisplay;
-	proto.updateDisplay = function (): void {
+	patchOnce(proto, "updateDisplay", (origUpdateDisplay) => function (this: any): void {
 		const th = activeTheme();
 		if (!th) return origUpdateDisplay.call(this);
 		const message = this.message as { tokensBefore?: number; summary?: string } | undefined;
@@ -401,7 +390,7 @@ if (CompactionSummaryMessageComponent?.prototype && !(globalThis as Record<symbo
 				return { handled: true };
 			}),
 		);
-	};
+	});
 }
 
 // Self-check: `node extensions/ui-render-tweaks.ts`

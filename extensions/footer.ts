@@ -16,6 +16,7 @@ import { softOf, softSecondaryOf, stripAnsi } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
+import { markPatched, originalOf } from "../lib/patch.ts";
 import { formatTokens } from "../lib/usage-store.ts";
 import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
 import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
@@ -73,17 +74,17 @@ export function setFooterPreset(name: FooterPreset, ctx: ExtensionContext): void
 	applyFooterPreset(ctx);
 }
 
-// Intercept the built-in FooterComponent to force a pure 2-line footer
-const PATCHED_KEY = Symbol.for("pi-arnative.footer2LinesPatched");
-if (FooterComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[PATCHED_KEY]) {
-	(globalThis as Record<symbol, boolean>)[PATCHED_KEY] = true;
-	const origRender = FooterComponent.prototype.render;
-	FooterComponent.prototype.render = function (width: number): string[] {
+// Intercept the built-in FooterComponent to force a pure 2-line footer.
+// Reinstalled on every load (lib/patch.ts): `/reload` must pick up a footer change.
+if (FooterComponent?.prototype?.render) {
+	const proto = FooterComponent.prototype as any;
+	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
+	proto.render = markPatched(function (this: any, width: number): string[] {
 		// "Pi (system)" preset = pi's own footer, so keep its stock line count.
 		if (activeFooterPreset() === "Pi (system)") return origRender.call(this, width);
 		const lines = origRender.call(this, width);
 		return lines.length > 2 ? lines.slice(0, 2) : lines;
-	};
+	});
 }
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
@@ -1489,7 +1490,7 @@ if (isMain(import.meta.url)) {
 	// Self-check: the ponytail glyph. \uef51 carries no outline in the Windows Nerd Font
 	// build and renders blank there, so the status silently loses its icon (this is what
 	// a past commit did). Pin the codepoint so a swap back to an invisible one fails here.
-	const ponyLine = ponytailStatusLine("⚡ ponytail: FULL", (s) => s, (s) => s, (s) => s);
+	const ponyLine = ponytailStatusLine("ponytail: FULL", (s) => s, (s) => s, (s) => s);
 	assert(ponyLine.includes("\uef04"), "the ponytail status renders the \\uef04 horse, not the blank \\uef51");
 	assert(!ponyLine.includes("\uef51"), "the blank \\uef51 glyph must never come back");
 	assert(ponytailStatusLine("ponytail: LITE", (s) => s, (s) => s, (s) => s).includes("LITE"), "the ponytail mode is read from the status text");

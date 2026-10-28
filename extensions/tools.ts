@@ -42,6 +42,7 @@ import { renderBoxLines as box } from "../lib/box.ts";
 import { stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { expandKeyName } from "../lib/format.ts";
+import { markPatched, originalOf } from "../lib/patch.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
@@ -246,16 +247,18 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 	return [...head, ...lines.slice(firstImage)];
 }
 
-const GAP_KEY = Symbol.for("pi-arnative.toolGapStripped");
-if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[GAP_KEY]) {
-	(globalThis as Record<symbol, boolean>)[GAP_KEY] = true;
-	const origRender = ToolExecutionComponent.prototype.render;
-	ToolExecutionComponent.prototype.render = function (width: number): string[] {
+// The patches below reinstall on every module load (pi's /reload re-evaluates the
+// extension in the same process), so a UI fix applies without restarting pi; see
+// lib/patch.ts for the originals/mark bookkeeping that makes that safe.
+if (ToolExecutionComponent?.prototype?.render) {
+	const proto = ToolExecutionComponent.prototype as any;
+	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
+	proto.render = markPatched(function (this: any, width: number): string[] {
 		const lines = origRender.call(this, width);
 		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
 			? stripEdgesKeepingImages(lines)
 			: lines;
-	};
+	});
 }
 
 // --- Tools without their own renderer: same box, one-line summary ---
@@ -311,12 +314,16 @@ const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScrip
 // `powershell`/`ls` (their definitions spread `renderCall`/`renderResult` onto the
 // tool object) and pi-mcp-adapter (`renderShell: "default"`) all fall in by shape.
 //
+// MCP is boxed even when pi-mcp-adapter declares `renderShell: "self"`: since 2.3x
+// its default `toolResultRendering: "compact"` paints flat text (`mcp call x @ y`,
+// no border), so a `self` shell there means "no box", not "my own box".
+//
 // `source_check` is the single exception: its partial phase (curator URLs + approval
 // state) would disappear because our partial path returns nothing.
 const NOT_BOXED = new Set(["source_check"]);
 const boxTheirRenderers = (self: any): boolean =>
 	Boolean(self.toolDefinition) &&
-	self.toolDefinition.renderShell !== "self" &&
+	(self.toolDefinition.renderShell !== "self" || MCP_TOOL(self.toolName)) &&
 	!NOT_BOXED.has(self.toolName);
 
 // The MCP box title names the invoked tool (full args when expanded).
@@ -368,13 +375,11 @@ const boxedRows = (icon: string, lines: string[]): string[] => {
  */
 export const boxBgOf = (name: string): string | undefined => (name === "memory_write" ? "customMessageBg" : undefined);
 
-const DEFAULT_TOOL_KEY = Symbol.for("pi-arnative.defaultToolBox");
-if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY]) {
-	(globalThis as Record<symbol, boolean>)[DEFAULT_TOOL_KEY] = true;
+if (ToolExecutionComponent?.prototype?.render) {
 	const proto = ToolExecutionComponent.prototype as any;
-	const origCall = proto.getCallRenderer;
-	const origResult = proto.getResultRenderer;
-	const origShell = proto.getRenderShell;
+	const origCall = originalOf<(this: any) => any>(proto, "getCallRenderer");
+	const origResult = originalOf<(this: any) => any>(proto, "getResultRenderer");
+	const origShell = originalOf<(this: any) => string>(proto, "getRenderShell");
 	const hasOwnRenderer = (self: any): boolean =>
 		!boxTheirRenderers(self) && Boolean(origCall.call(self) || origResult.call(self));
 	// pi-fff splits title (renderCall) and result (renderResult) — both merge into one box.
@@ -387,37 +392,42 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 	// getCallRenderer/getResultRenderer — our patch is bypassed and the call renders
 	// as bare name + pretty-printed args. Claim those calls as defined so they take
 	// the same box path as any other renderer-less tool.
-	const origHasRendererDefinition = proto.hasRendererDefinition;
-	proto.hasRendererDefinition = function (): boolean {
+	const origHasRendererDefinition = originalOf<(this: any) => boolean>(proto, "hasRendererDefinition");
+	proto.hasRendererDefinition = markPatched(function (this: any): boolean {
 		return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
-	};
+	});
 
-	proto.getRenderShell = function (): string {
+	proto.getRenderShell = markPatched(function (this: any): string {
 		if (boxTheirRenderers(this)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
-	};
+	});
 
-	proto.getCallRenderer = function () {
-		const name: string = this.toolName;
-		const mine = boxTheirRenderers(this);
-		const own = origCall.call(this);
-		// Chrome DevTools' own renderCall is a bare line; ours replaces it (icon + name).
+	proto.getCallRenderer = markPatched(function (this: any) {
+			const name: string = this.toolName;
+			const mine = boxTheirRenderers(this);
+			const own = origCall.call(this);
+		// Chrome DevTools' own renderCall is a bare line and pi-mcp-adapter's compact one
+		// is the same flat text; ours replaces both (icon + name + invoked MCP tool).
 		if (own && !mine && !CDP_NAME.has(name)) return own;
 		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
 				const icon = CDP_NAME.has(name) ? th.fg("accent", CDP_ICON) : th.fg("warning", spinIcon());
-				const theirs = own ? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6) : [];
+				const theirs =
+					own && !CDP_NAME.has(name) && !MCP_TOOL(name)
+						? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6)
+						: [];
 				if (name === "todo" && theirs.length)
 					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
 				if (mine && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
-				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false), boxBgOf(name));
+				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), mcpInfo(name, args, th), inner, "", false);
+				return box(th, width, rows, boxBgOf(name));
 			});
-	};
+	});
 
-	proto.getResultRenderer = function () {
+	proto.getResultRenderer = markPatched(function (this: any) {
 		const name: string = this.toolName;
 		const own = origResult.call(this);
 		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
@@ -480,7 +490,7 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 				return box(th, width, rows, boxBgOf(name));
 			});
 		};
-	};
+	});
 }
 
 // todo line format: \uf14a icon (success color) in the title, resHead prefix on the status line.
@@ -1147,6 +1157,40 @@ if (isMain(import.meta.url)) {
 	).render(96);
 	assert(mcpFull.length > mcpOut.length, "mcp: expand shows the full dump + args");
 
+	// pi-mcp-adapter >= 2.3x defaults to `toolResultRendering: "compact"`, which sets
+	// `renderShell: "self"` and paints flat text (`mcp call x @ y`, no border). That
+	// `self` means "no box", not "my own box", so the MCP names must still be boxed.
+	const mcpCompact = { toolName: "mcp", toolDefinition: { renderShell: "self", renderCall: mcpTheirs, renderResult: mcpTheirs } };
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(mcpCompact) === "self" &&
+			(ToolExecutionComponent.prototype.getResultRenderer.call(mcpCompact) as any) !== mcpTheirs,
+		"mcp compact (renderShell self): still boxed, their flat renderer skipped",
+	);
+	const mcpCompactOut = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpCompact) as any)(
+		{ content: [{ type: "text", text: "ok" }], details: {} },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { tool: "cloudflare_execute", server: "cloudflare" }, state: {} },
+	).render(96);
+	assert(
+		mcpCompactOut[0].startsWith("\u256d") && mcpCompactOut.some((l: string) => l.includes("cloudflare_execute @ cloudflare")),
+		"mcp compact: bordered box naming the invoked tool",
+	);
+	const mcpCompactCall = (ToolExecutionComponent.prototype.getCallRenderer.call(mcpCompact) as any)(
+		{ tool: "cloudflare_execute", server: "cloudflare" },
+		th,
+		{ args: {}, state: {} },
+	).render(96);
+	assert(
+		mcpCompactCall[0].startsWith("\u256d") && mcpCompactCall.some((l: string) => l.includes("cloudflare_execute @ cloudflare")),
+		"mcp compact: the running box is ours too (no flat `mcp call ...` line)",
+	);
+	// A non-MCP fourth-party `renderShell: "self"` still draws its own box: untouched.
+	assert(
+		ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: "other_ext", toolDefinition: { renderShell: "self", renderResult: mcpTheirs } })() === "renderer-mcp",
+		"renderShell self outside MCP keeps its own renderer",
+	);
+
 	// Gap is only stripped for our own box lines.
 	// The default export registers the tools (filling OWN_BOX); a pi stub suffices.
 	arnativeTools({
@@ -1387,6 +1431,46 @@ if (isMain(import.meta.url)) {
 	assert(TIMINGS.size === MAX_TIMINGS, `TIMINGS size is bounded to ${MAX_TIMINGS}`);
 	assert(!TIMINGS.has("call_0") && TIMINGS.has("call_249"), "TIMINGS evicts oldest entries");
 	TIMINGS.clear();
+
+	// /reload re-evaluates this module inside the same pi process. The prototype patches
+	// must reinstall with the new closures; a globalThis guard bailed out on the second
+	// load and kept the old ones, so a UI fix never appeared until pi restarted.
+	{
+		const before = ToolExecutionComponent.prototype.getResultRenderer;
+		await import(`${import.meta.url}?reload=1`);
+		const after = ToolExecutionComponent.prototype.getResultRenderer;
+		assert(after !== before, "/reload: the prototype patch reinstalls on re-evaluation");
+		// The stored original must stay pi's own method: capturing our previous patch
+		// wrapped every box in a second one (double border + double ✓).
+		const stored = (ToolExecutionComponent.prototype as any)[Symbol.for("pi-arnative.protoOriginals")];
+		const patchedMark = Symbol.for("pi-arnative.patchedMethod");
+		assert(
+			!stored.render[patchedMark] && !stored.getResultRenderer[patchedMark],
+			"/reload: originals stay pi's own methods, never a previous patch",
+		);
+		const plainAfter = (ToolExecutionComponent.prototype.getResultRenderer.call(noRenderer) as any)(
+			{ content: [{ type: "text", text: "Appended to MEMORY.md" }] },
+			{ expanded: false, isPartial: false },
+			th,
+			{ args: {}, state: {} },
+		).render(60);
+		assert(
+			plainAfter.filter((l: string) => l.startsWith("\u256d")).length === 1,
+			"/reload: a plain tool draws one box, not a box inside a box",
+		);
+		const mcpAfter = (after as any).call(mcpCompact);
+		assert(mcpAfter !== mcpTheirs, "/reload: MCP stays boxed after re-evaluation");
+		const out2 = mcpAfter(
+			{ content: [{ type: "text", text: "ok" }], details: {} },
+			{ expanded: false, isPartial: false },
+			th,
+			{ args: { tool: "cloudflare_execute", server: "cloudflare" }, state: {} },
+		).render(96);
+		assert(
+			out2[0].startsWith("\u256d") && out2.some((l: string) => l.includes("cloudflare_execute @ cloudflare")),
+			"/reload: the box still renders (no double-patch loop, originals kept once)",
+		);
+	}
 
 	console.log("OK");
 }

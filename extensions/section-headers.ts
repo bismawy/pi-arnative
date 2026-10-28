@@ -39,6 +39,7 @@ import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib
 import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, loadChoice, saveChoice } from "../lib/preset-store.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
+import { patchOnce } from "../lib/patch.ts";
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Shortcut";
 
 // Tab order for the next-tab shortcut and for the menu line.
@@ -706,16 +707,14 @@ export function extensionIssuesLines(th: BoxTheme | null, width: number, rows: s
 // Hooks the shared `app.tools.expand` key: `ctrl+o to expand` -> `[ctrl+o to expand]`.
 const wrapHint = (key: string): string => `[${key} to expand]`;
 
-// Intercept loadedResourcesContainer: capture data for the tabs and hide pi's own display
-const SECTION_HEADER_KEY = Symbol.for("pi-arnative.sectionHeadersRewritten");
-if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[SECTION_HEADER_KEY]) {
-	(globalThis as Record<symbol, boolean>)[SECTION_HEADER_KEY] = true;
+// Intercept loadedResourcesContainer: capture data for the tabs and hide pi's own display.
+// Reinstalled on every load (lib/patch.ts), otherwise `/reload` keeps the first closure.
+if (UserMessageComponent?.prototype) {
 	const containerProto = Object.getPrototypeOf(UserMessageComponent.prototype) as {
 		addChild?: (child: unknown) => unknown;
 	};
 	if (typeof containerProto?.addChild === "function") {
-		const origAddChild = containerProto.addChild;
-		containerProto.addChild = function (child: any): unknown {
+		patchOnce(containerProto, "addChild", (origAddChild) => function (this: any, child: any): unknown {
 			// "Pi (system)" preset = pi's own header, so leave pi's startup list untouched.
 			if (activeHeaderPreset() === "Pi (system)") return origAddChild.call(this, child);
 			try {
@@ -765,7 +764,7 @@ if (UserMessageComponent?.prototype && !(globalThis as Record<symbol, boolean>)[
 				// fail-safe
 			}
 			return origAddChild.call(this, child);
-		};
+		});
 	}
 }
 
