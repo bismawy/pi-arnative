@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **MCP calls keep the arnative box.** pi-mcp-adapter ≥ 2.3x defaults to `toolResultRendering: "compact"`, and that mode declares `renderShell: "self"` while painting flat text (`mcp call x @ y`, no border). The generic boxing predicate read `self` as "this tool draws its own box", so every MCP call and result fell back to that flat line. The MCP names now stay boxed whatever shell they declare, and the `mcp`/`mcp__<server>` call box names the invoked tool (`✓ mcp cloudflare_execute @ cloudflare`) instead of reusing the adapter's flat line. Verified through `ToolExecutionComponent` in the self-check (`extensions/tools.ts`).
+
 ## [0.8.1] - 2026-10-26
 
 ### Changed

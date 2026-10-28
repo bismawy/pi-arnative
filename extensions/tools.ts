@@ -311,12 +311,16 @@ const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScrip
 // `powershell`/`ls` (their definitions spread `renderCall`/`renderResult` onto the
 // tool object) and pi-mcp-adapter (`renderShell: "default"`) all fall in by shape.
 //
+// MCP is boxed even when pi-mcp-adapter declares `renderShell: "self"`: since 2.3x
+// its default `toolResultRendering: "compact"` paints flat text (`mcp call x @ y`,
+// no border), so a `self` shell there means "no box", not "my own box".
+//
 // `source_check` is the single exception: its partial phase (curator URLs + approval
 // state) would disappear because our partial path returns nothing.
 const NOT_BOXED = new Set(["source_check"]);
 const boxTheirRenderers = (self: any): boolean =>
 	Boolean(self.toolDefinition) &&
-	self.toolDefinition.renderShell !== "self" &&
+	(self.toolDefinition.renderShell !== "self" || MCP_TOOL(self.toolName)) &&
 	!NOT_BOXED.has(self.toolName);
 
 // The MCP box title names the invoked tool (full args when expanded).
@@ -401,19 +405,24 @@ if (ToolExecutionComponent?.prototype?.render && !(globalThis as Record<symbol, 
 		const name: string = this.toolName;
 		const mine = boxTheirRenderers(this);
 		const own = origCall.call(this);
-		// Chrome DevTools' own renderCall is a bare line; ours replaces it (icon + name).
+		// Chrome DevTools' own renderCall is a bare line and pi-mcp-adapter's compact one
+		// is the same flat text; ours replaces both (icon + name + invoked MCP tool).
 		if (own && !mine && !CDP_NAME.has(name)) return own;
 		return (args: any, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
 				const icon = CDP_NAME.has(name) ? th.fg("accent", CDP_ICON) : th.fg("warning", spinIcon());
-				const theirs = own ? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6) : [];
+				const theirs =
+					own && !CDP_NAME.has(name) && !MCP_TOOL(name)
+						? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6)
+						: [];
 				if (name === "todo" && theirs.length)
 					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
 				if (mine && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
-				return box(th, width, titleRow(th, icon, th.fg("accent", displayName(name)), "", inner, "", false), boxBgOf(name));
+				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), mcpInfo(name, args, th), inner, "", false);
+				return box(th, width, rows, boxBgOf(name));
 			});
 	};
 
@@ -1146,6 +1155,40 @@ if (isMain(import.meta.url)) {
 		{ args: { tool: "fetch_content", server: "tinyfish" }, state: {} },
 	).render(96);
 	assert(mcpFull.length > mcpOut.length, "mcp: expand shows the full dump + args");
+
+	// pi-mcp-adapter >= 2.3x defaults to `toolResultRendering: "compact"`, which sets
+	// `renderShell: "self"` and paints flat text (`mcp call x @ y`, no border). That
+	// `self` means "no box", not "my own box", so the MCP names must still be boxed.
+	const mcpCompact = { toolName: "mcp", toolDefinition: { renderShell: "self", renderCall: mcpTheirs, renderResult: mcpTheirs } };
+	assert(
+		ToolExecutionComponent.prototype.getRenderShell.call(mcpCompact) === "self" &&
+			(ToolExecutionComponent.prototype.getResultRenderer.call(mcpCompact) as any) !== mcpTheirs,
+		"mcp compact (renderShell self): still boxed, their flat renderer skipped",
+	);
+	const mcpCompactOut = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpCompact) as any)(
+		{ content: [{ type: "text", text: "ok" }], details: {} },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { tool: "cloudflare_execute", server: "cloudflare" }, state: {} },
+	).render(96);
+	assert(
+		mcpCompactOut[0].startsWith("\u256d") && mcpCompactOut.some((l: string) => l.includes("cloudflare_execute @ cloudflare")),
+		"mcp compact: bordered box naming the invoked tool",
+	);
+	const mcpCompactCall = (ToolExecutionComponent.prototype.getCallRenderer.call(mcpCompact) as any)(
+		{ tool: "cloudflare_execute", server: "cloudflare" },
+		th,
+		{ args: {}, state: {} },
+	).render(96);
+	assert(
+		mcpCompactCall[0].startsWith("\u256d") && mcpCompactCall.some((l: string) => l.includes("cloudflare_execute @ cloudflare")),
+		"mcp compact: the running box is ours too (no flat `mcp call ...` line)",
+	);
+	// A non-MCP fourth-party `renderShell: "self"` still draws its own box: untouched.
+	assert(
+		ToolExecutionComponent.prototype.getResultRenderer.call({ toolName: "other_ext", toolDefinition: { renderShell: "self", renderResult: mcpTheirs } })() === "renderer-mcp",
+		"renderShell self outside MCP keeps its own renderer",
+	);
 
 	// Gap is only stripped for our own box lines.
 	// The default export registers the tools (filling OWN_BOX); a pi stub suffices.
