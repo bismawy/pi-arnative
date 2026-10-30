@@ -72,6 +72,10 @@ export function renderScreen(
 	].map((l) => truncateToWidth(l, width, ""));
 }
 
+/** Border paint: a theme token name, or a painter for a tier that has no token (the thinking
+ *  slots, which `thinkingColorOf` resolves). */
+export type BoxBorder = string | ((text: string) => string);
+
 /** `renderBoxLines` plus where each input row landed: `starts[i]` is the first line index of
  *  `rows[i]`. A caller that hit-tests a row (the task list's scroll counters) needs this,
  *  because a row long enough to wrap occupies more than one line. */
@@ -80,9 +84,9 @@ export function renderBoxRows(
 	width: number,
 	rows: string[],
 	bgType?: string,
-	borderColor = "dim",
+	border: BoxBorder = "dim",
 ): { lines: string[]; starts: number[] } {
-	const dim = (s: string) => (theme ? theme.fg(borderColor, s) : s);
+	const dim = typeof border === "string" ? (s: string) => (theme ? theme.fg(border, s) : s) : border;
 	const inner = Math.max(8, width - 4);
 	const lines = [boxEdge("╭", "╮", width, dim)];
 	const starts: number[] = [];
@@ -107,8 +111,8 @@ export function renderBoxRows(
  *  `theme` may be null: a box is patched in at module load, before `session_start`
  *  delivers the active theme. An uncolored box for that first frame beats a null
  *  deref that kills the process. */
-export function renderBoxLines(theme: BoxTheme | null, width: number, rows: string[], bgType?: string, borderColor = "dim"): string[] {
-	return renderBoxRows(theme, width, rows, bgType, borderColor).lines;
+export function renderBoxLines(theme: BoxTheme | null, width: number, rows: string[], bgType?: string, border: BoxBorder = "dim"): string[] {
+	return renderBoxRows(theme, width, rows, bgType, border).lines;
 }
 
 if (isMain(import.meta.url)) {

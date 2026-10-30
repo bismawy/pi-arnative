@@ -422,7 +422,15 @@ if (ToolExecutionComponent?.prototype?.render) {
 				if (mine && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
-				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), mcpInfo(name, args, th), inner, "", false);
+				const rows = titleRow(
+					th,
+					icon,
+					th.fg("accent", displayName(name)),
+					name === "todo" ? todoTitleDetail(th, softSecondaryOf(th), args?.subject) : mcpInfo(name, args, th),
+					inner,
+					"",
+					false,
+				);
 				return box(th, width, rows, boxBgOf(name));
 			});
 	});
@@ -473,7 +481,9 @@ if (ToolExecutionComponent?.prototype?.render) {
 					th,
 					icon,
 					th.fg("accent", displayName(name)),
-					mcpInfo(name, ctx.args, th),
+					name === "todo"
+						? todoTitleDetail(th, soft, (result.details as { subject?: unknown } | undefined)?.subject)
+						: mcpInfo(name, ctx.args, th),
 					inner,
 					"",
 					opts.expanded,
@@ -491,6 +501,13 @@ if (ToolExecutionComponent?.prototype?.render) {
 			});
 		};
 	});
+}
+
+/** `todo · Tulis widget`: the task the call touched, so the title says what changed and not just
+ *  which tool ran. The name takes the soft accent tier, the dot stays dim. */
+function todoTitleDetail(th: Theme, soft: (s: string) => string, subject: unknown): string {
+	const name = typeof subject === "string" ? subject.trim() : "";
+	return name ? `${th.fg("dim", "·")} ${soft(name)}` : "";
 }
 
 // todo line format: \uf14a icon (success color) in the title, resHead prefix on the status line.
@@ -939,6 +956,25 @@ if (isMain(import.meta.url)) {
 			noDefOut.some((l: string) => l.includes('[ctrl+o to expand]')),
 		"tool without a definition: title + summary + expand hint",
 	);
+	// todo (this package's own tool, no renderers): the title names the task the call touched.
+	const todoNoRenderer = { toolName: "todo", toolDefinition: {} };
+	const todoBox = (ToolExecutionComponent.prototype.getResultRenderer.call(todoNoRenderer) as any)(
+		{ content: [{ type: "text", text: "Updated #1" }], details: { subject: "Tulis widget" } },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { action: "update", id: 1 }, state: {} },
+	).render(60);
+	assert(
+		todoBox.some((l: string) => l.includes("todo · Tulis widget")),
+		`todo result: the title names the task, got ${todoBox.find((l: string) => l.includes("todo"))}`,
+	);
+	assert(todoBox.some((l: string) => l.includes("Updated #1")), "todo result: the status line keeps the result text");
+	const todoPending = (ToolExecutionComponent.prototype.getCallRenderer.call(todoNoRenderer) as any)(
+		{ action: "create", subject: "Tulis widget" },
+		th,
+		{ state: {}, args: {} },
+	).render(60);
+	assert(todoPending.some((l: string) => l.includes("todo · Tulis widget")), "todo call: the title names the new task");
 	// Generic predicate: any tool that ships its own renderers and no `renderShell: "self"`
 	// is boxed — no name list to maintain for new extensions.
 	const withRenderer = { toolName: "bash", toolDefinition: { renderResult: () => undefined } };

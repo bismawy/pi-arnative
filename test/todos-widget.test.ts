@@ -192,14 +192,23 @@ test("the counters scroll the window, by click and by key", async () => {
 	assert.ok(component.render(80).some((line) => line.includes("Dua")), "the active task is back on screen");
 });
 
+test("the box folds itself once every task is done", async () => {
+	if (widget().component.render(80).length === 3) shortcuts.get("alt+o")!.handler(ctx);
+	assert.ok(widget().component.render(80).length > 3, "the box is open before the last update");
+	for (let id = 1; id <= 9; id++) await call({ action: "update", id, status: "completed" });
+	const folded = widget().component.render(80);
+	assert.equal(folded.length, 3, "a finished list collapses to one row by itself");
+	assert.ok(folded[1]!.includes("Todos (9/9) · All tasks finished [click to expand]"), `the folded row, got ${folded[1]}`);
+});
+
 test("/todos shows the recap in the screen chrome", async () => {
 	screen = undefined;
 	await commands.get("todos")!.handler("", ctx);
 	assert.ok(screen, "the recap screen opens");
 	assert.equal(notices.length, 0, "the TUI path shows a screen, not a notice");
 	const box = screen!.render(80);
-	assert.ok(box.some((line) => line.includes("9 tasks · 1 in progress · 8 queued · 0 done")), "the summary line counts every state");
-	assert.ok(box.some((line) => line.includes("◉ Dua")), "the active task leads the screen");
+	assert.ok(box.some((line) => line.includes("9 tasks · 0 in progress · 0 queued · 9 done")), "the summary line counts every state");
+	assert.ok(box.some((line) => line.includes("✓ Satu")), "with nothing running, the done tasks lead the screen");
 	// Colour goes through the theme object, never a hardcoded escape: the tokens above are the ones
 	// the picker asks for, so a theme switch repaints the screen.
 	assert.ok(palette.length >= 3, `the screen paints through the theme, got ${palette.length} calls`);

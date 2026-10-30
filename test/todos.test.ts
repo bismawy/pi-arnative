@@ -8,6 +8,9 @@ import test from "node:test";
 import { runTodo } from "../extensions/todos.ts";
 import {
 	addTodo,
+	allDone,
+	COLLAPSED_DONE,
+	collapsedText,
 	emptyTodos,
 	HINT_COLLAPSE,
 	HINT_EXPAND,
@@ -72,10 +75,18 @@ test("the icon is accent, and each status has its own token", () => {
 	const rows = widgetRows(marked, state, true, 80);
 	assert.ok(rows[0]!.includes(`[accent]${LIST_ICON}`), `the heading icon is accent, got ${rows[0]}`);
 	assert.ok(rows[0]!.includes("[accentSoft]Todos (1/3)"), `the count is soft accent, got ${rows[0]}`);
-	assert.ok(rows[1]!.includes("[accent]✓"), "a done task is accent");
+	assert.ok(rows[1]!.includes("[accent]✓"), "a done glyph is accent");
+	assert.ok(rows[1]!.includes("[accentSoft]Task 1"), `a done subject is soft accent, got ${rows[1]}`);
 	assert.ok(rows[2]!.includes("[mdHeading]◉"), "the running task borrows the footer model-name colour");
+	assert.ok(rows[2]!.includes("[text]Task 2"), "the running subject keeps the plain text colour");
 	assert.ok(rows[2]!.includes("[dim]· sedang jalan"), "its note stays dim");
-	assert.ok(rows[3]!.includes("[dim]◌"), "a queued task is dim");
+	assert.ok(rows[3]!.includes("[dim]◌"), "a queued glyph is dim");
+	assert.ok(rows[3]!.includes("[dim]Task 3"), "a queued subject is dim too");
+
+	// The frame follows the thinking level, like every other arnative box.
+	const framed = renderTodoBox(marked, state, true, 80, null, "high");
+	assert.ok(framed[0]!.startsWith("[thinkingHigh]╭"), `the border takes the thinking slot, got ${framed[0]}`);
+	assert.ok(framed.at(-1)!.startsWith("[thinkingHigh]╰"), "both edges of the frame");
 
 	// A theme without `mdHeading` (pi throws on an unknown token) still paints the glyph.
 	const partial: FgTheme = {
@@ -101,6 +112,18 @@ test("the window scrolls without leaving the list", () => {
 	const top = todoLayout(marked, state, true, 80, 0);
 	assert.deepEqual([top.up, top.down], [null, 7], "no up counter at the top of the list");
 	assert.equal(todoLayout(marked, state, false, 80).down, null, "a collapsed box has no counters");
+});
+
+test("a finished list folds to one row", () => {
+	let state = seeded(3, 2);
+	assert.equal(allDone(state), false, "a list with work left is not finished");
+	assert.ok(collapsedText(state).endsWith("Task 2"), "the row names the task in progress");
+	for (const id of [1, 2, 3]) state = patchTodo(state, id, { status: "completed" })!;
+	assert.equal(allDone(state), true, "every task done");
+	assert.equal(collapsedText(state), `Todos (3/3) · ${COLLAPSED_DONE}`, "the row says nothing is left");
+	const box = renderTodoBox(plain, state, false, 80);
+	assert.ok(box[1]!.includes("Todos (3/3) · All tasks finished [click to expand]"), `the collapsed row, got ${box[1]}`);
+	assert.ok(box[1]!.includes(HINT_EXPAND), "it still opens on a click");
 });
 
 test("the recap groups by status", () => {

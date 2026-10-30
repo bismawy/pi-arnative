@@ -20,6 +20,7 @@ import {
 	LIST_ROWS,
 	LIST_STATUSES,
 	addTodo,
+	allDone,
 	clearTodos,
 	countTodos,
 	emptyTodos,
@@ -139,7 +140,8 @@ export function runTodo(params: Record<string, unknown>) {
 		}
 		if (added.length === 0) return fail("create needs a subject or a non-empty tasks list");
 		const label = added.length === 1 ? "task" : "tasks";
-		return { content: [{ type: "text" as const, text: `Added ${added.length} ${label}: #${added.join(", #")}` }], details: { state: s.state } };
+		const subject = s.state.tasks.filter((task) => added.includes(task.id)).map((task) => task.subject).join(", ");
+		return { content: [{ type: "text" as const, text: `Added ${added.length} ${label}: #${added.join(", #")}` }], details: { state: s.state, subject } };
 	}
 
 	if (action === "update") {
@@ -153,15 +155,19 @@ export function runTodo(params: Record<string, unknown>) {
 		const next = patchTodo(s.state, id, patch);
 		if (!next) return fail(`no task with id ${id}`);
 		s.state = next;
-		return { content: [{ type: "text" as const, text: `Updated #${id}` }], details: { state: s.state } };
+		return {
+			content: [{ type: "text" as const, text: `Updated #${id}` }],
+			details: { state: s.state, subject: s.state.tasks.find((task) => task.id === id)?.subject ?? "" },
+		};
 	}
 
 	if (action === "delete") {
 		if (id === undefined) return fail("delete needs id");
 		const next = removeTodo(s.state, id);
 		if (!next) return fail(`no task with id ${id}`);
+		const subject = s.state.tasks.find((task) => task.id === id)?.subject ?? "";
 		s.state = next;
-		return { content: [{ type: "text" as const, text: `Removed #${id}` }], details: { state: s.state } };
+		return { content: [{ type: "text" as const, text: `Removed #${id}` }], details: { state: s.state, subject } };
 	}
 
 	if (action === "clear") {
@@ -212,7 +218,7 @@ function refresh(ctx: ExtensionContext, force = false): void {
 				render: (width: number): string[] => {
 					// The live theme, so a theme switch repaints without re-registering.
 					const theme = (ctx.ui?.theme ?? factoryTheme) as Parameters<typeof renderTodoBox>[0];
-					layout = todoLayout(theme, s.state, s.expanded, width, s.top);
+					layout = todoLayout(theme, s.state, s.expanded, width, s.top, ctx.thinkingLevel);
 					height = layout.lines.length;
 					return layout.lines;
 				},
@@ -312,8 +318,11 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			// A mutation brings the view back to the active task; a scroll should not hide the row
 			// that just changed.
-			store().top = null;
+			const s = store();
+			s.top = null;
 			const result = runTodo(params as unknown as Record<string, unknown>);
+			// Nothing left to watch: fold the box back to one row, the way a finished run ends.
+			if (allDone(s.state)) s.expanded = false;
 			saveState(ctx);
 			refresh(ctx);
 			return result;

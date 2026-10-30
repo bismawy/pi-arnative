@@ -7,7 +7,7 @@
  * U+F03A (Font Awesome list), so the terminal needs a Nerd Font.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { softOf } from "./ansi.ts";
+import { softOf, thinkingColorOf } from "./ansi.ts";
 import { renderBoxLines, renderBoxRows } from "./box.ts";
 import { assert, isMain } from "./check.ts";
 
@@ -33,6 +33,10 @@ export const LIST_ICON = "\uf03a";
 /** Rows the expanded widget shows before it summarizes the rest. */
 export const LIST_ROWS = 5;
 export const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
+/** Token for the task text itself. The task in progress keeps the plain text colour, so the
+ *  running row stays the brightest; the soft accent is applied separately (it is derived, not
+ *  a token a theme can resolve). */
+export const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_progress: "text", completed: "text" };
 /** Token per status. In progress borrows the footer's model-name token (`mdHeading`), so the
  *  running task is the brightest row in the box, the way the model is the brightest text in
  *  the footer. */
@@ -143,16 +147,26 @@ export function countTodos(state: TodoState): { done: number; total: number; doi
 /** The task whose work is happening now, so the collapsed row can name it. */
 export const activeTodo = (state: TodoState): Task | undefined => state.tasks.find((task) => task.status === "in_progress");
 
+/** True when every task is done, the state that folds the box back to one row. */
+export const allDone = (state: TodoState): boolean => state.tasks.length > 0 && state.tasks.every((task) => task.status === "completed");
+
+/** What the collapsed row says after the count: the task in progress, or that nothing is left. */
+export const COLLAPSED_DONE = "All tasks finished";
+
 export const headingText = (state: TodoState): string => {
 	const { done, total } = countTodos(state);
 	return `Todos (${done}/${total})`;
 };
 
-/** `Todos (3/7) · Tulis widget` — the collapsed box, without the hint. */
-export function collapsedText(state: TodoState): string {
+/** ` · Tulis widget`, or ` · All tasks finished` once nothing is left (empty when idle). */
+export function collapsedSuffix(state: TodoState): string {
+	if (allDone(state)) return ` · ${COLLAPSED_DONE}`;
 	const active = activeTodo(state);
-	return active ? `${headingText(state)} · ${active.subject}` : headingText(state);
+	return active ? ` · ${active.subject}` : "";
 }
+
+/** `Todos (3/7) · Tulis widget` — the collapsed box, without the hint. */
+export const collapsedText = (state: TodoState): string => `${headingText(state)}${collapsedSuffix(state)}`;
 
 export interface TodoWindow {
 	visible: Task[];
@@ -195,8 +209,7 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 	// task name after the dot stays in the text colour.
 	const soft = softOf(theme);
 	const heading = (state: TodoState): string => `${icon} ${soft(headingText(state))}`;
-	const active = activeTodo(state);
-	if (!expanded) return [withHint(`${heading(state)}${active ? ` · ${active.subject}` : ""}`, HINT_EXPAND)];
+	if (!expanded) return [withHint(`${heading(state)}${collapsedSuffix(state)}`, HINT_EXPAND)];
 
 	const { visible, above, below } = todoWindow(state, LIST_ROWS, top);
 	const rows = [withHint(heading(state), HINT_COLLAPSE)];
@@ -206,17 +219,27 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 		const last = index === visible.length - 1 && below === 0;
 		const branch = fg(theme, "dim", last ? "└─" : "├─");
 		const glyph = fgOr(theme, [STATUS_COLOR[task.status], STATUS_FALLBACK[task.status]], STATUS_GLYPH[task.status]);
+		// The subject carries the state too: done recedes into the soft accent, queued goes dim,
+		// and the task in progress keeps the plain text colour so it stays the brightest row.
+		const subject = task.status === "completed" ? soft(task.subject) : fg(theme, STATUS_TEXT[task.status], task.subject);
 		const note = task.note && task.status === "in_progress" ? ` ${fg(theme, "dim", `· ${task.note}`)}` : "";
-		rows.push(fit(`${branch} ${glyph} ${task.subject}${note}`));
+		rows.push(fit(`${branch} ${glyph} ${subject}${note}`));
 	});
 	if (below > 0) rows.push(fg(theme, "dim", `↓ ${below} more`));
 	return rows;
 }
 
-/** The widget as pi renders it: the arnative box around {@link widgetRows}. Never taller than
- *  pi's own 10-line widget budget (frame 2 + heading 1 + 5 rows + 2 summary rows). */
-export const renderTodoBox = (theme: FgTheme, state: TodoState, expanded: boolean, width: number, top: number | null = null): string[] =>
-	renderBoxLines(theme, width, widgetRows(theme, state, expanded, width, top));
+/** The widget as pi renders it: the arnative box around {@link widgetRows}. The border follows
+ *  the session's thinking level, like every other arnative box. Never taller than pi's own
+ *  10-line widget budget (frame 2 + heading 1 + 5 rows + 2 summary rows). */
+export const renderTodoBox = (
+	theme: FgTheme,
+	state: TodoState,
+	expanded: boolean,
+	width: number,
+	top: number | null = null,
+	thinking?: string,
+): string[] => renderBoxLines(theme, width, widgetRows(theme, state, expanded, width, top), undefined, thinkingColorOf(theme, thinking));
 
 export interface TodoLayout {
 	/** The whole widget, frame included: what pi paints above the editor. */
@@ -231,10 +254,17 @@ export interface TodoLayout {
 /** {@link renderTodoBox} plus the row numbers of the two counter lines. A mouse handler needs
  *  them, since those lines are the click targets that scroll the five-row window; the numbers
  *  come from the box renderer, so a wrapped row cannot shift the hit area. */
-export function todoLayout(theme: FgTheme, state: TodoState, expanded: boolean, width: number, top: number | null = null): TodoLayout {
+export function todoLayout(
+	theme: FgTheme,
+	state: TodoState,
+	expanded: boolean,
+	width: number,
+	top: number | null = null,
+	thinking?: string,
+): TodoLayout {
 	const { above, below } = todoWindow(state, LIST_ROWS, top);
 	const rows = widgetRows(theme, state, expanded, width, top);
-	const { lines, starts } = renderBoxRows(theme, width, rows);
+	const { lines, starts } = renderBoxRows(theme, width, rows, undefined, thinkingColorOf(theme, thinking));
 	// Content row 1 is `↑ n more`; the last content row is `↓ n more`.
 	const at = (contentRow: number): number => starts[contentRow] ?? Math.max(0, lines.length - 1);
 	return {
