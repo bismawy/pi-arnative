@@ -392,5 +392,30 @@ if (isMain(import.meta.url)) {
 	assert(listed.content[0]!.text.split("\n").length === 2, "list prints one line per task");
 	assert(runTodo({ action: "delete", id: 2 }).content[0]!.text === "Removed #2", "delete reports the id");
 	assert(runTodo({ action: "clear" }).content[0]!.text === "Cleared 1 task", "clear counts what it removed");
+	// The widget's mouse: the hint text expands and folds the box, every other cell is left
+	// to pi so the task names can be selected and copied.
+	runTodo({ action: "create", tasks: [{ subject: "Satu" }, { subject: "Dua" }] });
+	store().expanded = false;
+	let factory: any;
+	const widgetCtx: any = { ui: { setWidget: (_key: string, f: any) => (factory = f), theme: null }, thinkingLevel: "off" };
+	refresh(widgetCtx, true);
+	const widget: any = factory(undefined, null);
+	const clickAt = (x: number, y: number): void => {
+		for (const type of ["press", "release", "click"]) widget.handleMouse({ type, button: "left", x, y });
+	};
+	widget.render(80);
+	const closed = textSpans(widget.render(80), HINT_EXPAND)[0];
+	assert(closed?.row === 1, `widget: the collapsed hint sits on the first content row, got ${closed?.row}`);
+	clickAt(closed!.start, closed!.row);
+	assert(store().expanded === true, "widget: a click on the hint expands");
+	widget.render(80);
+	const opened = textSpans(widget.render(80), HINT_COLLAPSE)[0];
+	assert(opened !== undefined, "widget: the expanded box offers the fold hint");
+	clickAt(opened!.start, opened!.row);
+	assert(store().expanded === false, "widget: a click on the fold hint collapses");
+	// Off the hint nothing is taken, so pi can start a selection over the task rows.
+	for (const [x, y] of [[5, 1], [5, 2], [5, 3]] as const) {
+		assert(widget.handleMouse({ type: "press", button: "left", x, y }) === undefined, `widget: a press at ${x},${y} is left to pi`);
+	}
 	console.log("todos extension self-check OK");
 }

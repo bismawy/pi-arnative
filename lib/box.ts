@@ -4,8 +4,41 @@
  * never loads it as an extension.
  */
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { thinkingColorOf } from "./ansi.ts";
+import { stripAnsi, thinkingColorOf } from "./ansi.ts";
 import { assert, isMain } from "./check.ts";
+
+/** A clickable span inside rendered lines: 0-based cell columns, inclusive. */
+export interface TextSpan {
+	row: number;
+	start: number;
+	end: number;
+}
+
+/**
+ * Where `text` sits in each rendered line, in cell columns. A mouse handler needs this to
+ * make one piece of a box clickable and leave the rest to pi: a press the handler does not
+ * take stays with the text selection, so a box can be clicked and copied at once.
+ * A line that shows the text in part (narrow width) yields no span, so a clipped label is
+ * never half-clickable.
+ */
+export function textSpans(lines: readonly string[], text: string): TextSpan[] {
+	if (!text) return [];
+	const width = visibleWidth(text) - 1;
+	const spans: TextSpan[] = [];
+	lines.forEach((line, row) => {
+		const plain = stripAnsi(line);
+		const at = plain.indexOf(text);
+		if (at >= 0) {
+			const start = visibleWidth(plain.slice(0, at));
+			spans.push({ row, start, end: start + width });
+		}
+	});
+	return spans;
+}
+
+/** Whether the 0-based cell `x` on `row` lands inside one of `spans`. */
+export const inSpans = (spans: readonly TextSpan[], row: number, x: number): boolean =>
+	spans.some((span) => span.row === row && x >= span.start && x <= span.end);
 
 export type BoxTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; bold?(text: string): string };
 type Dim = (s: string) => string;
@@ -167,5 +200,16 @@ if (isMain(import.meta.url)) {
 			`a long description keeps the right wall at width ${w}`,
 		);
 	}
+	// Click target on a piece of text: cells, not characters, and nothing when clipped.
+	const line = renderBoxRows(th, 40, ["Todos (3/7) [click to expand]"], undefined, undefined).lines[1]!;
+	const spans = textSpans([line], "[click to expand]");
+	assert(spans.length === 1 && spans[0]!.row === 0, "textSpans finds the hint on its row");
+	assert(spans[0]!.start === visibleWidth("│ Todos (3/7) "), `span starts at the hint, got ${spans[0]!.start}`);
+	assert(inSpans(spans, 0, spans[0]!.start) && inSpans(spans, 0, spans[0]!.end), "span covers the first and last cell");
+	assert(!inSpans(spans, 0, spans[0]!.start - 1) && !inSpans(spans, 1, spans[0]!.start), "span excludes the cell before and other rows");
+	assert(textSpans([boxRow("Todos (3/7) [click to exp…", 24, (t) => t)], "[click to expand]").length === 0, "a clipped hint is not clickable");
+	// Wide characters before the hint shift cells, not characters.
+	const wide = textSpans([boxRow("日本 [x]", 24, (t) => t)], "[x]");
+	assert(wide[0]!.start === visibleWidth("│ 日本 "), `a wide glyph shifts by cells, got ${wide[0]!.start}`);
 	console.log("lib/box.ts OK");
 }
