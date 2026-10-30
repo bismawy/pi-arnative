@@ -37,6 +37,18 @@ function withFixture(run: (dir: string) => void): void {
 const configOf = (dir: string): Record<string, unknown> =>
 	JSON.parse(readFileSync(join(dir, "arnative", "config.json"), "utf8")) as Record<string, unknown>;
 
+/** The order a reader sees in the file, not just the values. */
+test("the file keeps one key order", () => {
+	withFixture((dir) => {
+		recordProfile();
+		assert.deepEqual(
+			Object.keys(configOf(dir)),
+			["headerPreset", "footerPreset", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"],
+			"header first, then the rest of the menu, layoutVersion before the newer keys",
+		);
+	});
+});
+
 test("the profile in use is recorded, defaults included", () => {
 	withFixture((dir) => {
 		recordProfile();

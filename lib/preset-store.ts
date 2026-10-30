@@ -72,6 +72,19 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 	return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
 }
 
+/** Reading order of `config.json`: the presets in the order the settings menu shows them,
+ *  then `layoutVersion`, then anything else (a key from another module or a newer version).
+ *  Times a user edits the file by hand or reads it back. */
+const KEY_ORDER = ["headerPreset", "footerPreset", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
+
+/** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
+function ordered(record: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const key of KEY_ORDER) if (Object.hasOwn(record, key)) out[key] = record[key];
+	for (const [key, value] of Object.entries(record)) if (!Object.hasOwn(out, key)) out[key] = value;
+	return out;
+}
+
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
 export function saveChoice(key: string, value: string, rename: (from: string, to: string) => void = renameSync): void {
 	if (readConfig()[key] === value) return;
@@ -81,7 +94,7 @@ export function saveChoice(key: string, value: string, rename: (from: string, to
 		const path = configPath();
 		const tmp = `${path}.${process.pid}.tmp`;
 		mkdirSync(dirname(path), { recursive: true });
-		const payload = `${JSON.stringify(memo, null, 2)}\n`;
+		const payload = `${JSON.stringify(ordered(memo), null, 2)}\n`;
 		writeFileSync(tmp, payload, "utf8");
 		try {
 			rename(tmp, path);
@@ -181,6 +194,19 @@ if (isMain(import.meta.url)) {
 	const profiled = readFileSync(join(profile, "arnative", "config.json"), "utf8");
 	ensureChoices({ headerPreset: "Arnative (Full)", footerPreset: "Arnative (Full)" });
 	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === profiled, "a second record writes nothing");
+
+	// The file keeps one key order whatever order the writes arrived in.
+	const keyOrder = () => Object.keys(JSON.parse(readFileSync(join(profile, "arnative", "config.json"), "utf8")) as Record<string, unknown>);
+	assert(
+		keyOrder().join(",") === "headerPreset,footerPreset,layoutVersion",
+		"known keys follow KEY_ORDER, layoutVersion after the presets: " + keyOrder().join(","),
+	);
+	saveChoice("spinnerPreset", "Circle Wave");
+	saveChoice("zzz-other", "x");
+	assert(
+		keyOrder().join(",") === "headerPreset,footerPreset,spinnerPreset,layoutVersion,zzz-other",
+		"a newly written key slots into place, an unknown one goes last: " + keyOrder().join(","),
+	);
 
 	// Windows: a running pi session can hold the file open, so the atomic replace fails
 	// while the setting still has to land. The seam stands in for that rename.
