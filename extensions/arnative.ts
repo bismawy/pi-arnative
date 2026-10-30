@@ -11,7 +11,7 @@ import { stripAnsi } from "../lib/ansi.ts";
 import { screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markedLabels, ROW_DIVIDER } from "../lib/format.ts";
-import { SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
+import { SPINNER_GRADIENT_KEY, SPINNER_PRESET_KEY, SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
 import {
 	activeSpinnerGradient,
 	animationsPickerText,
@@ -22,11 +22,18 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
+import { FOOTER_PRESET_KEY, HEADER_PRESET_KEY, ensureChoices } from "../lib/preset-store.ts";
 import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
-import { AUTO_COMPACT_CHOICES, activeAutoCompact, setAutoCompact, type AutoCompactChoice } from "./autocompact.ts";
+import {
+	AUTO_COMPACT_CHOICES,
+	AUTO_COMPACT_KEY,
+	activeAutoCompact,
+	setAutoCompact,
+	type AutoCompactChoice,
+} from "./autocompact.ts";
 import { healNow } from "./model-heal.ts";
-import { MODEL_HEAL_CHOICES, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
+import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
@@ -530,8 +537,24 @@ export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): voi
 	});
 }
 
+/** Record the choices in use in `config.json`, defaults included, so the file reads as the
+ *  profile instead of a diff against it. Idempotent: only keys that differ get written. */
+export function recordProfile(): void {
+	ensureChoices({
+		[HEADER_PRESET_KEY]: activeHeaderPreset(),
+		[FOOTER_PRESET_KEY]: activeFooterPreset(),
+		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
+		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
+		[AUTO_COMPACT_KEY]: activeAutoCompact(),
+		[MODEL_HEAL_KEY]: activeModelHeal(),
+	});
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
+		// Before the theme branch below returns: the profile is recorded once per install, so
+		// `config.json` lists every choice even when it never left its default.
+		recordProfile();
 		// `setTheme` writes the choice into pi's settings, so this runs once per install and the
 		// second session already sees an explicit setting.
 		if (!shouldApplyDefaultTheme(pi.getSettings()?.theme, ctx.ui.getAllThemes())) return;

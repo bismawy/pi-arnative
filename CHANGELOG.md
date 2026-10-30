@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **`config.json` lists every preset, including the ones left at their default.** A choice was written only once it differed from the default, so the header had no entry at all: the picker writes on move, and opening it on `Arnative (Full)` then pressing Enter wrote nothing, while a fresh install read a nearly empty file. `recordProfile()` now runs at `session_start` and records header, footer, spinner, gradient, auto-compact and model-heal through `ensureChoices`, which writes only the keys that differ and leaves a present-but-unreadable config untouched. `AUTO_COMPACT_KEY` is exported so every key has one source (`lib/preset-store.ts`, `extensions/arnative.ts`, `extensions/autocompact.ts`); `test/profile.test.ts` covers the default-value case, the byte-identical second run and the corrupt-file guard.
+
 ## [0.8.2] - 2026-10-28
 
 ### Changed

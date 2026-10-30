@@ -30,7 +30,7 @@ import { loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts
 export const AUTO_COMPACT_CHOICES = ["Off", "Smart", "100k", "150k", "200k", "300k", "400k"] as const;
 export type AutoCompactChoice = (typeof AUTO_COMPACT_CHOICES)[number];
 export const DEFAULT_AUTO_COMPACT: AutoCompactChoice = "Off";
-const AUTO_COMPACT_KEY = "autoCompact";
+export const AUTO_COMPACT_KEY = "autoCompact";
 
 /** Smart's tier table, first match wins. `null` defers the window to pi's own
  *  compaction — the "100%" tier, where the current behavior is already safe. */

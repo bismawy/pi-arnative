@@ -88,6 +88,17 @@ export function saveChoice(key: string, value: string): void {
 	}
 }
 
+/** Record the choices in use, so `config.json` names every preset instead of only the ones a
+ *  user changed — a fresh install then reads a complete profile instead of an empty file.
+ *  Runs at `session_start`; after the first run every key already matches and nothing is
+ *  written. A present-but-unreadable config is never replaced by this partial record (the
+ *  same rule the layout stamp follows), because that would drop the other keys. */
+export function ensureChoices(values: Record<string, string>): void {
+	const { parsed } = readDisk();
+	if (!parsed && existsSync(configPath())) return;
+	for (const [key, value] of Object.entries(values)) saveChoice(key, value);
+}
+
 /** Drop the in-memory copy so the next read hits disk (a restart, in a test). */
 export function resetPresetCache(): void {
 	memo = null;
@@ -148,6 +159,23 @@ if (isMain(import.meta.url)) {
 	const stamped = JSON.parse(readFileSync(join(stamp, "arnative", "config.json"), "utf8")) as Record<string, unknown>;
 	assert(stamped.headerPreset === "b" && stamped.layoutVersion === "1", "stamping merges, it does not replace");
 	rmSync(stamp, { recursive: true, force: true });
+
+	// The startup record names every choice, including the ones still at their default.
+	const profile = mkdtempSync(join(tmpdir(), "arnative-preset-profile-"));
+	process.env.PI_CODING_AGENT_DIR = profile;
+	resetPresetCache();
+	ensureChoices({ headerPreset: "Arnative (Full)", footerPreset: "Arnative (Full)" });
+	assert(loadChoice(HEADER_PRESET_KEY, ["Arnative (Full)"] as const) === "Arnative (Full)", "a default choice is written, not skipped");
+	assert(loadChoice(FOOTER_PRESET_KEY, ["Arnative (Full)"] as const) === "Arnative (Full)", "every key in the batch is written");
+	const profiled = readFileSync(join(profile, "arnative", "config.json"), "utf8");
+	ensureChoices({ headerPreset: "Arnative (Full)", footerPreset: "Arnative (Full)" });
+	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === profiled, "a second record writes nothing");
+	writeFileSync(join(profile, "arnative", "config.json"), "{not json", "utf8");
+	resetPresetCache();
+	ensureChoices({ headerPreset: "b" });
+	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === "{not json", "the startup record leaves an unreadable config alone");
+	rmSync(profile, { recursive: true, force: true });
+
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	resetPresetCache();
 
