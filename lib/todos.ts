@@ -230,8 +230,10 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 }
 
 /** The widget as pi renders it: the arnative box around {@link widgetRows}. The border follows
- *  the session's thinking level, like every other arnative box. Never taller than pi's own
- *  10-line widget budget (frame 2 + heading 1 + 5 rows + 2 summary rows). */
+ *  the session's thinking level, like every other arnative box. Expanded it is at most 10
+ *  lines (frame 2 + heading 1 + {@link LIST_ROWS} rows + both counters), the size pi caps a
+ *  plain string widget at; a component widget is not truncated, so this is the size that keeps
+ *  the chat area usable on a 24-row terminal, not a limit pi enforces. */
 export const renderTodoBox = (
 	theme: FgTheme,
 	state: TodoState,
@@ -341,7 +343,7 @@ if (isMain(import.meta.url)) {
 	state = patchTodo(state, 7, { status: "in_progress" })!;
 	assert(todoWindow(state).above === 2, "the window stops at the end of the list instead of sliding past it");
 
-	// The box: collapsed 3 lines, expanded never over pi's 10-line widget budget.
+	// The box: collapsed 3 lines, expanded at most 10 (frame, heading, five rows, two counters).
 	state = emptyTodos();
 	for (let i = 1; i <= 20; i++) state = addTodo(state, `Task ${i}`).state;
 	state = patchTodo(state, 10, { status: "in_progress", note: "sedang menulis" })!;
