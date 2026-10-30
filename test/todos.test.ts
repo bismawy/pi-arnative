@@ -13,6 +13,8 @@ import {
 	collapsedText,
 	emptyTodos,
 	HINT_COLLAPSE,
+	LIST_ROWS,
+	listRowsFor,
 	HINT_EXPAND,
 	LIST_ICON,
 	normalizeState,
@@ -84,7 +86,7 @@ test("the icon is accent, and each status has its own token", () => {
 	assert.ok(rows[3]!.includes("[dim]Task 3"), "a queued subject is dim too");
 
 	// The frame follows the thinking level, like every other arnative box.
-	const framed = renderTodoBox(marked, state, true, 80, null, "high");
+	const framed = renderTodoBox(marked, state, true, 80, { thinking: "high" });
 	assert.ok(framed[0]!.startsWith("[thinkingHigh]╭"), `the border takes the thinking slot, got ${framed[0]}`);
 	assert.ok(framed.at(-1)!.startsWith("[thinkingHigh]╰"), "both edges of the frame");
 
@@ -109,7 +111,7 @@ test("the window scrolls without leaving the list", () => {
 	// The counters are click targets, so the layout reports where they landed.
 	const follow = todoLayout(marked, state, true, 80);
 	assert.deepEqual([follow.up, follow.down], [2, 8], `counter rows, got ${follow.up}, ${follow.down}`);
-	const top = todoLayout(marked, state, true, 80, 0);
+	const top = todoLayout(marked, state, true, 80, { top: 0 });
 	assert.deepEqual([top.up, top.down], [null, 7], "no up counter at the top of the list");
 	assert.equal(todoLayout(marked, state, false, 80).down, null, "a collapsed box has no counters");
 });
@@ -124,6 +126,23 @@ test("a finished list folds to one row", () => {
 	const box = renderTodoBox(plain, state, false, 80);
 	assert.ok(box[1]!.includes("Todos (3/3) · All tasks finished [click to expand]"), `the collapsed row, got ${box[1]}`);
 	assert.ok(box[1]!.includes(HINT_EXPAND), "it still opens on a click");
+});
+
+test("a taller terminal shows more tasks", () => {
+	assert.equal(listRowsFor(24), 5, "24 rows keeps the five-row window");
+	assert.equal(listRowsFor(30), 9, "30 rows fits the cap of nine");
+	assert.equal(listRowsFor(10), 3, "a short terminal drops to the floor of three");
+	assert.equal(listRowsFor(undefined), LIST_ROWS, "an unknown height falls back to the default");
+
+	const state = seeded(20, 10);
+	const tall = todoLayout(plain, state, true, 80, { rows: listRowsFor(30) });
+	assert.equal(tall.lines.length, 2 + 1 + 9 + 2, "nine task rows plus frame, heading and both counters");
+	assert.ok(tall.lines.some((line) => line.includes("↑ 5 more")), "five tasks hidden above");
+	assert.ok(tall.lines.some((line) => line.includes("↓ 6 more")), "six tasks hidden below");
+
+	const short = todoLayout(plain, state, true, 80, { rows: listRowsFor(20) });
+	assert.equal(short.lines.length, 2 + 1 + 3 + 2, "a three-row window on a short terminal");
+	assert.ok(short.lines.some((line) => line.includes("↓ 9 more")), "the rest stays counted, not lost");
 });
 
 test("the recap groups by status", () => {

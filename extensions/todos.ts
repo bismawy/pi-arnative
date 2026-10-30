@@ -17,13 +17,13 @@ import { screenTitle } from "../lib/box.ts";
 import { ListPicker, type ListPickerText } from "../lib/list-picker.ts";
 import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../lib/shortcuts.ts";
 import {
-	LIST_ROWS,
 	LIST_STATUSES,
 	addTodo,
 	allDone,
 	clearTodos,
 	countTodos,
 	emptyTodos,
+	listRowsFor,
 	normalizeState,
 	patchTodo,
 	recapRows,
@@ -210,7 +210,7 @@ function refresh(ctx: ExtensionContext, force = false): void {
 			/** Move the five-row window by `delta` rows and repaint. `top` stays absolute, so the
 			 *  window parks at the end of the list instead of drifting. */
 			const scroll = (delta: number): void => {
-				const { start } = todoWindow(s.state, LIST_ROWS, s.top);
+				const { start } = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
 				s.top = start + delta;
 				s.tui?.requestRender(true);
 			};
@@ -218,7 +218,11 @@ function refresh(ctx: ExtensionContext, force = false): void {
 				render: (width: number): string[] => {
 					// The live theme, so a theme switch repaints without re-registering.
 					const theme = (ctx.ui?.theme ?? factoryTheme) as Parameters<typeof renderTodoBox>[0];
-					layout = todoLayout(theme, s.state, s.expanded, width, s.top, ctx.thinkingLevel);
+					layout = todoLayout(theme, s.state, s.expanded, width, {
+						top: s.top,
+						rows: listRowsFor(process.stdout.rows),
+						thinking: ctx.thinkingLevel,
+					});
 					height = layout.lines.length;
 					return layout.lines;
 				},
@@ -253,8 +257,8 @@ function refresh(ctx: ExtensionContext, force = false): void {
  *  and pi leaves mouse input to the terminal everywhere else. */
 function scrollKeyboard(ctx: ExtensionContext, delta: number): void {
 	const s = store();
-	if (!s.expanded || s.state.tasks.length <= LIST_ROWS) return;
-	const { start } = todoWindow(s.state, LIST_ROWS, s.top);
+	if (!s.expanded || s.state.tasks.length <= listRowsFor(process.stdout.rows)) return;
+	const { start } = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
 	s.top = start + delta;
 	refresh(ctx);
 }

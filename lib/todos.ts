@@ -30,8 +30,27 @@ export interface TodoState {
 export type FgTheme = { fg?(color: string, text: string): string; style?(text: string, options: { fg: unknown }): string; colors?: Record<string, { kind?: string; c?: number; h?: number }> } | null;
 
 export const LIST_ICON = "\uf03a";
-/** Rows the expanded widget shows before it summarizes the rest. */
+/** Task rows the expanded widget shows when the terminal height is unknown. */
 export const LIST_ROWS = 5;
+/** Bounds of the adaptive window: fewer than three rows says nothing, more than nine eats the
+ *  chat area even on a tall terminal. */
+export const MIN_LIST_ROWS = 3;
+export const MAX_LIST_ROWS = 9;
+/** Lines the box spends on everything that is not a task: frame, heading, two counters. */
+const BOX_CHROME = 5;
+/** Lines kept for the editor, the footer and a usable chat area above the box. */
+const SCREEN_RESERVE = 14;
+
+/**
+ * Task rows a terminal of `terminalRows` lines can show: the box is `rows + BOX_CHROME` lines
+ * tall, and what is left has to hold the editor, the footer and a chat area. Unknown height
+ * (a pipe, a test) falls back to {@link LIST_ROWS}, so the widget never guesses wildly.
+ */
+export function listRowsFor(terminalRows: number | undefined): number {
+	if (!terminalRows || !Number.isFinite(terminalRows) || terminalRows <= 0) return LIST_ROWS;
+	const fit = Math.floor(terminalRows) - BOX_CHROME - SCREEN_RESERVE;
+	return Math.min(MAX_LIST_ROWS, Math.max(MIN_LIST_ROWS, fit));
+}
 export const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
 /** Token for the task text itself. Queued recedes to dim and a done task reads as ordinary
  *  text; the task in progress takes the soft accent, which is derived rather than a token (see
@@ -195,8 +214,21 @@ export function todoWindow(state: TodoState, rows = LIST_ROWS, top: number | nul
 	return { visible: state.tasks.slice(start, start + rows), above: start, below: total - start - rows, start };
 }
 
+/** How the widget draws itself: what a scroll moved, how many task rows fit, and the thinking
+ *  level whose slot paints the frame. Every field is optional, so a caller that only cares
+ *  about the layout can omit it. */
+export interface TodoView {
+	/** First visible task after a scroll; null (the default) follows the active task. */
+	top?: number | null;
+	/** Task rows to show. Defaults to {@link LIST_ROWS}; the widget passes
+	 *  `listRowsFor(process.stdout.rows)`, so a tall terminal shows more of the list. */
+	rows?: number;
+	/** Thinking level name (`low`, `high`…), for the frame colour. */
+	thinking?: string;
+}
+
 /** Content rows of the widget box (no frame): one row collapsed, heading + tasks expanded. */
-export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, width: number, top: number | null = null): string[] {
+export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, width: number, view: TodoView = {}): string[] {
 	const fit = (line: string) => truncateToWidth(line, Math.max(0, width - 4), "…");
 	// The hint is how the box gets opened, so it survives and the text before it gives way.
 	const withHint = (text: string, hint: string): string => {
@@ -211,7 +243,7 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 	const heading = (state: TodoState): string => `${icon} ${soft(headingText(state))}`;
 	if (!expanded) return [withHint(`${heading(state)}${collapsedSuffix(state)}`, HINT_EXPAND)];
 
-	const { visible, above, below } = todoWindow(state, LIST_ROWS, top);
+	const { visible, above, below } = todoWindow(state, view.rows ?? LIST_ROWS, view.top ?? null);
 	const rows = [withHint(heading(state), HINT_COLLAPSE)];
 	if (above > 0) rows.push(fg(theme, "dim", `↑ ${above} more`));
 	visible.forEach((task, index) => {
@@ -234,14 +266,8 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
  *  lines (frame 2 + heading 1 + {@link LIST_ROWS} rows + both counters), the size pi caps a
  *  plain string widget at; a component widget is not truncated, so this is the size that keeps
  *  the chat area usable on a 24-row terminal, not a limit pi enforces. */
-export const renderTodoBox = (
-	theme: FgTheme,
-	state: TodoState,
-	expanded: boolean,
-	width: number,
-	top: number | null = null,
-	thinking?: string,
-): string[] => renderBoxLines(theme, width, widgetRows(theme, state, expanded, width, top), undefined, thinkingColorOf(theme, thinking));
+export const renderTodoBox = (theme: FgTheme, state: TodoState, expanded: boolean, width: number, view: TodoView = {}): string[] =>
+	renderBoxLines(theme, width, widgetRows(theme, state, expanded, width, view), undefined, thinkingColorOf(theme, view.thinking));
 
 export interface TodoLayout {
 	/** The whole widget, frame included: what pi paints above the editor. */
@@ -261,12 +287,11 @@ export function todoLayout(
 	state: TodoState,
 	expanded: boolean,
 	width: number,
-	top: number | null = null,
-	thinking?: string,
+	view: TodoView = {},
 ): TodoLayout {
-	const { above, below } = todoWindow(state, LIST_ROWS, top);
-	const rows = widgetRows(theme, state, expanded, width, top);
-	const { lines, starts } = renderBoxRows(theme, width, rows, undefined, thinkingColorOf(theme, thinking));
+	const { above, below } = todoWindow(state, view.rows ?? LIST_ROWS, view.top ?? null);
+	const rows = widgetRows(theme, state, expanded, width, view);
+	const { lines, starts } = renderBoxRows(theme, width, rows, undefined, thinkingColorOf(theme, view.thinking));
 	// Content row 1 is `↑ n more`; the last content row is `↓ n more`.
 	const at = (contentRow: number): number => starts[contentRow] ?? Math.max(0, lines.length - 1);
 	return {
@@ -333,6 +358,10 @@ if (isMain(import.meta.url)) {
 	// Five-row window: the active task is centred, and the hidden counts add up.
 	state = emptyTodos();
 	for (let i = 1; i <= 7; i++) state = addTodo(state, `Task ${i}`).state;
+	// Adaptive height: the window grows with the terminal, bounded at three and nine.
+	assert(listRowsFor(24) === 5 && listRowsFor(30) === 9 && listRowsFor(10) === 3, "listRowsFor bounds");
+	assert(listRowsFor(undefined) === LIST_ROWS, "unknown height falls back to the default");
+
 	assert(todoWindow(state).visible.length === 5, "five rows when more exist");
 	assert(todoWindow(state).above === 0 && todoWindow(state).below === 2, "nothing hidden above the first five");
 	state = patchTodo(state, 5, { status: "in_progress" })!;
