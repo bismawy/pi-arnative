@@ -17,6 +17,7 @@ const EXTENSIONS = [
 	"usage.ts",
 	"animations.ts",
 	"autocompact.ts",
+	"todos.ts",
 	"arnative.ts",
 ];
 
