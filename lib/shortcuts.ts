@@ -35,6 +35,8 @@ export const SHORTCUT_RELOAD = build("r");
 /** Expand/collapse the minimal footer. Ctrl+alt+m on macOS/Linux, alt+m on Windows/WSL
  *  (same platform split as the shortcuts above). */
 export const SHORTCUT_TOGGLE_FOOTER = build("m");
+/** Expand/collapse the task list widget. Same platform split: Alt+o on Windows/WSL. */
+export const SHORTCUT_TOGGLE_TODOS = build("o");
 
 /** The one "go back" key: `←` leaves a screen for its parent, while Esc closes or reverts
  *  it. Defined here so no screen can advertise a key another screen does not handle. */
@@ -71,6 +73,8 @@ export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], 
 export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [BACK.label, "Back"], [CANCEL.label, "Close"]);
 /** Live-preview list: moving applies, Enter keeps, `←` steps out, Esc reverts. */
 export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [BACK.label, "Back"], [CANCEL.label, "Revert"]);
+/** A list you only read (the `/todos` recap): moving changes nothing, so there is no Open. */
+export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
 /** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
 export function legendUsage(width: number): string {
 	const full = legend([MOVE.label, "Move"], ["Click", "Open/close"], [BACK.label, "Back"], [QUIT.label, "Exit"]);
@@ -112,6 +116,7 @@ if (isMain(import.meta.url)) {
 	// advertised on one screen and handled on none.
 	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", `root menu legend pinned, got ${LEGEND_MOVE}`);
 	assert(LEGEND_MOVE.includes("[←] Back"), "the root menu advertises ← Back");
+	assert(LEGEND_READ_ONLY === "[↑↓] Move  [Esc] Close", `read-only legend pinned, got ${LEGEND_READ_ONLY}`);
 	assert(
 		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
 		`live legend pinned, got ${LEGEND_LIVE}`,
