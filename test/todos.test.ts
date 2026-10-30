@@ -17,12 +17,16 @@ import {
 	recapRows,
 	recapSummary,
 	renderTodoBox,
+	todoLayout,
 	todoWindow,
+	widgetRows,
 	type FgTheme,
 	type TaskState,
 } from "../lib/todos.ts";
 
 const plain: FgTheme = { fg: (_color, text) => text };
+/** Writes the token down, so a test can name the colour instead of a code. */
+const marked: FgTheme = { fg: (color, text) => `[${color}]${text}` };
 
 /** A list of `count` queued tasks, with task `active` in progress. */
 function seeded(count: number, active?: number): TaskState {
@@ -59,6 +63,43 @@ test("collapsed is one boxed row naming the active task", () => {
 	assert.ok(row.includes(HINT_EXPAND), "the row says how to open it");
 	assert.ok(!row.includes(HINT_COLLAPSE), "the open hint only belongs to the expanded box");
 	assert.ok(renderTodoBox(plain, seeded(7, 3), true, 80)[1]!.includes(HINT_COLLAPSE), "expanded says how to close it");
+});
+
+test("the icon is accent, and each status has its own token", () => {
+	let state = seeded(3);
+	state = patchTodo(state, 1, { status: "completed" })!;
+	state = patchTodo(state, 2, { status: "in_progress", note: "sedang jalan" })!;
+	const rows = widgetRows(marked, state, true, 80);
+	assert.ok(rows[0]!.includes(`[accent]${LIST_ICON}`), `the heading icon is accent, got ${rows[0]}`);
+	assert.ok(rows[1]!.includes("[accent]✓"), "a done task is accent");
+	assert.ok(rows[2]!.includes("[mdHeading]◉"), "the running task borrows the footer model-name colour");
+	assert.ok(rows[2]!.includes("[dim]· sedang jalan"), "its note stays dim");
+	assert.ok(rows[3]!.includes("[dim]◌"), "a queued task is dim");
+
+	// A theme without `mdHeading` (pi throws on an unknown token) still paints the glyph.
+	const partial: FgTheme = {
+		fg: (color, text) => {
+			if (color === "mdHeading") throw new Error("Unknown theme color: mdHeading");
+			return `[${color}]${text}`;
+		},
+	};
+	assert.ok(widgetRows(partial, state, true, 80)[2]!.includes("[accent]◉"), "the running task falls back to accent");
+});
+
+test("the window scrolls without leaving the list", () => {
+	const state = seeded(20, 10);
+	assert.equal(todoWindow(state, 5, 0).visible[0]!.id, 1, "top picks the first task");
+	assert.equal(todoWindow(state, 5, 0).above, 0, "nothing hidden above the first task");
+	assert.equal(todoWindow(state, 5, 99).visible.at(-1)!.id, 20, "past the end parks the window at the end");
+	assert.equal(todoWindow(state, 5, 99).below, 0, "nothing hidden below the last window");
+	assert.equal(todoWindow(state, 5, -4).visible[0]!.id, 1, "a scroll above the top parks at the top");
+
+	// The counters are click targets, so the layout reports where they landed.
+	const follow = todoLayout(marked, state, true, 80);
+	assert.deepEqual([follow.up, follow.down], [2, 8], `counter rows, got ${follow.up}, ${follow.down}`);
+	const top = todoLayout(marked, state, true, 80, 0);
+	assert.deepEqual([top.up, top.down], [null, 7], "no up counter at the top of the list");
+	assert.equal(todoLayout(marked, state, false, 80).down, null, "a collapsed box has no counters");
 });
 
 test("the recap groups by status", () => {

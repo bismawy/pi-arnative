@@ -15,8 +15,9 @@ import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { assert, isMain } from "../lib/check.ts";
 import { screenTitle } from "../lib/box.ts";
 import { ListPicker, type ListPickerText } from "../lib/list-picker.ts";
-import { LEGEND_READ_ONLY, SHORTCUT_TOGGLE_TODOS } from "../lib/shortcuts.ts";
+import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../lib/shortcuts.ts";
 import {
+	LIST_ROWS,
 	LIST_STATUSES,
 	addTodo,
 	clearTodos,
@@ -28,6 +29,8 @@ import {
 	recapSummary,
 	removeTodo,
 	renderTodoBox,
+	todoLayout,
+	todoWindow,
 	type TaskState,
 	type TodoStatus,
 } from "../lib/todos.ts";
@@ -40,6 +43,8 @@ const STORE_KEY = Symbol.for("pi-arnative.todos.widget");
 interface WidgetStore {
 	state: TaskState;
 	expanded: boolean;
+	/** First visible task after a scroll; null follows the active task. */
+	top: number | null;
 	/** False until the widget is registered with this session's `ctx.ui`. */
 	registered: boolean;
 	/** The TUI handle from the widget factory, for a redraw after a shortcut or a mutation. */
@@ -50,7 +55,7 @@ interface WidgetStore {
  *  module, and a module-local copy would drop the list and the expanded flag. */
 function store(): WidgetStore {
 	const holder = globalThis as Record<symbol, WidgetStore | undefined>;
-	holder[STORE_KEY] ??= { state: emptyTodos(), expanded: false, registered: false };
+	holder[STORE_KEY] ??= { state: emptyTodos(), expanded: false, top: null, registered: false };
 	return holder[STORE_KEY]!;
 }
 
@@ -195,20 +200,37 @@ function refresh(ctx: ExtensionContext, force = false): void {
 		(tui: WidgetStore["tui"], factoryTheme: Parameters<typeof renderTodoBox>[0]) => {
 			s.tui = tui;
 			let height = 0;
+			let layout: ReturnType<typeof todoLayout> = { lines: [], up: null, down: null };
+			/** Move the five-row window by `delta` rows and repaint. `top` stays absolute, so the
+			 *  window parks at the end of the list instead of drifting. */
+			const scroll = (delta: number): void => {
+				const { start } = todoWindow(s.state, LIST_ROWS, s.top);
+				s.top = start + delta;
+				s.tui?.requestRender(true);
+			};
 			return {
 				render: (width: number): string[] => {
 					// The live theme, so a theme switch repaints without re-registering.
 					const theme = (ctx.ui?.theme ?? factoryTheme) as Parameters<typeof renderTodoBox>[0];
-					const lines = renderTodoBox(theme, s.state, s.expanded, width);
-					height = lines.length;
-					return lines;
+					layout = todoLayout(theme, s.state, s.expanded, width, s.top);
+					height = layout.lines.length;
+					return layout.lines;
 				},
 				invalidate: (): void => {},
-				// The whole box is the click target: one click expands, the next collapses.
+				// The whole box is the click target: the counter rows scroll the window, a click
+				// anywhere else expands the box, and the next click collapses it.
 				handleMouse: (event: TuiMouseEvent) => {
 					if (event.button !== "left" || event.y >= height) return undefined;
 					if (event.type === "press") return { handled: true, render: false };
 					if (event.type !== "click") return undefined;
+					if (event.y === layout.up) {
+						scroll(-1);
+						return { handled: true, render: true };
+					}
+					if (event.y === layout.down) {
+						scroll(1);
+						return { handled: true, render: true };
+					}
 					s.expanded = !s.expanded;
 					s.tui?.requestRender(true);
 					return { handled: true, render: true };
@@ -221,12 +243,24 @@ function refresh(ctx: ExtensionContext, force = false): void {
 	s.registered = true;
 }
 
+/** Scroll the expanded box from the keyboard: the counters are mouse-only in fullscreen mode,
+ *  and pi leaves mouse input to the terminal everywhere else. */
+function scrollKeyboard(ctx: ExtensionContext, delta: number): void {
+	const s = store();
+	if (!s.expanded || s.state.tasks.length <= LIST_ROWS) return;
+	const { start } = todoWindow(s.state, LIST_ROWS, s.top);
+	s.top = start + delta;
+	refresh(ctx);
+}
+
 /** Expand or collapse, then redraw. This is the keyboard path in regular mode, where pi leaves
  *  mouse input to the terminal and the click never arrives. */
 function toggle(ctx: ExtensionContext): void {
 	const s = store();
 	if (s.state.tasks.length === 0) return;
 	s.expanded = !s.expanded;
+	// Opening or closing shows the active task again, so a scroll never outlives the view.
+	s.top = null;
 	refresh(ctx);
 }
 
@@ -276,6 +310,9 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: PARAMS,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			// A mutation brings the view back to the active task; a scroll should not hide the row
+			// that just changed.
+			store().top = null;
 			const result = runTodo(params as unknown as Record<string, unknown>);
 			saveState(ctx);
 			refresh(ctx);
@@ -297,6 +334,20 @@ export default function (pi: ExtensionAPI) {
 		pi.registerShortcut(key, {
 			description: "Expand or collapse the task list",
 			handler: (ctx: ExtensionContext) => toggle(ctx),
+		});
+	}
+
+	for (const key of SHORTCUT_SCROLL_TODOS_DOWN.keys) {
+		pi.registerShortcut(key, {
+			description: "Scroll the task list down one task",
+			handler: (ctx: ExtensionContext) => scrollKeyboard(ctx, 1),
+		});
+	}
+
+	for (const key of SHORTCUT_SCROLL_TODOS_UP.keys) {
+		pi.registerShortcut(key, {
+			description: "Scroll the task list up one task",
+			handler: (ctx: ExtensionContext) => scrollKeyboard(ctx, -1),
 		});
 	}
 }

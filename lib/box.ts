@@ -72,26 +72,43 @@ export function renderScreen(
 	].map((l) => truncateToWidth(l, width, ""));
 }
 
-/** Wrap `rows` (plain or ANSI-colored) into a box. `bgType` = theme bg name (no-op when the theme has no `bg`); `borderColor` = border color.
+/** `renderBoxLines` plus where each input row landed: `starts[i]` is the first line index of
+ *  `rows[i]`. A caller that hit-tests a row (the task list's scroll counters) needs this,
+ *  because a row long enough to wrap occupies more than one line. */
+export function renderBoxRows(
+	theme: BoxTheme | null,
+	width: number,
+	rows: string[],
+	bgType?: string,
+	borderColor = "dim",
+): { lines: string[]; starts: number[] } {
+	const dim = (s: string) => (theme ? theme.fg(borderColor, s) : s);
+	const inner = Math.max(8, width - 4);
+	const lines = [boxEdge("╭", "╮", width, dim)];
+	const starts: number[] = [];
+	for (const row of rows) {
+		starts.push(lines.length);
+		for (const line of wrapTextWithAnsi(row, inner)) lines.push(boxRow(line, width, dim));
+	}
+	lines.push(boxEdge("╰", "╯", width, dim));
+	const paint = (input: string[]) => {
+		if (!bgType || !theme?.bg) return input;
+		try {
+			return input.map((l) => applyBg(l, width, (s) => theme!.bg!(bgType, s)));
+		} catch {
+			return input;
+		}
+	};
+	return { lines: paint(lines), starts };
+}
+
+/** The box around `rows`. `bgType` = theme bg name (no-op when the theme has no `bg`);
+ *  `borderColor` = border color.
  *  `theme` may be null: a box is patched in at module load, before `session_start`
  *  delivers the active theme. An uncolored box for that first frame beats a null
  *  deref that kills the process. */
 export function renderBoxLines(theme: BoxTheme | null, width: number, rows: string[], bgType?: string, borderColor = "dim"): string[] {
-	const dim = (s: string) => (theme ? theme.fg(borderColor, s) : s);
-	const inner = Math.max(8, width - 4);
-	const lines = [boxEdge("╭", "╮", width, dim)];
-	for (const row of rows) {
-		for (const line of wrapTextWithAnsi(row, inner)) lines.push(boxRow(line, width, dim));
-	}
-	lines.push(boxEdge("╰", "╯", width, dim));
-	if (bgType && theme?.bg) {
-		try {
-			return lines.map((l) => applyBg(l, width, (s) => theme!.bg!(bgType, s)));
-		} catch {
-			return lines;
-		}
-	}
-	return lines;
+	return renderBoxRows(theme, width, rows, bgType, borderColor).lines;
 }
 
 if (isMain(import.meta.url)) {

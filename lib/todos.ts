@@ -7,7 +7,7 @@
  * U+F03A (Font Awesome list), so the terminal needs a Nerd Font.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { renderBoxLines } from "./box.ts";
+import { renderBoxLines, renderBoxRows } from "./box.ts";
 import { assert, isMain } from "./check.ts";
 
 export type TodoStatus = "pending" | "in_progress" | "completed";
@@ -32,7 +32,12 @@ export const LIST_ICON = "\uf03a";
 /** Rows the expanded widget shows before it summarizes the rest. */
 export const LIST_ROWS = 5;
 export const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
-export const STATUS_COLOR: Record<TodoStatus, string> = { pending: "muted", in_progress: "accent", completed: "success" };
+/** Token per status. In progress borrows the footer's model-name token (`mdHeading`), so the
+ *  running task is the brightest row in the box, the way the model is the brightest text in
+ *  the footer. */
+export const STATUS_COLOR: Record<TodoStatus, string> = { pending: "dim", in_progress: "mdHeading", completed: "accent" };
+/** Tried when the theme has no such token; pi throws on an unknown color. */
+const STATUS_FALLBACK: Record<TodoStatus, string> = { pending: "dim", in_progress: "accent", completed: "accent" };
 export const HINT_EXPAND = "[click to expand]";
 export const HINT_COLLAPSE = "[click to collapse]";
 /** Longest subject or note kept; longer input is cut so one task cannot fill the box. */
@@ -45,6 +50,19 @@ function fg(theme: FgTheme, color: string, text: string): string {
 	} catch {
 		return text;
 	}
+}
+
+/** The first token the theme knows. A theme that omits `mdHeading` still gets a painted
+ *  glyph instead of a plain one, the same way the footer falls back to accent. */
+function fgOr(theme: FgTheme, colors: string[], text: string): string {
+	for (const color of colors) {
+		try {
+			if (theme?.fg) return theme.fg(color, text);
+		} catch {
+			continue;
+		}
+	}
+	return text;
 }
 
 /** Every task from a stored file, or `null` when the file is not one. Tolerant on fields,
@@ -141,24 +159,29 @@ export interface TodoWindow {
 	above: number;
 	/** Tasks hidden below the window. */
 	below: number;
+	/** Index of the first visible task, the anchor a scroll moves. */
+	start: number;
 }
 
 /**
  * The {@link LIST_ROWS} rows the expanded box shows. The window follows the in-progress task
  * and centres it, so the active work is always on screen; with no task in progress it starts
- * at the top. `above`/`below` feed the `↑ n more` / `↓ n more` rows.
+ * at the top. `top` overrides that start after a scroll; it is clamped to the list, so a click
+ * past either end parks the window at the edge. `above`/`below` feed the `↑ n more` /
+ * `↓ n more` rows.
  */
-export function todoWindow(state: TodoState, rows = LIST_ROWS): TodoWindow {
+export function todoWindow(state: TodoState, rows = LIST_ROWS, top: number | null = null): TodoWindow {
 	const total = state.tasks.length;
-	if (total <= rows) return { visible: state.tasks, above: 0, below: 0 };
+	if (total <= rows) return { visible: state.tasks, above: 0, below: 0, start: 0 };
 	const active = state.tasks.findIndex((task) => task.status === "in_progress");
 	const centre = Math.floor((rows - 1) / 2);
-	const start = active === -1 ? 0 : Math.min(Math.max(active - centre, 0), total - rows);
-	return { visible: state.tasks.slice(start, start + rows), above: start, below: total - start - rows };
+	const follow = active === -1 ? 0 : Math.min(Math.max(active - centre, 0), total - rows);
+	const start = top === null ? follow : Math.min(Math.max(Math.trunc(top), 0), total - rows);
+	return { visible: state.tasks.slice(start, start + rows), above: start, below: total - start - rows, start };
 }
 
 /** Content rows of the widget box (no frame): one row collapsed, heading + tasks expanded. */
-export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, width: number): string[] {
+export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, width: number, top: number | null = null): string[] {
 	const fit = (line: string) => truncateToWidth(line, Math.max(0, width - 4), "…");
 	// The hint is how the box gets opened, so it survives and the text before it gives way.
 	const withHint = (text: string, hint: string): string => {
@@ -166,17 +189,17 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 		const room = Math.max(0, width - 4 - visibleWidth(painted) - 1);
 		return fit(`${truncateToWidth(text, room, "…")} ${painted}`);
 	};
-	const icon = fg(theme, "dim", LIST_ICON);
+	const icon = fg(theme, "accent", LIST_ICON);
 	if (!expanded) return [withHint(`${icon} ${collapsedText(state)}`, HINT_EXPAND)];
 
-	const { visible, above, below } = todoWindow(state);
+	const { visible, above, below } = todoWindow(state, LIST_ROWS, top);
 	const rows = [withHint(`${icon} ${headingText(state)}`, HINT_COLLAPSE)];
 	if (above > 0) rows.push(fg(theme, "dim", `↑ ${above} more`));
 	visible.forEach((task, index) => {
 		// The last row closes the branch only when nothing is summarized below it.
 		const last = index === visible.length - 1 && below === 0;
 		const branch = fg(theme, "dim", last ? "└─" : "├─");
-		const glyph = fg(theme, STATUS_COLOR[task.status], STATUS_GLYPH[task.status]);
+		const glyph = fgOr(theme, [STATUS_COLOR[task.status], STATUS_FALLBACK[task.status]], STATUS_GLYPH[task.status]);
 		const note = task.note && task.status === "in_progress" ? ` ${fg(theme, "dim", `· ${task.note}`)}` : "";
 		rows.push(fit(`${branch} ${glyph} ${task.subject}${note}`));
 	});
@@ -186,10 +209,35 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 
 /** The widget as pi renders it: the arnative box around {@link widgetRows}. Never taller than
  *  pi's own 10-line widget budget (frame 2 + heading 1 + 5 rows + 2 summary rows). */
-export const renderTodoBox = (theme: FgTheme, state: TodoState, expanded: boolean, width: number): string[] =>
-	renderBoxLines(theme, width, widgetRows(theme, state, expanded, width));
+export const renderTodoBox = (theme: FgTheme, state: TodoState, expanded: boolean, width: number, top: number | null = null): string[] =>
+	renderBoxLines(theme, width, widgetRows(theme, state, expanded, width, top));
 
-/** Parent system-font label for a status, kept next to the glyph so the two cannot drift. */
+export interface TodoLayout {
+	/** The whole widget, frame included: what pi paints above the editor. */
+	lines: string[];
+	/** Row of the `↑ n more` line, or null when nothing is hidden above it. The counters are
+	 *  the click targets that scroll the five-row window. */
+	up: number | null;
+	/** Row of the `↓ n more` line, or null when nothing is hidden below it. */
+	down: number | null;
+}
+
+/** {@link renderTodoBox} plus the row numbers of the two counter lines. A mouse handler needs
+ *  them, since those lines are the click targets that scroll the five-row window; the numbers
+ *  come from the box renderer, so a wrapped row cannot shift the hit area. */
+export function todoLayout(theme: FgTheme, state: TodoState, expanded: boolean, width: number, top: number | null = null): TodoLayout {
+	const { above, below } = todoWindow(state, LIST_ROWS, top);
+	const rows = widgetRows(theme, state, expanded, width, top);
+	const { lines, starts } = renderBoxRows(theme, width, rows);
+	// Content row 1 is `↑ n more`; the last content row is `↓ n more`.
+	const at = (contentRow: number): number => starts[contentRow] ?? Math.max(0, lines.length - 1);
+	return {
+		lines,
+		up: expanded && above > 0 ? at(1) : null,
+		down: expanded && below > 0 ? at(rows.length - 1) : null,
+	};
+}
+
 /** The word the widget and the recap use for a status (`pending` reads as `queued`,
  *  the word the summary line counts). */
 export const statusText = (status: TodoStatus): string =>

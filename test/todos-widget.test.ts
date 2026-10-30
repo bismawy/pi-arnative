@@ -119,7 +119,11 @@ test("a click below the box belongs to the editor", () => {
 test("the shortcut is the keyboard path", () => {
 	const { component } = widget();
 	const keys = [...shortcuts.keys()];
-	assert.deepEqual(keys, ["ctrl+alt+o", "alt+o"], `shortcut keys, got ${keys}`);
+	assert.deepEqual(
+		keys,
+		["ctrl+alt+o", "alt+o", "ctrl+alt+j", "alt+j", "ctrl+alt+k", "alt+k"],
+		`shortcut keys, got ${keys}`,
+	);
 	const collapsed = component.render(80).length;
 	shortcuts.get("alt+o")!.handler(ctx);
 	assert.ok(component.render(80).length > collapsed, "the shortcut expands the box");
@@ -142,13 +146,59 @@ test("the list survives a reload", async () => {
 	assert.ok(widget().component.render(80)[1]!.includes("Dua"), "the active task is the one that was active");
 });
 
+test("the counters scroll the window, by click and by key", async () => {
+	// Six more tasks, so the five-row window has to leave something out.
+	await call({ action: "create", tasks: [4, 5, 6, 7, 8, 9].map((n) => ({ subject: `Task ${n}` })) });
+	const { component } = widget();
+	shortcuts.get("alt+o")!.handler(ctx);
+
+	// The subjects of the five rows on screen, in order.
+	const shown = (lines: string[]): string[] =>
+		lines
+			.map((line) => line.match(/[├└]─ . (.+)$/)?.[1]?.replace(/[\s│]+$/, ""))
+			.filter((subject): subject is string => Boolean(subject));
+	const top = component.render(80);
+	const down = top.findIndex((line) => line.includes("↓"));
+	assert.ok(down > 0, "the box counts the tasks below it");
+	assert.deepEqual(shown(top).map((s) => s.split(" ·")[0]), ["Satu", "Dua", "Tiga", "Task 4", "Task 5"], "the window starts at the top");
+
+	click(component, down);
+	const scrolled = component.render(80);
+	assert.deepEqual(
+		shown(scrolled).map((s) => s.split(" ·")[0]),
+		["Dua", "Tiga", "Task 4", "Task 5", "Task 6"],
+		"a click on ↓ moved the window down one task",
+	);
+
+	// The keyboard path, for regular mode where pi hands the mouse to the terminal.
+	shortcuts.get("alt+j")!.handler(ctx);
+	assert.equal(shown(component.render(80))[0]!.split(" ·")[0], "Tiga", "alt+j scrolls down");
+	shortcuts.get("alt+k")!.handler(ctx);
+	assert.deepEqual(shown(component.render(80)), shown(scrolled), "alt+k scrolls back up");
+
+	// Clicking ↑ works too, and parks at the top instead of running off it.
+	click(component, component.render(80).findIndex((line) => line.includes("↑")));
+	assert.deepEqual(shown(component.render(80)).map((s) => s.split(" ·")[0]), ["Satu", "Dua", "Tiga", "Task 4", "Task 5"], "a click on ↑ moved back");
+	assert.ok(!component.render(80).some((line) => line.includes("↑")), "at the top there is no ↑ counter left to click");
+
+	// Past the end the window parks instead of drifting, so the last task stays visible.
+	for (let i = 0; i < 20; i++) shortcuts.get("alt+j")!.handler(ctx);
+	const tail = component.render(80);
+	assert.ok(tail.some((line) => line.includes("Task 9")), "the last task is reachable");
+	assert.ok(!tail.some((line) => line.includes("↓")), "nothing is left below the last window");
+
+	// A mutation brings the view back to the active task.
+	await call({ action: "update", id: 2, status: "in_progress" });
+	assert.ok(component.render(80).some((line) => line.includes("Dua")), "the active task is back on screen");
+});
+
 test("/todos shows the recap in the screen chrome", async () => {
 	screen = undefined;
 	await commands.get("todos")!.handler("", ctx);
 	assert.ok(screen, "the recap screen opens");
 	assert.equal(notices.length, 0, "the TUI path shows a screen, not a notice");
 	const box = screen!.render(80);
-	assert.ok(box.some((line) => line.includes("3 tasks · 1 in progress · 2 queued · 0 done")), "the summary line counts every state");
+	assert.ok(box.some((line) => line.includes("9 tasks · 1 in progress · 8 queued · 0 done")), "the summary line counts every state");
 	assert.ok(box.some((line) => line.includes("◉ Dua")), "the active task leads the screen");
 	// Colour goes through the theme object, never a hardcoded escape: the tokens above are the ones
 	// the picker asks for, so a theme switch repaints the screen.

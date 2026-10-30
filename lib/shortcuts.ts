@@ -37,6 +37,9 @@ export const SHORTCUT_RELOAD = build("r");
 export const SHORTCUT_TOGGLE_FOOTER = build("m");
 /** Expand/collapse the task list widget. Same platform split: Alt+o on Windows/WSL. */
 export const SHORTCUT_TOGGLE_TODOS = build("o");
+/** Scroll the expanded task list: `j` down, `k` up, one task per press. */
+export const SHORTCUT_SCROLL_TODOS_DOWN = build("j");
+export const SHORTCUT_SCROLL_TODOS_UP = build("k");
 
 /** The one "go back" key: `←` leaves a screen for its parent, while Esc closes or reverts
  *  it. Defined here so no screen can advertise a key another screen does not handle. */
