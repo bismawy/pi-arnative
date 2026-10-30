@@ -190,7 +190,10 @@ export const renderTodoBox = (theme: FgTheme, state: TodoState, expanded: boolea
 	renderBoxLines(theme, width, widgetRows(theme, state, expanded, width));
 
 /** Parent system-font label for a status, kept next to the glyph so the two cannot drift. */
-export const statusText = (status: TodoStatus): string => (status === "in_progress" ? "in progress" : status);
+/** The word the widget and the recap use for a status (`pending` reads as `queued`,
+ *  the word the summary line counts). */
+export const statusText = (status: TodoStatus): string =>
+	status === "in_progress" ? "in progress" : status === "pending" ? "queued" : status;
 
 /** `/todos` recap: in progress first, then the queue, then what is done. */
 export function recapRows(state: TodoState): { label: string; note: string }[] {

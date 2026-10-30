@@ -71,6 +71,7 @@ test("the recap groups by status", () => {
 		"in progress first, then queued, then done",
 	);
 	assert.equal(recapRows(state)[0]!.note, "in progress · sedang jalan", "the active row carries its note");
+	assert.equal(recapRows(state)[1]!.note, "queued", "a waiting row reads as queued, the word the summary counts");
 	assert.equal(recapSummary(state), "3 tasks · 1 in progress · 1 queued · 1 done", "one summary line");
 });
 
