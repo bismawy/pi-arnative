@@ -76,9 +76,9 @@ test("the icon is accent, and each status has its own token", () => {
 	assert.ok(rows[0]!.includes(`[accent]${LIST_ICON}`), `the heading icon is accent, got ${rows[0]}`);
 	assert.ok(rows[0]!.includes("[accentSoft]Todos (1/3)"), `the count is soft accent, got ${rows[0]}`);
 	assert.ok(rows[1]!.includes("[accent]✓"), "a done glyph is accent");
-	assert.ok(rows[1]!.includes("[accentSoft]Task 1"), `a done subject is soft accent, got ${rows[1]}`);
+	assert.ok(rows[1]!.includes("[text]Task 1") && !rows[1]!.includes("[accentSoft]Task 1"), `a done subject is plain text, got ${rows[1]}`);
 	assert.ok(rows[2]!.includes("[mdHeading]◉"), "the running task borrows the footer model-name colour");
-	assert.ok(rows[2]!.includes("[text]Task 2"), "the running subject keeps the plain text colour");
+	assert.ok(rows[2]!.includes("[accentSoft]Task 2"), `the running subject takes the soft accent, got ${rows[2]}`);
 	assert.ok(rows[2]!.includes("[dim]· sedang jalan"), "its note stays dim");
 	assert.ok(rows[3]!.includes("[dim]◌"), "a queued glyph is dim");
 	assert.ok(rows[3]!.includes("[dim]Task 3"), "a queued subject is dim too");

@@ -33,9 +33,9 @@ export const LIST_ICON = "\uf03a";
 /** Rows the expanded widget shows before it summarizes the rest. */
 export const LIST_ROWS = 5;
 export const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
-/** Token for the task text itself. The task in progress keeps the plain text colour, so the
- *  running row stays the brightest; the soft accent is applied separately (it is derived, not
- *  a token a theme can resolve). */
+/** Token for the task text itself. Queued recedes to dim and a done task reads as ordinary
+ *  text; the task in progress takes the soft accent, which is derived rather than a token (see
+ *  `softOf`), so it is painted separately. */
 export const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_progress: "text", completed: "text" };
 /** Token per status. In progress borrows the footer's model-name token (`mdHeading`), so the
  *  running task is the brightest row in the box, the way the model is the brightest text in
@@ -219,9 +219,9 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 		const last = index === visible.length - 1 && below === 0;
 		const branch = fg(theme, "dim", last ? "└─" : "├─");
 		const glyph = fgOr(theme, [STATUS_COLOR[task.status], STATUS_FALLBACK[task.status]], STATUS_GLYPH[task.status]);
-		// The subject carries the state too: done recedes into the soft accent, queued goes dim,
-		// and the task in progress keeps the plain text colour so it stays the brightest row.
-		const subject = task.status === "completed" ? soft(task.subject) : fg(theme, STATUS_TEXT[task.status], task.subject);
+		// The subject carries the state too: the work in progress takes the soft accent, queued
+		// recedes into dim, and a finished task reads as plain text.
+		const subject = task.status === "in_progress" ? soft(task.subject) : fg(theme, STATUS_TEXT[task.status], task.subject);
 		const note = task.note && task.status === "in_progress" ? ` ${fg(theme, "dim", `· ${task.note}`)}` : "";
 		rows.push(fit(`${branch} ${glyph} ${subject}${note}`));
 	});
