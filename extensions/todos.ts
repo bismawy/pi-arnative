@@ -13,16 +13,19 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { assert, isMain } from "../lib/check.ts";
-import { screenTitle } from "../lib/box.ts";
+import { inSpans, screenTitle, type TextSpan, textSpans } from "../lib/box.ts";
 import { ListPicker, type ListPickerText } from "../lib/list-picker.ts";
 import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../lib/shortcuts.ts";
 import {
+	HINT_COLLAPSE,
+	HINT_EXPAND,
 	LIST_STATUSES,
 	addTodo,
 	allDone,
 	clearTodos,
 	countTodos,
 	emptyTodos,
+	actionWord,
 	listRowsFor,
 	normalizeState,
 	patchTodo,
@@ -140,8 +143,10 @@ export function runTodo(params: Record<string, unknown>) {
 		}
 		if (added.length === 0) return fail("create needs a subject or a non-empty tasks list");
 		const label = added.length === 1 ? "task" : "tasks";
-		const subject = s.state.tasks.filter((task) => added.includes(task.id)).map((task) => task.subject).join(", ");
-		return { content: [{ type: "text" as const, text: `Added ${added.length} ${label}: #${added.join(", #")}` }], details: { state: s.state, subject } };
+		return {
+			content: [{ type: "text" as const, text: `Added ${added.length} ${label}: #${added.join(", #")}` }],
+			details: { state: s.state, detail: actionWord(action) },
+		};
 	}
 
 	if (action === "update") {
@@ -157,7 +162,7 @@ export function runTodo(params: Record<string, unknown>) {
 		s.state = next;
 		return {
 			content: [{ type: "text" as const, text: `Updated #${id}` }],
-			details: { state: s.state, subject: s.state.tasks.find((task) => task.id === id)?.subject ?? "" },
+			details: { state: s.state, detail: actionWord(action, status) },
 		};
 	}
 
@@ -165,16 +170,15 @@ export function runTodo(params: Record<string, unknown>) {
 		if (id === undefined) return fail("delete needs id");
 		const next = removeTodo(s.state, id);
 		if (!next) return fail(`no task with id ${id}`);
-		const subject = s.state.tasks.find((task) => task.id === id)?.subject ?? "";
 		s.state = next;
-		return { content: [{ type: "text" as const, text: `Removed #${id}` }], details: { state: s.state, subject } };
+		return { content: [{ type: "text" as const, text: `Removed #${id}` }], details: { state: s.state, detail: actionWord(action) } };
 	}
 
 	if (action === "clear") {
 		const removed = s.state.tasks.length;
 		s.state = clearTodos(s.state);
 		const label = removed === 1 ? "task" : "tasks";
-		return { content: [{ type: "text" as const, text: `Cleared ${removed} ${label}` }], details: { state: s.state } };
+		return { content: [{ type: "text" as const, text: `Cleared ${removed} ${label}` }], details: { state: s.state, detail: actionWord(action) } };
 	}
 
 	if (action === "list") {
@@ -182,7 +186,7 @@ export function runTodo(params: Record<string, unknown>) {
 			const note = task.note && task.status === "in_progress" ? ` · ${task.note}` : "";
 			return `#${task.id} [${task.status}] ${task.subject}${note}`;
 		});
-		return { content: [{ type: "text" as const, text: lines.length > 0 ? lines.join("\n") : "The list is empty" }], details: { state: s.state } };
+		return { content: [{ type: "text" as const, text: lines.length > 0 ? lines.join("\n") : "The list is empty" }], details: { state: s.state, detail: actionWord(action) } };
 	}
 
 	return fail(`unknown action: ${action}`);
@@ -207,6 +211,8 @@ function refresh(ctx: ExtensionContext, force = false): void {
 			s.tui = tui;
 			let height = 0;
 			let layout: ReturnType<typeof todoLayout> = { lines: [], up: null, down: null };
+			/** Cells of the hint in the drawn box: the only place a press expands or folds it. */
+			let spans: TextSpan[] = [];
 			/** Move the five-row window by `delta` rows and repaint. `top` stays absolute, so the
 			 *  window parks at the end of the list instead of drifting. */
 			const scroll = (delta: number): void => {
@@ -224,13 +230,18 @@ function refresh(ctx: ExtensionContext, force = false): void {
 						thinking: ctx.thinkingLevel,
 					});
 					height = layout.lines.length;
+					spans = textSpans(layout.lines, s.expanded ? HINT_COLLAPSE : HINT_EXPAND);
 					return layout.lines;
 				},
 				invalidate: (): void => {},
-				// The whole box is the click target: the counter rows scroll the window, a click
-				// anywhere else expands the box, and the next click collapses it.
+				// Two click targets, both drawn as affordances: the hint text expands or folds the
+				// box, and the counter rows scroll the window. Every other cell is left to pi, so
+				// the task names stay selectable and copyable.
 				handleMouse: (event: TuiMouseEvent) => {
 					if (event.button !== "left" || event.y >= height) return undefined;
+					const onHint = inSpans(spans, event.y, event.x);
+					const onCounter = event.y === layout.up || event.y === layout.down;
+					if (!onHint && !onCounter) return undefined;
 					if (event.type === "press") return { handled: true, render: false };
 					if (event.type !== "click") return undefined;
 					if (event.y === layout.up) {

@@ -38,8 +38,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
-import { renderBoxLines as box } from "../lib/box.ts";
+import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../lib/box.ts";
 import { stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
+import { actionWord } from "../lib/todos.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { expandKeyName } from "../lib/format.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
@@ -191,9 +192,13 @@ export function toolSummary(name: string, text: string, args?: any): string {
 	return title ? `${head}. ${title}` : head;
 }
 
-// Expand hint `[ctrl+o to expand]` (key text follows the active keybinding).
+// Expand hint `[ctrl+o to expand]` (key text follows the active keybinding). This text is
+// also the click target: see HINT_SPANS below.
+export function expandHintPlain(): string {
+	return `[${expandKeyName()} to expand]`;
+}
 export function expandHint(th: Theme): string {
-	return th.fg("dim", `[${expandKeyName()} to expand]`);
+	return th.fg("dim", expandHintPlain());
 }
 
 // Expanded detail: themed markdown (same layout as a normal pi message — code
@@ -247,6 +252,17 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 	return [...head, ...lines.slice(firstImage)];
 }
 
+// Per box: did this module strip the blank rows above it? Those rows shift every mouse
+// row index, so a press on the border and the title row is found at 0 and 1 only for a
+// stripped box. `Symbol.for` keeps the state across the re-import a `/reload` performs.
+// Cells of the expand hint in this box's own drawn lines. The hint is the whole click
+// target: every other cell of the box keeps pi's text selection, so the output stays
+// copyable. Recomputed on every render, because the label moves with the width and the key.
+const HINT_SPANS = Symbol.for("pi-arnative.toolBoxHintSpans");
+// A press already toggled this box; the release and the synthesized click that follow it
+// must not toggle it a second time.
+const PRESS_TOGGLED = Symbol.for("pi-arnative.toolBoxPressToggled");
+
 // The patches below reinstall on every module load (pi's /reload re-evaluates the
 // extension in the same process), so a UI fix applies without restarting pi; see
 // lib/patch.ts for the originals/mark bookkeeping that makes that safe.
@@ -255,9 +271,39 @@ if (ToolExecutionComponent?.prototype?.render) {
 	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
 	proto.render = markPatched(function (this: any, width: number): string[] {
 		const lines = origRender.call(this, width);
-		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
-			? stripEdgesKeepingImages(lines)
-			: lines;
+		const stripped = OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this);
+		const drawn = stripped ? stripEdgesKeepingImages(lines) : lines;
+		// Only a box this module laid out is measured here; a renderer pi owns keeps pi's
+		// own mouse path, since its row offsets come from a layout it did not show us.
+		this[HINT_SPANS] = stripped ? textSpans(drawn, expandHintPlain()) : [];
+		return drawn;
+	});
+
+	// Click to expand, on the hint text alone. pi toggles on the "click" it synthesizes from
+	// a press and a release at the same cell, so a one-cell drift made the hint look inert,
+	// and the stripped row above the box left its top border dead. A left press on the hint
+	// toggles at once and the release plus the click that follow are swallowed; the click
+	// clears the flag, not the release, or that click would toggle the box back. Any other
+	// cell is left to pi: a press there starts a selection, so the output can be copied.
+	const origMouse = originalOf<(this: any, event: any) => any>(proto, "handleMouse");
+	proto.handleMouse = markPatched(function (this: any, event: any): any {
+		const onHint = (this[HINT_SPANS] as TextSpan[] | undefined)?.length
+			? inSpans(this[HINT_SPANS] as TextSpan[], event.y, event.x)
+			: false;
+		if (onHint && event.type === "press" && event.button === "left") {
+			// A child of the box (an image preview) keeps its own press.
+			const childHit = origMouse.call(this, event);
+			if (childHit) return childHit;
+			if (!this.result) return undefined;
+			this.setExpanded(!this.expanded);
+			this[PRESS_TOGGLED] = true;
+			return { handled: true, render: true };
+		}
+		if (this[PRESS_TOGGLED] && (event.type === "release" || event.type === "click")) {
+			if (event.type === "click") this[PRESS_TOGGLED] = false;
+			return { handled: true, render: false };
+		}
+		return origMouse.call(this, event);
 	});
 }
 
@@ -426,7 +472,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 					th,
 					icon,
 					th.fg("accent", displayName(name)),
-					name === "todo" ? todoTitleDetail(th, softSecondaryOf(th), args?.subject) : mcpInfo(name, args, th),
+					name === "todo" ? todoTitleDetail(th, softSecondaryOf(th), actionWord(args?.action, args?.status)) : mcpInfo(name, args, th),
 					inner,
 					"",
 					false,
@@ -482,7 +528,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 					icon,
 					th.fg("accent", displayName(name)),
 					name === "todo"
-						? todoTitleDetail(th, soft, (result.details as { subject?: unknown } | undefined)?.subject)
+						? todoTitleDetail(th, soft, (result.details as { detail?: unknown } | undefined)?.detail)
 						: mcpInfo(name, ctx.args, th),
 					inner,
 					"",
@@ -503,11 +549,12 @@ if (ToolExecutionComponent?.prototype?.render) {
 	});
 }
 
-/** `todo · Tulis widget`: the task the call touched, so the title says what changed and not just
- *  which tool ran. The name takes the soft accent tier, the dot stays dim. */
-function todoTitleDetail(th: Theme, soft: (s: string) => string, subject: unknown): string {
-	const name = typeof subject === "string" ? subject.trim() : "";
-	return name ? `${th.fg("dim", "·")} ${soft(name)}` : "";
+/** `todo · completed`: the status the call left behind (or its action word), so the title says
+ *  what happened and not just which tool ran. The word takes the soft accent tier, the dot stays
+ *  dim. */
+function todoTitleDetail(th: Theme, soft: (s: string) => string, word: unknown): string {
+	const text = typeof word === "string" ? word.trim() : "";
+	return text ? `${th.fg("dim", "·")} ${soft(text)}` : "";
 }
 
 // todo line format: \uf14a icon (success color) in the title, resHead prefix on the status line.
@@ -956,17 +1003,17 @@ if (isMain(import.meta.url)) {
 			noDefOut.some((l: string) => l.includes('[ctrl+o to expand]')),
 		"tool without a definition: title + summary + expand hint",
 	);
-	// todo (this package's own tool, no renderers): the title names the task the call touched.
+	// todo (this package's own tool, no renderers): the title says what the call left behind.
 	const todoNoRenderer = { toolName: "todo", toolDefinition: {} };
 	const todoBox = (ToolExecutionComponent.prototype.getResultRenderer.call(todoNoRenderer) as any)(
-		{ content: [{ type: "text", text: "Updated #1" }], details: { subject: "Tulis widget" } },
+		{ content: [{ type: "text", text: "Updated #1" }], details: { detail: "completed" } },
 		{ expanded: false, isPartial: false },
 		th,
-		{ args: { action: "update", id: 1 }, state: {} },
+		{ args: { action: "update", id: 1, status: "completed" }, state: {} },
 	).render(60);
 	assert(
-		todoBox.some((l: string) => l.includes("todo · Tulis widget")),
-		`todo result: the title names the task, got ${todoBox.find((l: string) => l.includes("todo"))}`,
+		todoBox.some((l: string) => l.includes("todo · completed")),
+		`todo result: the title names the status, got ${todoBox.find((l: string) => l.includes("todo"))}`,
 	);
 	assert(todoBox.some((l: string) => l.includes("Updated #1")), "todo result: the status line keeps the result text");
 	const todoPending = (ToolExecutionComponent.prototype.getCallRenderer.call(todoNoRenderer) as any)(
@@ -974,7 +1021,11 @@ if (isMain(import.meta.url)) {
 		th,
 		{ state: {}, args: {} },
 	).render(60);
-	assert(todoPending.some((l: string) => l.includes("todo · Tulis widget")), "todo call: the title names the new task");
+	assert(todoPending.some((l: string) => l.includes("todo · created")), "todo call: the title names the action");
+	assert(
+		!todoBox.some((l: string) => l.includes("·") && l.includes("Tulis widget")),
+		"todo: the task name stays on the status line, not in the title",
+	);
 	// Generic predicate: any tool that ships its own renderers and no `renderShell: "self"`
 	// is boxed — no name list to maintain for new extensions.
 	const withRenderer = { toolName: "bash", toolDefinition: { renderResult: () => undefined } };
@@ -1462,6 +1513,74 @@ if (isMain(import.meta.url)) {
 	assert(cdpExpanded.some((l) => l.includes('"pageId": "p1"')), "chrome-devtools: expanded shows the full tool output");
 	assert(cdpCollapsed.some((l) => l.includes("navigated") && l.includes("to expand")), "chrome-devtools: collapsed shows the first line + hint");
 	assert([...cdpCollapsed, ...cdpExpanded].every((l) => visibleWidth(l) === 74), "chrome-devtools: box fills the given width");
+	// Mouse on a tool box: the strip patch removes the blank rows above the box AFTER
+	// pi laid out its mouse regions, so a click used to land one row high and the top
+	// border was dead. pi also drops the click when the pointer drifts one cell.
+	const mouseBox = () => {
+		const c: any = new ToolExecutionComponent("mouse_probe", "1", {}, {}, {}, { requestRender: () => undefined }, cwd);
+		c.updateResult({ content: [{ type: "text", text: "one\ntwo\nthree" }] }, false);
+		// Render before any event: pi only hit-tests a click against a box it has measured.
+		c.render(60);
+		return c;
+	};
+	// Height comes from the box as drawn, the same number pi puts in the event.
+	const mouse = (c: any, type: string, y: number, x = 5): any =>
+		c.handleMouse({
+			type,
+			button: "left",
+			x,
+			y,
+			screenX: x,
+			screenY: y,
+			width: 60,
+			height: (c.render(60) as string[]).length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+	const click = (c: any, y: number, x = 5) => {
+		mouse(c, "press", y, x);
+		mouse(c, "release", y, x);
+		mouse(c, "click", y, x);
+	};
+	const spans = (c: any) => textSpans(c.render(60) as string[], "[ctrl+o to expand]");
+	const probeLines = mouseBox().render(60) as string[];
+	assert(
+		probeLines.length === 4 && stripAnsi(probeLines[0]!).startsWith("╭"),
+		"mouse probe: 4 rows, blank edges stripped",
+	);
+	{
+		const box = mouseBox();
+		const [hint] = spans(box);
+		assert(hint !== undefined, "mouse: the drawn box carries the hint span");
+		const x = hint!.start + 1;
+		click(box, hint!.row, x);
+		assert(box.expanded === true, "mouse: a click on the hint expands");
+		click(box, hint!.row, x);
+		assert(box.expanded === false, "mouse: the next click on the hint collapses");
+	}
+	{
+		// A one-cell drift used to swallow the click: the press toggles, so it cannot.
+		const box = mouseBox();
+		const [hint] = spans(box);
+		const x = hint!.start + 1;
+		mouse(box, "press", hint!.row, x);
+		mouse(box, "move", hint!.row, x + 1);
+		mouse(box, "release", hint!.row, x + 1);
+		assert(box.expanded === true, "mouse: a one-cell drift on the hint still expands");
+		mouse(box, "click", hint!.row, x + 1);
+		assert(box.expanded === true, "mouse: the swallowed click does not toggle twice");
+	}
+	{
+		// Every cell off the hint stays with pi, which is what keeps the output copyable.
+		const box = mouseBox();
+		const taken = mouse(box, "press", 2, 6);
+		assert(taken === undefined && box.expanded === false, "mouse: a press off the hint is left to pi (text selection)");
+		mouse(box, "move", 2, 14);
+		mouse(box, "release", 2, 14);
+		assert(box.expanded === false, "mouse: a drag over the output does not expand the box");
+	}
+
 	// Capped timings map self-check
 	for (let i = 0; i < 250; i++) recordTiming(`call_${i}`, i);
 	assert(TIMINGS.size === MAX_TIMINGS, `TIMINGS size is bounded to ${MAX_TIMINGS}`);

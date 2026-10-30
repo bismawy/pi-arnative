@@ -306,6 +306,27 @@ export function todoLayout(
 export const statusText = (status: TodoStatus): string =>
 	status === "in_progress" ? "in progress" : status === "pending" ? "queued" : status;
 
+/** The word after `todo ·` in the tool box title: the status a task moved to, or the action when
+ *  the call changed no status (`created`, `removed`, `cleared`, `list`, `updated`). Empty when
+ *  neither is known, so the title keeps a clean `todo`. */
+export function actionWord(action: unknown, status?: unknown): string {
+	if (typeof status === "string" && LIST_STATUSES.includes(status as TodoStatus)) return status;
+	switch (action) {
+		case "create":
+			return "created";
+		case "update":
+			return "updated";
+		case "delete":
+			return "removed";
+		case "clear":
+			return "cleared";
+		case "list":
+			return "list";
+		default:
+			return "";
+	}
+}
+
 /** `/todos` recap: in progress first, then the queue, then what is done. */
 export function recapRows(state: TodoState): { label: string; note: string }[] {
 	const order: Record<TodoStatus, number> = { in_progress: 0, pending: 1, completed: 2 };
@@ -437,6 +458,12 @@ if (isMain(import.meta.url)) {
 	assert(loaded!.tasks[0]!.subject === "Kedua" && loaded!.tasks[0]!.note === "sedang jalan", "fields are tidied");
 	assert(loaded!.tasks[1]!.status === "pending", "an unknown status falls back to pending");
 	assert(loaded!.nextId === 10, "nextId follows the highest stored id");
+
+	// The tool box title: status when a task moved, action word otherwise.
+	assert(actionWord("update", "completed") === "completed", "a known status wins over the action word");
+	assert(actionWord("update", "selesai") === "updated", "an unknown status falls back to the action");
+	assert(actionWord("create") === "created" && actionWord("delete") === "removed", "create and delete read as past tense");
+	assert(actionWord("list") === "list" && actionWord("nonsense") === "", "list keeps its name, an unknown action says nothing");
 
 	console.log("todos.ts self-check OK");
 }

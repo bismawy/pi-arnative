@@ -42,19 +42,28 @@ const render = async (args: unknown, result: unknown): Promise<string[]> => {
 
 const run = (args: unknown) => definition.execute("call-1", args, undefined, undefined, ctx);
 
-test("the todo box names the task it changed", async () => {
+test("the todo box names the status it left behind", async () => {
 	await run({ action: "create", tasks: [{ subject: "Rilis 0.9.0" }] });
 	const result = await run({ action: "update", id: 1, status: "in_progress" });
 	const lines = await render({ action: "update", id: 1, status: "in_progress" }, result);
 
-	assert.ok(lines[1]!.includes("todo · Rilis 0.9.0"), `the title names the task, got ${lines[1]}`);
+	assert.ok(lines[1]!.includes("todo · in_progress"), `the title names the new status, got ${lines[1]}`);
 	assert.ok(lines[2]!.includes("Updated #1"), "the status line keeps the result text");
 });
 
-test("a call with no subject keeps a clean title", async () => {
-	const result = await run({ action: "clear" });
-	const lines = await render({ action: "clear" }, result);
+test("a call that changes no status falls back to its action word", async () => {
+	const listed = await run({ action: "list" });
+	const lines = await render({ action: "list" }, listed);
+	assert.ok(lines[1]!.includes("todo · list"), `list names itself, got ${lines[1]}`);
+
+	const created = await render({ action: "create", tasks: [{ subject: "Rilis 0.9.0" }] }, await run({ action: "create", tasks: [{ subject: "Rilis 0.9.0" }] }));
+	assert.ok(created[1]!.includes("todo · created"), `create reads as past tense, got ${created[1]}`);
+});
+
+test("a failed call keeps a clean title", async () => {
+	const result = await run({ action: "update" });
+	const lines = await render({ action: "update" }, result);
 
 	assert.ok(lines[1]!.includes("todo"), `the title keeps the tool name, got ${lines[1]}`);
-	assert.ok(!lines[1]!.includes("·"), `no dangling dot without a task, got ${lines[1]}`);
+	assert.ok(!lines[1]!.includes("·"), `no dangling dot when nothing happened, got ${lines[1]}`);
 });
