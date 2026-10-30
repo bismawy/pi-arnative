@@ -55,7 +55,7 @@ The `todo` tool, a boxed widget above the editor and the `/todos` screen. This p
 
 - Collapsed, the widget is one row: `\uf03a Todos (3/7) · Tulis widget [click to expand]`.
 - Expanded, it shows five rows around the task in progress, with `↑ n more` and `↓ n more` for the rest.
-- The heading icon is accent. `✓` done is accent, `◉` in progress takes the footer's model-name colour (`mdHeading`, accent when a theme omits it), `◌` queued is dim, and the in-progress note follows the task in dim.
+- The heading icon is accent and the count beside it is soft accent. `✓` done is accent, `◉` in progress takes the footer's model-name colour (`mdHeading`, accent when a theme omits it), `◌` queued is dim, and the in-progress note follows the task in dim.
 - Click a counter row to scroll the window one task; `alt+j` / `alt+k` do the same from the keyboard, which is the only path in regular mode.
 - Click the box to expand or collapse in fullscreen mode; `alt+o` (`ctrl+alt+o` elsewhere) works in every mode.
 - The list is per session, kept in `~/.pi/agent/arnative/todos/<session id>.json`.

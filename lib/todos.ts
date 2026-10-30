@@ -7,6 +7,7 @@
  * U+F03A (Font Awesome list), so the terminal needs a Nerd Font.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { softOf } from "./ansi.ts";
 import { renderBoxLines, renderBoxRows } from "./box.ts";
 import { assert, isMain } from "./check.ts";
 
@@ -26,7 +27,7 @@ export interface TodoState {
 	nextId: number;
 }
 
-export type FgTheme = { fg?(color: string, text: string): string } | null;
+export type FgTheme = { fg?(color: string, text: string): string; style?(text: string, options: { fg: unknown }): string; colors?: Record<string, { kind?: string; c?: number; h?: number }> } | null;
 
 export const LIST_ICON = "\uf03a";
 /** Rows the expanded widget shows before it summarizes the rest. */
@@ -190,10 +191,15 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 		return fit(`${truncateToWidth(text, room, "…")} ${painted}`);
 	};
 	const icon = fg(theme, "accent", LIST_ICON);
-	if (!expanded) return [withHint(`${icon} ${collapsedText(state)}`, HINT_EXPAND)];
+	// The count is a label, so it takes the soft accent tier the footer labels use, while the
+	// task name after the dot stays in the text colour.
+	const soft = softOf(theme);
+	const heading = (state: TodoState): string => `${icon} ${soft(headingText(state))}`;
+	const active = activeTodo(state);
+	if (!expanded) return [withHint(`${heading(state)}${active ? ` · ${active.subject}` : ""}`, HINT_EXPAND)];
 
 	const { visible, above, below } = todoWindow(state, LIST_ROWS, top);
-	const rows = [withHint(`${icon} ${headingText(state)}`, HINT_COLLAPSE)];
+	const rows = [withHint(heading(state), HINT_COLLAPSE)];
 	if (above > 0) rows.push(fg(theme, "dim", `↑ ${above} more`));
 	visible.forEach((task, index) => {
 		// The last row closes the branch only when nothing is summarized below it.
@@ -263,10 +269,13 @@ export function recapSummary(state: TodoState): string {
 // Self-check: `node lib/todos.ts`
 if (isMain(import.meta.url)) {
 	const th: FgTheme = { fg: (_color, text) => text };
+	// Writes the token down, so the self-check can name the colour a piece was painted with.
+	const marked: FgTheme = { fg: (color, text) => `[${color}]${text}` };
 
 	let state = emptyTodos();
 	assert(headingText(state) === "Todos (0/0)", "empty heading");
 	assert(collapsedText(state) === "Todos (0/0)", "empty collapsed row carries no task name");
+	assert(widgetRows(marked, state, false, 80)[0]!.startsWith(`[accent]${LIST_ICON} [accentSoft]Todos (0/0)`), "icon accent, count soft accent");
 
 	let added = addTodo(state, "Siapkan rencana");
 	state = added.state;

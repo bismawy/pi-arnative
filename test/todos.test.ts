@@ -71,6 +71,7 @@ test("the icon is accent, and each status has its own token", () => {
 	state = patchTodo(state, 2, { status: "in_progress", note: "sedang jalan" })!;
 	const rows = widgetRows(marked, state, true, 80);
 	assert.ok(rows[0]!.includes(`[accent]${LIST_ICON}`), `the heading icon is accent, got ${rows[0]}`);
+	assert.ok(rows[0]!.includes("[accentSoft]Todos (1/3)"), `the count is soft accent, got ${rows[0]}`);
 	assert.ok(rows[1]!.includes("[accent]✓"), "a done task is accent");
 	assert.ok(rows[2]!.includes("[mdHeading]◉"), "the running task borrows the footer model-name colour");
 	assert.ok(rows[2]!.includes("[dim]· sedang jalan"), "its note stays dim");
