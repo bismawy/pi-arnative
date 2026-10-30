@@ -9,7 +9,7 @@
  * Reads are memoised per process; every write re-reads the file and replaces it atomically
  * (temp file + rename), so concurrent pi sessions that write different keys keep both.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -73,7 +73,7 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 }
 
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
-export function saveChoice(key: string, value: string): void {
+export function saveChoice(key: string, value: string, rename: (from: string, to: string) => void = renameSync): void {
 	if (readConfig()[key] === value) return;
 	// Re-read: another pi session may have written its own key since this one loaded.
 	memo = { ...readDisk().record, [key]: value };
@@ -81,8 +81,19 @@ export function saveChoice(key: string, value: string): void {
 		const path = configPath();
 		const tmp = `${path}.${process.pid}.tmp`;
 		mkdirSync(dirname(path), { recursive: true });
-		writeFileSync(tmp, `${JSON.stringify(memo, null, 2)}\n`, "utf8");
-		renameSync(tmp, path);
+		const payload = `${JSON.stringify(memo, null, 2)}\n`;
+		writeFileSync(tmp, payload, "utf8");
+		try {
+			rename(tmp, path);
+		} catch (e) {
+			// Windows: a running pi session can hold config.json open, and then the atomic
+			// replace fails with EPERM while an in-place write still lands. A setting that
+			// silently never reaches disk is worse than the small truncation window here.
+			const code = (e as NodeJS.ErrnoException).code;
+			if (code !== "EPERM" && code !== "EBUSY" && code !== "EXDEV") throw e;
+			writeFileSync(path, payload, "utf8");
+			rmSync(tmp, { force: true });
+		}
 	} catch {
 		// ignore: the choice still applies for this session
 	}
@@ -170,6 +181,20 @@ if (isMain(import.meta.url)) {
 	const profiled = readFileSync(join(profile, "arnative", "config.json"), "utf8");
 	ensureChoices({ headerPreset: "Arnative (Full)", footerPreset: "Arnative (Full)" });
 	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === profiled, "a second record writes nothing");
+
+	// Windows: a running pi session can hold the file open, so the atomic replace fails
+	// while the setting still has to land. The seam stands in for that rename.
+	const locked = () => {
+		throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+	};
+	saveChoice(HEADER_PRESET_KEY, "b", locked);
+	resetPresetCache();
+	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "a refused rename still writes the choice in place");
+	saveChoice(FOOTER_PRESET_KEY, "a", locked);
+	resetPresetCache();
+	assert(loadChoice(FOOTER_PRESET_KEY, ["a", "b"] as const) === "a" && loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "the in-place write keeps the other keys");
+	assert(!existsSync(join(profile, "arnative")) || readdirSync(join(profile, "arnative")).every((f) => !f.endsWith(".tmp")), "no temp file is left behind");
+
 	writeFileSync(join(profile, "arnative", "config.json"), "{not json", "utf8");
 	resetPresetCache();
 	ensureChoices({ headerPreset: "b" });

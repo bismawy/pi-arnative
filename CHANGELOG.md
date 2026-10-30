@@ -5,6 +5,9 @@
 ### Changed
 - **`config.json` lists every preset, including the ones left at their default.** A choice was written only once it differed from the default, so the header had no entry at all: the picker writes on move, and opening it on `Arnative (Full)` then pressing Enter wrote nothing, while a fresh install read a nearly empty file. `recordProfile()` now runs at `session_start` and records header, footer, spinner, gradient, auto-compact and model-heal through `ensureChoices`, which writes only the keys that differ and leaves a present-but-unreadable config untouched. `AUTO_COMPACT_KEY` is exported so every key has one source (`lib/preset-store.ts`, `extensions/arnative.ts`, `extensions/autocompact.ts`); `test/profile.test.ts` covers the default-value case, the byte-identical second run and the corrupt-file guard.
 
+### Fixed
+- **A preset change reaches disk on Windows while pi is running.** The save wrote a temp file and renamed it over `config.json`. Windows refuses that replace with `EPERM` while another process holds the file open, which a running pi session does, so the picker looked saved and the value was gone after a restart. Three stale `config.json.<pid>.tmp` files on a real machine held the choices that never landed, including a header preset. The save now falls back to an in-place write on `EPERM`/`EBUSY`/`EXDEV` and removes its temp file (`lib/preset-store.ts`; the fallback is pinned in the self-check through a `rename` seam).
+
 ## [0.8.2] - 2026-10-28
 
 ### Changed
