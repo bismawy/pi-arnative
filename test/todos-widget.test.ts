@@ -72,9 +72,18 @@ function widget() {
 	};
 }
 
-const click = (component: { render(width: number): string[]; handleMouse(event: unknown): unknown }, y: number) => {
-	component.handleMouse({ type: "press", button: "left", x: 4, y, width: 80, height: 10 });
-	return component.handleMouse({ type: "click", button: "left", x: 4, y, width: 80, height: 10 });
+const click = (component: { render(width: number): string[]; handleMouse(event: unknown): unknown }, y: number, x = 4) => {
+	component.handleMouse({ type: "press", button: "left", x, y, width: 80, height: 10 });
+	return component.handleMouse({ type: "click", button: "left", x, y, width: 80, height: 10 });
+};
+
+/** Click the hint text itself: the box takes a press only there, so the task rows stay
+ *  selectable and copyable. */
+const clickHint = (component: { render(width: number): string[]; handleMouse(event: unknown): unknown }, text: string) => {
+	const lines = component.render(80).map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+	const row = lines.findIndex((line) => line.includes(text));
+	assert.ok(row >= 0, `the hint "${text}" is on screen`);
+	return click(component, row, lines[row]!.indexOf(text));
 };
 
 test.after(() => rmSync(agentDir, { recursive: true, force: true }));
@@ -98,15 +107,22 @@ test("the tool fills the list and registers the box above the editor", async () 
 	assert.ok(collapsed[1]!.includes("Dua"), "the row names the task in progress");
 });
 
-test("a click expands the box, the next click collapses it", () => {
+test("a click on the hint expands the box, the next click collapses it", () => {
 	const { component } = widget();
 	const collapsed = component.render(80);
-	assert.equal(click(component, 1)?.handled, true, "the box handles the click");
+	assert.equal(clickHint(component, "[click to expand]")?.handled, true, "the hint takes the click");
 	const expanded = component.render(80);
 	assert.ok(expanded.length > collapsed.length, "the click expanded the box");
 	assert.ok(expanded.some((line) => line.includes("· menulis tes")), "the note shows while expanded");
-	click(component, 1);
+	clickHint(component, "[click to collapse]");
 	assert.equal(component.render(80).length, collapsed.length, "a second click collapses it");
+});
+
+test("a press on a task row is left to pi for selection", () => {
+	const { component } = widget();
+	const before = component.render(80).length;
+	assert.equal(click(component, 1)?.handled, undefined, "the row beside the hint stays selectable");
+	assert.equal(component.render(80).length, before, "and nothing toggled");
 });
 
 test("a click below the box belongs to the editor", () => {
