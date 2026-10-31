@@ -310,9 +310,6 @@ export class InputPicker implements Component, Focusable {
 	}
 }
 
-/** Title of a sub-screen, derived from `screenTitle` so the format lives in one place. */
-export const pickerTitle = (setting: string): ScreenText["title"] => screenTitle(setting);
-
 // Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
 	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "root legend pinned, no ← behind the root menu");

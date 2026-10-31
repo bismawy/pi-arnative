@@ -7,7 +7,7 @@
  *   │ ✓ $ cmd smart…      0.1s   │  final, collapsed; duration right-aligned
  *   │ 󱞩 first output line        │
  *   ╰────────────────────────────╯
- * Click / the `app.tools.expand` key (ctrl+o by default) = full title + detail
+ * Click `[show]` / `[hide]` or press the `app.tools.expand` key (ctrl+o by default) = full title + detail
  * (output dim; edit = toolDiff*).
  * Collapsed summary: bash/write `󱞩 first line`; grep/find/read numeric
  * (→ N matches / → N files / N lines); edit `󱞩 +N / -M`. Expanded plain output
@@ -17,7 +17,7 @@
  * "has a result" lives in context.state, read at render() -> restore/reload safe,
  * no stale 󰔟 box. Third-party tools with no renderer of their own (memory_write,
  * scratchpad, MCP…) get the same box: shell "self", one-line summary,
- * `[ctrl+o to expand]` for the full detail.
+ * `[show]` for the full detail.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -38,20 +38,25 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
-import { renderBoxLines as box } from "../lib/box.ts";
+import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../lib/box.ts";
 import { stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
+import { actionWord } from "../lib/todos.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { expandKeyName } from "../lib/format.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
-type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown> };
+type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown>; durationMs?: number };
 type Res = (r: TResult, th: Theme, soft: (s: string) => string, isErr: boolean, expanded: boolean) => string;
 
 const cwd = process.cwd();
 const MAX_TIMINGS = 200;
 const TIMINGS = new Map<string, number>();
+
+/** Runtime of one call: pi's own figure first (it survives a restore and covers tools this
+ *  module does not wrap), then the wall time recorded by the execute wrapper. */
+const durationOf = (ctx: TCtx): string =>
+	fmtMs(ctx.durationMs ?? (ctx.toolCallId ? TIMINGS.get(ctx.toolCallId) : undefined));
 
 export function recordTiming(toolCallId: string, durationMs: number): void {
 	if (TIMINGS.size >= MAX_TIMINGS) {
@@ -146,9 +151,12 @@ export function titleRow(
 	inner: number,
 	dur: string,
 	expanded: boolean,
+	hint = "",
 ): string[] {
 	const head = `${icon} ${name} ${argPart}`.trim();
-	const durStr = dur ? theme.fg("dim", dur) : "";
+	// Runtime first, label last: the figure is what you read, the label is the button.
+	const right = [dur, hint].filter(Boolean).join(" · ");
+	const durStr = right ? theme.fg("dim", right) : "";
 	if (!durStr) {
 		return expanded ? wrapTextWithAnsi(head, inner) : [truncateToWidth(head, inner, "…")];
 	}
@@ -191,10 +199,11 @@ export function toolSummary(name: string, text: string, args?: any): string {
 	return title ? `${head}. ${title}` : head;
 }
 
-// Expand hint `[ctrl+o to expand]` (key text follows the active keybinding).
-export function expandHint(th: Theme): string {
-	return th.fg("dim", `[${expandKeyName()} to expand]`);
-}
+// The box says whether it is open with a word: [show] folded, [hide] open. The label is
+// also the click target (see HINT_SPANS) and sits on the title row, so the affordance a
+// click just used stays visible instead of vanishing with the summary line.
+export const HINT_EXPAND = "[show]";
+export const HINT_COLLAPSE = "[hide]";
 
 // Expanded detail: themed markdown (same layout as a normal pi message — code
 // blocks, lists, colors) instead of a plain dim dump.
@@ -247,6 +256,17 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 	return [...head, ...lines.slice(firstImage)];
 }
 
+// Per box: did this module strip the blank rows above it? Those rows shift every mouse
+// row index, so a press on the border and the title row is found at 0 and 1 only for a
+// stripped box. `Symbol.for` keeps the state across the re-import a `/reload` performs.
+// Cells of the expand hint in this box's own drawn lines. The hint is the whole click
+// target: every other cell of the box keeps pi's text selection, so the output stays
+// copyable. Recomputed on every render, because the label moves with the width and the key.
+const HINT_SPANS = Symbol.for("pi-arnative.toolBoxHintSpans");
+// A press already toggled this box; the release and the synthesized click that follow it
+// must not toggle it a second time.
+const PRESS_TOGGLED = Symbol.for("pi-arnative.toolBoxPressToggled");
+
 // The patches below reinstall on every module load (pi's /reload re-evaluates the
 // extension in the same process), so a UI fix applies without restarting pi; see
 // lib/patch.ts for the originals/mark bookkeeping that makes that safe.
@@ -255,9 +275,42 @@ if (ToolExecutionComponent?.prototype?.render) {
 	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
 	proto.render = markPatched(function (this: any, width: number): string[] {
 		const lines = origRender.call(this, width);
-		return OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this)
-			? stripEdgesKeepingImages(lines)
-			: lines;
+		const stripped = OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this);
+		const drawn = stripped ? stripEdgesKeepingImages(lines) : lines;
+		// Only a box this module laid out is measured here; a renderer pi owns keeps pi's
+		// own mouse path, since its row offsets come from a layout it did not show us.
+		// Title rows only (frame + title): a [show] inside the output must not become a button.
+		this[HINT_SPANS] = stripped
+			? [...textSpans(drawn, HINT_EXPAND), ...textSpans(drawn, HINT_COLLAPSE)].filter((span) => span.row <= 1)
+			: [];
+		return drawn;
+	});
+
+	// Click to expand, on the hint text alone. pi toggles on the "click" it synthesizes from
+	// a press and a release at the same cell, so a one-cell drift made the hint look inert,
+	// and the stripped row above the box left its top border dead. A left press on the hint
+	// toggles at once and the release plus the click that follow are swallowed; the click
+	// clears the flag, not the release, or that click would toggle the box back. Any other
+	// cell is left to pi: a press there starts a selection, so the output can be copied.
+	const origMouse = originalOf<(this: any, event: any) => any>(proto, "handleMouse");
+	proto.handleMouse = markPatched(function (this: any, event: any): any {
+		const onHint = (this[HINT_SPANS] as TextSpan[] | undefined)?.length
+			? inSpans(this[HINT_SPANS] as TextSpan[], event.y, event.x)
+			: false;
+		if (onHint && event.type === "press" && event.button === "left") {
+			// A child of the box (an image preview) keeps its own press.
+			const childHit = origMouse.call(this, event);
+			if (childHit) return childHit;
+			if (!this.result) return undefined;
+			this.setExpanded(!this.expanded);
+			this[PRESS_TOGGLED] = true;
+			return { handled: true, render: true };
+		}
+		if (this[PRESS_TOGGLED] && (event.type === "release" || event.type === "click")) {
+			if (event.type === "click") this[PRESS_TOGGLED] = false;
+			return { handled: true, render: false };
+		}
+		return origMouse.call(this, event);
 	});
 }
 
@@ -267,21 +320,19 @@ if (ToolExecutionComponent?.prototype?.render) {
 // for tools that define no renderCall/renderResult of their own; third-party
 // renderers are handled by the generic predicate below.
 //
-// BOXED_TOOLS is now a display-name map (plus the todo/cdp special render paths);
+// BOXED_TOOLS is now a display-name map (plus the cdp special render path);
 // boxing itself is generic (see boxTheirRenderers). The pi-web-access tools get a
 // friendlier title ("search "/"fetch "/"get_content ") and their renderer content is
-// reused inside our box. `todo` (@juicesharp/rpiv-todo) gets a check-square icon
-// (\uf14a) and the toolPendingBg/toolSuccessBg backgrounds.
+// reused inside our box.
 //
 // MCP tools (pi-mcp-adapter) declare `renderShell: "default"`, so the generic
 // predicate boxes them, but their result renderer prints the WHOLE output on error
 // (unbounded) and their call args can run to dozens of lines: a 1-line summary +
-// [ctrl+o to expand] is tighter while the invoked tool stays visible.
+// [show] is tighter while the invoked tool stays visible.
 const BOXED_TOOLS = new Map([
 	["web_search", "search"],
 	["fetch_content", "fetch"],
 	["get_search_content", "get_content"],
-	["todo", "todo"],
 ]);
 
 // @narumitw/pi-chrome-devtools ships bare-text renderers ("Chrome DevTools: navigate",
@@ -334,10 +385,10 @@ const mcpInfo = (name: string, args: any, th: Theme): string => {
 	return tool ? th.fg("dim", `${tool}${server ? ` @ ${server}` : ""}`) : "";
 };
 
-// Cap third-party lines in the call box; the rest goes behind [ctrl+o to expand].
+// Cap third-party lines in the call box; the rest goes behind [show].
 const CALL_ROWS = 2;
 const capped = (th: Theme, rows: string[], expanded: boolean): string[] =>
-	expanded || rows.length <= CALL_ROWS ? rows : [...rows.slice(0, CALL_ROWS), th.fg("dim", expandHint(th))];
+	expanded || rows.length <= CALL_ROWS ? rows : [...rows.slice(0, CALL_ROWS), th.fg("dim", HINT_EXPAND)];
 
 // Third-party renderers run unguarded here (at render time, unlike pi's own
 // updateDisplay which wraps them in try/catch + fallback): a throw becomes an
@@ -417,12 +468,18 @@ if (ToolExecutionComponent?.prototype?.render) {
 					own && !CDP_NAME.has(name) && !MCP_TOOL(name)
 						? componentLines(safeCall(() => own.call(this, args, th, ctx)), width - 6)
 						: [];
-				if (name === "todo" && theirs.length)
-					return box(th, width, formatTodoRows(theirs, th), "toolPendingBg");
 				if (mine && theirs.length)
 					return box(th, width, boxedRows(icon, capped(th, theirs, Boolean(this.expanded))));
 				const inner = Math.max(8, width - 4);
-				const rows = titleRow(th, icon, th.fg("accent", displayName(name)), mcpInfo(name, args, th), inner, "", false);
+				const rows = titleRow(
+					th,
+					icon,
+					th.fg("accent", displayName(name)),
+					name === "todo" ? todoTitleDetail(th, softSecondaryOf(th), actionWord(args?.action, args?.status)) : mcpInfo(name, args, th),
+					inner,
+					"",
+					false,
+				);
 				return box(th, width, rows, boxBgOf(name));
 			});
 	});
@@ -461,27 +518,22 @@ if (ToolExecutionComponent?.prototype?.render) {
 					const callLines = componentLines(safeCall(() => origCall.call(this)?.call(this, ctx.args, th, ctx)), width - 6);
 					return box(th, width, boxedRows(icon, [callLines[0]?.trim() || displayName(name), ...boxed2]));
 				}
-				if (name === "todo" && boxed2.length) {
-					// todo call result (status completed / in_progress)
-					const callLines = componentLines(safeCall(() => origCall.call(this)?.call(this, ctx.args, th, ctx)), width - 6);
-					const combined = [...callLines, ...boxed2];
-					const bgType = isErr ? "toolErrorBg" : "toolSuccessBg";
-					return box(th, width, formatTodoRows(combined, th), bgType);
-				}
 				if (boxed2.length && !cdp) return box(th, width, boxedRows(icon, boxed2));
+				const more = countLines(text) > 1;
 				const rows = titleRow(
 					th,
 					icon,
 					th.fg("accent", displayName(name)),
-					mcpInfo(name, ctx.args, th),
+					name === "todo"
+						? todoTitleDetail(th, soft, (result.details as { detail?: unknown } | undefined)?.detail)
+						: mcpInfo(name, ctx.args, th),
 					inner,
-					"",
+					durationOf(ctx),
 					opts.expanded,
+					more ? (opts.expanded ? HINT_COLLAPSE : HINT_EXPAND) : "",
 				);
 				const summary = toolSummary(name, text, ctx.args);
-				const more = countLines(text) > 1;
-				const hint = more && !opts.expanded ? ` ${expandHint(th)}` : "";
-				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, soft)}` : ""}${hint}`);
+				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, soft)}` : ""}`);
 				if (opts.expanded && more) {
 					// MCP args are gone once the call box is replaced by the result.
 					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
@@ -493,22 +545,13 @@ if (ToolExecutionComponent?.prototype?.render) {
 	});
 }
 
-// todo line format: \uf14a icon (success color) in the title, resHead prefix on the status line.
-const formatTodoRows = (lines: string[], th: Theme): string[] => {
-	const icon = th.fg("success", "\uf14a");
-	const head = resHead(th);
-	const out: string[] = [];
-	for (let i = 0; i < lines.length; i++) {
-		let l = lines[i];
-		if (i === 0) {
-			l = l.replace(/^(\x1b\[[0-9;]*m)*todo\b/, `${icon} todo`);
-		} else {
-			l = `${head} ${l}`;
-		}
-		out.push(l);
-	}
-	return out;
-};
+/** `todo · completed`: the status the call left behind (or its action word), so the title says
+ *  what happened and not just which tool ran. The word takes the soft accent tier, the dot stays
+ *  dim. */
+function todoTitleDetail(th: Theme, soft: (s: string) => string, word: unknown): string {
+	const text = typeof word === "string" ? word.trim() : "";
+	return text ? `${th.fg("dim", "·")} ${soft(text)}` : "";
+}
 
 // codemode: the script is highlighted, the calls and output come from pi's own details.
 function codeLines(code: string): string[] {
@@ -566,20 +609,25 @@ function codemodeBoxRows(
 	expanded: boolean,
 	isErr: boolean,
 	icon: string,
+	inner: number,
+	dur = "",
 ): string[] {
-	const rows = [`${icon} ${th.fg("accent", "codemode")}`];
-	const script = codemodeScript(typeof args?.code === "string" ? args.code : "", expanded);
-	script.lines.forEach((line, i) => rows.push(i === 0 ? `${resHead(th)} ${line}` : ` ${line}`));
+	const code = typeof args?.code === "string" ? args.code : "";
+	const script = codemodeScript(code, expanded);
 	const calls = (result?.details?.calls as any[] | undefined) ?? [];
 	const output = codemodeOutput(result?.content);
 	const outLines = output ? output.split("\n") : [];
 	const shown = expanded || isErr;
+	// A failing run shows its calls and output even when collapsed, so only a multi-line
+	// script gives it anything to fold; a passing run folds multi-line scripts, calls and output.
+	const foldable = countLines(code) > 1 || (!isErr && (calls.length > 0 || outLines.length > 0));
+	const label = foldable ? (expanded ? HINT_COLLAPSE : HINT_EXPAND) : "";
+	const rows = titleRow(th, icon, th.fg("accent", "codemode"), "", inner, dur, expanded, label);
+	script.lines.forEach((line, i) => rows.push(i === 0 ? `${resHead(th)} ${line}` : ` ${line}`));
 	if (shown) {
 		if (calls.length || outLines.length) rows.push("");
 		rows.push(...calls.map((c) => formatCodemodeCall(c, th)), ...outLines.map((l) => th.fg("toolOutput", ` ${l}`)));
 	}
-	const hidden = script.hidden + (shown ? 0 : calls.length + outLines.length);
-	if (!expanded && hidden > 0) rows[rows.length - 1] += ` ${expandHint(th)}`;
 	return rows;
 }
 
@@ -642,11 +690,15 @@ function minimal(
 			// `ctx.isError`/`result.isError` are the only honest sources: output text starting with
 			// "Error" is normal content (a file whose first line says "Error handling...").
 			const isErr = Boolean(context.isError || result.isError);
-			const dur = fmtMs(context.toolCallId ? TIMINGS.get(context.toolCallId) : undefined);
+			const dur = durationOf(context as TCtx);
 			const icon = isErr ? theme.fg("error", "x") : theme.fg("success", "✓");
 			return new Lines((width) => {
 				const soft = softSecondaryOf(theme);
 				const inner = Math.max(8, width - 4);
+				// Anything the collapsed summary hides gets the standard hint; without it a
+				// two-line box (edit: `+1 / -1`) looks complete while the diff sits behind it.
+				const hasDetail = countLines(text) > 1 || Boolean((result.details as { diff?: string } | undefined)?.diff);
+				const label = hasDetail ? (expanded ? HINT_COLLAPSE : HINT_EXPAND) : "";
 				const rows = titleRow(
 					theme,
 					icon,
@@ -655,16 +707,11 @@ function minimal(
 					inner,
 					dur,
 					expanded,
+					label,
 				);
-				// Anything the collapsed summary hides gets the standard hint; without it a
-				// two-line box (edit: `+1 / -1`) looks complete while the diff sits behind it.
-				const hasDetail = countLines(text) > 1 || Boolean((result.details as { diff?: string } | undefined)?.diff);
 				const resLine = res(result, theme, soft, isErr, expanded);
 				if (expanded) rows.push(...full(result, theme));
-				else if (resLine) {
-					const hint = hasDetail ? ` ${expandHint(theme)}` : "";
-					rows.push(hint ? `${truncateToWidth(resLine, Math.max(8, inner - visibleWidth(hint)), "…")}${hint}` : resLine);
-				}
+				else if (resLine) rows.push(resLine);
 				return box(theme, width, rows);
 			});
 		},
@@ -820,7 +867,7 @@ const codemodeRenderers = {
 			// Same spinner as every other box while the tool runs; the codemode glyph
 			// only appears once the result is in (renderResult).
 			const icon = th.fg("warning", spinIcon());
-			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded), isErr, icon), bg);
+			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded), isErr, icon, Math.max(8, width - 4)), bg);
 		});
 	},
 	renderResult(result: TResult & { details?: any }, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) {
@@ -828,8 +875,9 @@ const codemodeRenderers = {
 		((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
 		const isErr = Boolean(ctx.isError || result.isError);
 		const icon = isErr ? th.fg("error", "x") : th.fg("success", "\uf489");
+		const dur = durationOf(ctx);
 		return new Lines((width) =>
-			box(th, width, codemodeBoxRows(ctx.args, result, th, Boolean(opts.expanded), isErr, icon), isErr ? "toolErrorBg" : "toolSuccessBg"),
+			box(th, width, codemodeBoxRows(ctx.args, result, th, Boolean(opts.expanded), isErr, icon, Math.max(8, width - 4), dur), isErr ? "toolErrorBg" : "toolSuccessBg"),
 		);
 	},
 };
@@ -936,8 +984,31 @@ if (isMain(import.meta.url)) {
 	assert(noDefOut[0].startsWith("\u256d") && noDefOut[noDefOut.length - 1].startsWith("\u2570"), "tool without a definition: result wrapped in a box");
 	assert(
 		noDefOut.some((l: string) => l.includes("\u2713 glob")) &&
-			noDefOut.some((l: string) => l.includes('[ctrl+o to expand]')),
+			noDefOut.some((l: string) => l.includes('[show]')),
 		"tool without a definition: title + summary + expand hint",
+	);
+	// todo (this package's own tool, no renderers): the title says what the call left behind.
+	const todoNoRenderer = { toolName: "todo", toolDefinition: {} };
+	const todoBox = (ToolExecutionComponent.prototype.getResultRenderer.call(todoNoRenderer) as any)(
+		{ content: [{ type: "text", text: "Updated #1" }], details: { detail: "completed" } },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { action: "update", id: 1, status: "completed" }, state: {} },
+	).render(60);
+	assert(
+		todoBox.some((l: string) => l.includes("todo · completed")),
+		`todo result: the title names the status, got ${todoBox.find((l: string) => l.includes("todo"))}`,
+	);
+	assert(todoBox.some((l: string) => l.includes("Updated #1")), "todo result: the status line keeps the result text");
+	const todoPending = (ToolExecutionComponent.prototype.getCallRenderer.call(todoNoRenderer) as any)(
+		{ action: "create", subject: "Tulis widget" },
+		th,
+		{ state: {}, args: {} },
+	).render(60);
+	assert(todoPending.some((l: string) => l.includes("todo · created")), "todo call: the title names the action");
+	assert(
+		!todoBox.some((l: string) => l.includes("·") && l.includes("Tulis widget")),
+		"todo: the task name stays on the status line, not in the title",
 	);
 	// Generic predicate: any tool that ships its own renderers and no `renderShell: "self"`
 	// is boxed — no name list to maintain for new extensions.
@@ -1121,7 +1192,7 @@ if (isMain(import.meta.url)) {
 	}
 
 	// pi-mcp-adapter: result does NOT use their renderer (unbounded error dump)
-	// -> 1-line summary + [ctrl+o to expand]; the invoked tool stays visible.
+	// -> 1-line summary + [show]; the invoked tool stays visible.
 	const mcpTheirs = () => "renderer-mcp";
 	const mcpTool = { toolName: "mcp", toolDefinition: { renderCall: mcpTheirs, renderResult: mcpTheirs } };
 	assert(
@@ -1148,7 +1219,28 @@ if (isMain(import.meta.url)) {
 		mcpOut.some((l: string) => l.includes("fetch_content @ tinyfish")),
 		"mcp: title names the invoked MCP tool",
 	);
-	assert(mcpOut.some((l: string) => l.includes("[ctrl+o to expand]")), "mcp: expand hint present");
+	assert(mcpOut.some((l: string) => l.includes("[show]")), "mcp: expand hint present");
+	// Nothing hidden (a single output line), so the label goes away in both states.
+	const mcpTiny = { content: [{ type: "text", text: "ok" }], details: {} };
+	for (const expanded of [false, true]) {
+		const rows = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any)(
+			mcpTiny,
+			{ expanded, isPartial: false },
+			th,
+			{ args: { tool: "fetch_content", server: "tinyfish" }, state: {} },
+		).render(96);
+		assert(rows.every((l: string) => !l.includes("[show]") && !l.includes("[hide]")), `mcp: nothing hidden, so no label (expanded=${expanded})`);
+	}
+	// A box whose content comes from a third-party renderer still shows its runtime, the
+	// way pi's own box did before this module replaced it.
+	recordTiming("mcp-dur", 2400);
+	const mcpTimed = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any)(
+		mcpPayload,
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: { tool: "fetch_content", server: "tinyfish" }, state: {}, toolCallId: "mcp-dur" },
+	).render(96);
+	assert(mcpTimed[1]!.includes("2.4s"), "mcp: the title row carries the runtime");
 	const mcpFull = (ToolExecutionComponent.prototype.getResultRenderer.call(mcpTool) as any)(
 		mcpPayload,
 		{ expanded: true, isPartial: false },
@@ -1258,7 +1350,7 @@ if (isMain(import.meta.url)) {
 		out.some((l: string) => l.includes("Appended to MEMORY.md. ## Heading")),
 		"box carries the summary + heading",
 	);
-	assert(out.some((l: string) => l.includes("[ctrl+o to expand]")), "collapsed: expand hint present");
+	assert(out.some((l: string) => l.includes("[show]")), "collapsed: expand hint present");
 	assert(
 		resRenderer(
 			{ content: [{ type: "text", text: "Appended to MEMORY.md\n\nExisting preview" }] },
@@ -1282,28 +1374,6 @@ if (isMain(import.meta.url)) {
 	ACTIVE = 0;
 	syncTicker();
 	assert(TICK === null, "ticker stops when idle (no timer leak)");
-
-	// todo render: \uf14a + 2 lines (title & status) + background box
-	const todoCall = () => ({ render: () => ["todo → Test subject"] });
-	const todoResult = () => ({ render: () => ["● completed"] });
-	const todoTool = { toolName: "todo", toolDefinition: { renderCall: todoCall, renderResult: todoResult } };
-	const thBgTodo: Theme = {
-		fg: (_c, s) => s,
-		bg: (c, s) => `[bg:${c}]${s}[/bg]`,
-	};
-	const todoCallOut = (ToolExecutionComponent.prototype.getCallRenderer.call(todoTool) as any)({}, thBgTodo, { state: {} }).render(60);
-	assert(todoCallOut[0].includes("[bg:toolPendingBg]"), "todo call: background pending");
-	assert(todoCallOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo call: \uf14a icon in the title");
-
-	const todoResultOut = (ToolExecutionComponent.prototype.getResultRenderer.call(todoTool) as any)(
-		{ content: [] },
-		{ expanded: false, isPartial: false },
-		thBgTodo,
-		{ state: {}, args: {} },
-	).render(60);
-	assert(todoResultOut[0].includes("[bg:toolSuccessBg]"), "todo result: background success");
-	assert(todoResultOut.some((l: string) => l.includes("\uf14a todo → Test subject")), "todo result: \uf14a icon on line 1");
-	assert(todoResultOut.some((l: string) => l.includes("● completed")), "todo result: status with the resHead prefix on line 2");
 
 	// Expanded detail: themed markdown, error text intact and no longer plain dim.
 	const errDetail = fullText(
@@ -1339,19 +1409,23 @@ if (isMain(import.meta.url)) {
 		// pi prefixes the box with a spacer blank line; drop blanks so the rows are predictable.
 		return (c.render(100) as string[]).map(stripAnsi).filter((l) => l !== "");
 	};
+	recordTiming("1", 10);
 	const cmCollapsed = cmRender(cmArgs, cmRes);
 	assert(cmCollapsed.length === 4 && cmCollapsed[0]!.startsWith("╭") && cmCollapsed[3]!.startsWith("╰"), "codemode: collapsed box is title + one script line inside the border");
-	assert(cmCollapsed[2]!.includes("const l = await tools.todo") && cmCollapsed[2]!.includes("[ctrl+o to expand]"), "codemode: collapsed shows the first script line + hint");
+	assert(cmCollapsed[1]!.endsWith("10ms · [show] │"), "codemode: the title row right-aligns the runtime and expand hint");
+	assert(cmCollapsed[2]!.includes("const l = await tools.todo"), "codemode: collapsed shows the first script line");
 	const cmExpanded = cmRender(cmArgs, cmRes, true);
+	assert(cmExpanded[1]!.endsWith("10ms · [hide] │"), "codemode: the expanded title row right-aligns the runtime and fold hint");
 	assert(cmExpanded.some((l) => l.includes("✓ todo") && l.includes("2ms")) && cmExpanded.some((l) => l.includes("alpha: ok")), "codemode: expanded shows the nested calls and the output");
-	// A failing run is never truncated: the whole output is shown without a hint.
+	// A failing run is never truncated: the whole output is shown without a hint in either state.
 	const longErr = { content: [{ type: "text", text: "Script failed\nWall time 0.1 seconds\nOutput:\n" + Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n") }], isError: true };
 	const cmErr = cmRender({ code: "boom()" }, longErr);
-	assert(cmErr.some((l) => l.includes("line 12")) && !cmErr.some((l) => l.includes("to expand")), "codemode: a failed run shows all its output, no hint");
+	assert(cmErr.some((l) => l.includes("line 12")) && !cmErr.some((l) => l.includes("[show]")), "codemode: a failed run shows all its output, no hint");
+	assert(!cmRender({ code: "boom()" }, longErr, true).some((l) => l.includes("[hide]")), "codemode: a failed single-line run has nothing to fold when expanded");
 	// Running: the shared spinner, not the codemode glyph, and no hint while nothing is hidden.
 	const cmRunning = cmRender({ code: "console.log(1);" }, undefined);
 	assert(FRAMES.some((f) => cmRunning.join("\n").includes(f)) && !cmRunning.join("\n").includes("\uf489"), "codemode: running box uses the shared spinner, not the codemode glyph");
-	assert(!cmRunning.some((l) => l.includes("to expand")), "codemode: nothing hidden on a single-line script");
+	assert(!cmRunning.some((l) => l.includes("[show]")), "codemode: nothing hidden on a single-line script");
 	assert([...cmCollapsed, ...cmExpanded, ...cmErr].every((l) => visibleWidth(l) === 100), "codemode: box fills the given width");
 	assert(fmtMs(2) === "2ms" && fmtMs(1400) === "1.4s" && fmtMs(undefined) === "", "duration wording: ms under a second, s above");
 	assert(codemodeOutput(cmRes.content) === "alpha: ok", "codemode: Script completed header dropped (own block)");
@@ -1368,11 +1442,47 @@ if (isMain(import.meta.url)) {
 			return (c.render(74) as string[]).map(stripAnsi).filter((l) => l !== "");
 		};
 		const diffRes = { content: [{ type: "text", text: "ok" }], details: { diff: "@@\n-old\n+new" } };
-		const ed = minRender("edit", { path: "README.md" }, diffRes);
-		assert(ed.some((l) => l.includes("+1 / -1") && l.includes("to expand")), "minimal(): collapsed edit summary carries the expand hint");
-		assert(!minRender("edit", { path: "README.md" }, diffRes, true).some((l) => l.includes("to expand")), "minimal(): expanded edit drops the hint");
+		// The runtime comes from pi's own duration first (a restored session, a tool this
+		// module does not wrap), then from the wall clock this module records. The pinned
+		// devDependency predates `durationMs`, so only the fallback is reachable here; the
+		// pi-supplied path is checked against the installed 1.4.0 in the release audit.
+		const withDur = (id: string, expanded: boolean) => {
+			const c: any = new ToolExecutionComponent("bash", id, { command: "true" }, {}, reg2.bash, { requestRender() {} }, cwd);
+			c.updateResult(diffRes, false);
+			c.setExpanded(expanded);
+			return (c.render(74) as string[]).map(stripAnsi).filter((l) => l !== "");
+		};
+		recordTiming("dur-collapsed", 1400);
+		const durRow = withDur("dur-collapsed", false)[1]!;
+		assert(durRow.includes("1.4s"), "duration: the collapsed title row keeps the runtime");
 		assert(
-			minRender("bash", { command: "true" }, { content: [{ type: "text", text: "done" }], details: {} }).every((l) => !l.includes("to expand")),
+			durRow.indexOf("1.4s") < durRow.indexOf("[show]") && durRow.includes("1.4s · [show]"),
+			"duration: the runtime comes first, the label keeps the right edge",
+		);
+		recordTiming("dur-open", 400);
+		const durOpen = withDur("dur-open", true);
+		assert(
+			durOpen[1]!.includes("400ms · [hide]"),
+			"duration: the expanded title row carries the runtime before the fold label",
+		);
+		const bare = withDur("dur-none", false)[1]!;
+		assert(!/dms|d.ds/.test(bare), "duration: a call with no figure leaves the row clean");
+		const ed = minRender("edit", { path: "README.md" }, diffRes);
+		assert(ed[1]!.includes("[show]"), "minimal(): the title row carries the expand hint");
+		assert(ed.some((l) => l.includes("+1 / -1")), "minimal(): the summary stays on its own row");
+		assert(!ed.some((l) => l.includes("+1 / -1") && l.includes("[show]")), "minimal(): the summary no longer shares its row with the hint");
+		assert(!minRender("edit", { path: "README.md" }, diffRes, true).some((l) => l.includes("[show]")), "minimal(): expanded edit drops the hint");
+		// Expanded, the affordance stays: the same key folds the box back, on the title row.
+		const opened = minRender("edit", { path: "README.md" }, diffRes, true);
+		assert(opened[1]!.includes("[hide]"), "minimal(): the expanded title row offers the fold hint");
+		assert(!opened.some((l) => l.includes("[show]")), "minimal(): the folded box offers no expand hint");
+		assert(opened.every((l) => visibleWidth(l) === 74), "minimal(): the fold hint keeps every row the box width");
+		assert(
+			minRender("edit", { path: "README.md" }, { content: [{ type: "text", text: "done" }], details: {} }, true).every((l) => !l.includes("[hide]")),
+			"minimal(): nothing hidden, so an expanded box offers no fold hint",
+		);
+		assert(
+			minRender("bash", { command: "true" }, { content: [{ type: "text", text: "done" }], details: {} }).every((l) => !l.includes("[show]")),
 			"minimal(): a single-line output has nothing hidden, so no hint",
 		);
 		// Output that merely STARTS with "Error" is content, not a failure: the box keeps its ✓.
@@ -1424,8 +1534,106 @@ if (isMain(import.meta.url)) {
 	assert(stripAnsi(cdpCallOut[1]!).includes(CDP_ICON), "chrome-devtools: call box uses the Chrome glyph, not the spinner");
 	const cdpExpanded = cdpComp(cdpResult, true);
 	assert(cdpExpanded.some((l) => l.includes('"pageId": "p1"')), "chrome-devtools: expanded shows the full tool output");
-	assert(cdpCollapsed.some((l) => l.includes("navigated") && l.includes("to expand")), "chrome-devtools: collapsed shows the first line + hint");
+	assert(cdpCollapsed.some((l) => l.includes("navigated")), "chrome-devtools: collapsed shows the first line");
+	assert(cdpCollapsed[1]!.includes("[show]"), "chrome-devtools: the title row carries the expand hint");
 	assert([...cdpCollapsed, ...cdpExpanded].every((l) => visibleWidth(l) === 74), "chrome-devtools: box fills the given width");
+	// Mouse on a tool box: the strip patch removes the blank rows above the box AFTER
+	// pi laid out its mouse regions, so a click used to land one row high and the top
+	// border was dead. pi also drops the click when the pointer drifts one cell.
+	const mouseBox = () => {
+		const c: any = new ToolExecutionComponent("mouse_probe", "1", {}, {}, {}, { requestRender: () => undefined }, cwd);
+		c.updateResult({ content: [{ type: "text", text: "one\ntwo\nthree" }] }, false);
+		// Render before any event: pi only hit-tests a click against a box it has measured.
+		c.render(60);
+		return c;
+	};
+	// Height comes from the box as drawn, the same number pi puts in the event.
+	const mouse = (c: any, type: string, y: number, x = 5): any =>
+		c.handleMouse({
+			type,
+			button: "left",
+			x,
+			y,
+			screenX: x,
+			screenY: y,
+			width: 60,
+			height: (c.render(60) as string[]).length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+	const click = (c: any, y: number, x = 5) => {
+		mouse(c, "press", y, x);
+		mouse(c, "release", y, x);
+		mouse(c, "click", y, x);
+	};
+	const spans = (c: any) => textSpans(c.render(60) as string[], "[show]");
+	const probeLines = mouseBox().render(60) as string[];
+	assert(
+		probeLines.length === 4 && stripAnsi(probeLines[0]!).startsWith("╭"),
+		"mouse probe: 4 rows, blank edges stripped",
+	);
+	{
+		const box = mouseBox();
+		const [hint] = spans(box);
+		assert(hint !== undefined, "mouse: the drawn box carries the hint span");
+		const x = hint!.start;
+		click(box, hint!.row, x);
+		assert(box.expanded === true, "mouse: a click on the hint expands");
+		click(box, hint!.row, x);
+		assert(box.expanded === false, "mouse: the next click on the hint collapses");
+	}
+	{
+		// A one-cell drift used to swallow the click: the press toggles, so it cannot.
+		const box = mouseBox();
+		const [hint] = spans(box);
+		const x = hint!.start;
+		mouse(box, "press", hint!.row, x);
+		mouse(box, "move", hint!.row, x + 1);
+		mouse(box, "release", hint!.row, x + 1);
+		assert(box.expanded === true, "mouse: a one-cell drift on the hint still expands");
+		mouse(box, "click", hint!.row, x + 1);
+		assert(box.expanded === true, "mouse: the swallowed click does not toggle twice");
+	}
+	{
+		// A label inside the output is content, not a button: only the title rows are matched.
+		const outLabel: any = new ToolExecutionComponent("bash", "8", { command: "printf" }, {}, {}, { requestRender() {} }, cwd);
+		outLabel.updateResult({ content: [{ type: "text", text: "line\n[show] in the output\nmore" }], details: {} }, false);
+		outLabel.setExpanded(true);
+		const outLines = (outLabel.render(60) as string[]).map(stripAnsi);
+		const labelRow = outLines.findIndex((l) => l.includes("in the output"));
+		assert(labelRow > 1, "mouse: the output label sits below the title rows");
+		const labelX = outLines[labelRow]!.indexOf("[show]");
+		const labelTaken = outLabel.handleMouse({ type: "press", button: "left", x: labelX, y: labelRow, screenX: labelX, screenY: labelRow, width: 60, height: outLines.length, shift: false, alt: false, ctrl: false });
+		assert(labelTaken === undefined && outLabel.expanded === true, "mouse: a [show] inside the output is not a button");
+	}
+	{
+		// Expanded, the fold hint is a click target too: the same cells, the other label.
+		const box = mouseBox();
+		const [open] = textSpans(box.render(60) as string[], "[show]");
+		click(box, open!.row, open!.start);
+		assert(box.expanded === true, "mouse: the expand hint opens the box");
+		const [fold] = textSpans(box.render(60) as string[], "[hide]");
+		assert(fold !== undefined, "mouse: the expanded box draws the fold hint");
+		// One cell of drift: pi would drop the click, so only the hint cells can fold it.
+		const fx = fold!.start;
+		mouse(box, "press", fold!.row, fx);
+		mouse(box, "move", fold!.row, fx + 1);
+		mouse(box, "release", fold!.row, fx + 1);
+		assert(box.expanded === false, "mouse: a drifting press on the fold hint closes the box");
+		mouse(box, "click", fold!.row, fx + 1);
+		assert(box.expanded === false, "mouse: the swallowed click does not reopen it");
+	}
+	{
+		// Every cell off the hint stays with pi, which is what keeps the output copyable.
+		const box = mouseBox();
+		const taken = mouse(box, "press", 2, 6);
+		assert(taken === undefined && box.expanded === false, "mouse: a press off the hint is left to pi (text selection)");
+		mouse(box, "move", 2, 14);
+		mouse(box, "release", 2, 14);
+		assert(box.expanded === false, "mouse: a drag over the output does not expand the box");
+	}
+
 	// Capped timings map self-check
 	for (let i = 0; i < 250; i++) recordTiming(`call_${i}`, i);
 	assert(TIMINGS.size === MAX_TIMINGS, `TIMINGS size is bounded to ${MAX_TIMINGS}`);

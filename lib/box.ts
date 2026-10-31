@@ -4,8 +4,41 @@
  * never loads it as an extension.
  */
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { thinkingColorOf } from "./ansi.ts";
+import { stripAnsi, thinkingColorOf } from "./ansi.ts";
 import { assert, isMain } from "./check.ts";
+
+/** A clickable span inside rendered lines: 0-based cell columns, inclusive. */
+export interface TextSpan {
+	row: number;
+	start: number;
+	end: number;
+}
+
+/**
+ * Where `text` sits in each rendered line, in cell columns. A mouse handler needs this to
+ * make one piece of a box clickable and leave the rest to pi: a press the handler does not
+ * take stays with the text selection, so a box can be clicked and copied at once.
+ * A line that shows the text in part (narrow width) yields no span, so a clipped label is
+ * never half-clickable.
+ */
+export function textSpans(lines: readonly string[], text: string): TextSpan[] {
+	if (!text) return [];
+	const width = visibleWidth(text) - 1;
+	const spans: TextSpan[] = [];
+	lines.forEach((line, row) => {
+		const plain = stripAnsi(line);
+		const at = plain.indexOf(text);
+		if (at >= 0) {
+			const start = visibleWidth(plain.slice(0, at));
+			spans.push({ row, start, end: start + width });
+		}
+	});
+	return spans;
+}
+
+/** Whether the 0-based cell `x` on `row` lands inside one of `spans`. */
+export const inSpans = (spans: readonly TextSpan[], row: number, x: number): boolean =>
+	spans.some((span) => span.row === row && x >= span.start && x <= span.end);
 
 export type BoxTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; bold?(text: string): string };
 type Dim = (s: string) => string;
@@ -72,26 +105,47 @@ export function renderScreen(
 	].map((l) => truncateToWidth(l, width, ""));
 }
 
-/** Wrap `rows` (plain or ANSI-colored) into a box. `bgType` = theme bg name (no-op when the theme has no `bg`); `borderColor` = border color.
- *  `theme` may be null: a box is patched in at module load, before `session_start`
- *  delivers the active theme. An uncolored box for that first frame beats a null
- *  deref that kills the process. */
-export function renderBoxLines(theme: BoxTheme | null, width: number, rows: string[], bgType?: string, borderColor = "dim"): string[] {
-	const dim = (s: string) => (theme ? theme.fg(borderColor, s) : s);
+/** Border paint: a theme token name, or a painter for a tier that has no token (the thinking
+ *  slots, which `thinkingColorOf` resolves). */
+export type BoxBorder = string | ((text: string) => string);
+
+/** `renderBoxLines` plus where each input row landed: `starts[i]` is the first line index of
+ *  `rows[i]`. A caller that hit-tests a row (the task list's scroll counters) needs this,
+ *  because a row long enough to wrap occupies more than one line. */
+export function renderBoxRows(
+	theme: BoxTheme | null,
+	width: number,
+	rows: string[],
+	bgType?: string,
+	border: BoxBorder = "dim",
+): { lines: string[]; starts: number[] } {
+	const dim = typeof border === "string" ? (s: string) => (theme ? theme.fg(border, s) : s) : border;
 	const inner = Math.max(8, width - 4);
 	const lines = [boxEdge("╭", "╮", width, dim)];
+	const starts: number[] = [];
 	for (const row of rows) {
+		starts.push(lines.length);
 		for (const line of wrapTextWithAnsi(row, inner)) lines.push(boxRow(line, width, dim));
 	}
 	lines.push(boxEdge("╰", "╯", width, dim));
-	if (bgType && theme?.bg) {
+	const paint = (input: string[]) => {
+		if (!bgType || !theme?.bg) return input;
 		try {
-			return lines.map((l) => applyBg(l, width, (s) => theme!.bg!(bgType, s)));
+			return input.map((l) => applyBg(l, width, (s) => theme!.bg!(bgType, s)));
 		} catch {
-			return lines;
+			return input;
 		}
-	}
-	return lines;
+	};
+	return { lines: paint(lines), starts };
+}
+
+/** The box around `rows`. `bgType` = theme bg name (no-op when the theme has no `bg`);
+ *  `borderColor` = border color.
+ *  `theme` may be null: a box is patched in at module load, before `session_start`
+ *  delivers the active theme. An uncolored box for that first frame beats a null
+ *  deref that kills the process. */
+export function renderBoxLines(theme: BoxTheme | null, width: number, rows: string[], bgType?: string, border: BoxBorder = "dim"): string[] {
+	return renderBoxRows(theme, width, rows, bgType, border).lines;
 }
 
 if (isMain(import.meta.url)) {
@@ -146,5 +200,16 @@ if (isMain(import.meta.url)) {
 			`a long description keeps the right wall at width ${w}`,
 		);
 	}
+	// Click target on a piece of text: cells, not characters, and nothing when clipped.
+	const line = renderBoxRows(th, 40, ["Todos (3/7) [click to expand]"], undefined, undefined).lines[1]!;
+	const spans = textSpans([line], "[click to expand]");
+	assert(spans.length === 1 && spans[0]!.row === 0, "textSpans finds the hint on its row");
+	assert(spans[0]!.start === visibleWidth("│ Todos (3/7) "), `span starts at the hint, got ${spans[0]!.start}`);
+	assert(inSpans(spans, 0, spans[0]!.start) && inSpans(spans, 0, spans[0]!.end), "span covers the first and last cell");
+	assert(!inSpans(spans, 0, spans[0]!.start - 1) && !inSpans(spans, 1, spans[0]!.start), "span excludes the cell before and other rows");
+	assert(textSpans([boxRow("Todos (3/7) [click to exp…", 24, (t) => t)], "[click to expand]").length === 0, "a clipped hint is not clickable");
+	// Wide characters before the hint shift cells, not characters.
+	const wide = textSpans([boxRow("日本 [x]", 24, (t) => t)], "[x]");
+	assert(wide[0]!.start === visibleWidth("│ 日本 "), `a wide glyph shifts by cells, got ${wide[0]!.start}`);
 	console.log("lib/box.ts OK");
 }

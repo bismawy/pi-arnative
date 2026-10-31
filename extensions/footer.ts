@@ -1380,9 +1380,12 @@ if (isMain(import.meta.url)) {
 	writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/arnative-tests\n");
 	git = null;
 	const noGit = mkdtempSync(join(tmpdir(), "pi-arnative-nogit-"));
-	void refreshGit(noGit); // in flight (deterministic: sync up to the first await), resolves git = null
+	// `noGit` is not always repo-free: a temp dir under a versioned home finds the home
+	// repo, so this first refresh really is in flight and can publish the home branch
+	// before the queued one lands. Wait for the queued result, not for "not null".
+	void refreshGit(noGit);
 	await refreshGit(repo); // queued behind it with the newest cwd
-	for (let i = 0; i < 100 && git === null; i++) await new Promise((r) => setTimeout(r, 20));
+	for (let i = 0; i < 250 && git?.branch !== "arnative-tests"; i++) await new Promise((r) => setTimeout(r, 20));
 	assert(git !== null && git.branch === "arnative-tests", "queued git refresh re-ran on the newest cwd (not dropped)");
 	rmSync(noGit, { recursive: true, force: true });
 	rmSync(repo, { recursive: true, force: true });
