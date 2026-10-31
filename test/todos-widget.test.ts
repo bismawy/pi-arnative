@@ -137,15 +137,17 @@ test("a click below the box belongs to the editor", () => {
 test("the shortcut is the keyboard path", () => {
 	const { component } = widget();
 	const keys = [...shortcuts.keys()];
-	assert.deepEqual(
-		keys,
-		["ctrl+alt+o", "alt+o", "ctrl+alt+j", "alt+j", "ctrl+alt+k", "alt+k"],
-		`shortcut keys, got ${keys}`,
-	);
+	const expected = (
+		process.platform === "win32" ||
+		(process.platform === "linux" && Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP))
+	)
+		? ["ctrl+alt+o", "alt+o", "ctrl+alt+j", "alt+j", "ctrl+alt+k", "alt+k"]
+		: ["ctrl+alt+o", "ctrl+alt+j", "ctrl+alt+k"];
+	assert.deepEqual(keys, expected, `shortcut keys, got ${keys}`);
 	const collapsed = component.render(80).length;
-	shortcuts.get("alt+o")!.handler(ctx);
+	(shortcuts.get("alt+o") ?? shortcuts.get("ctrl+alt+o"))!.handler(ctx);
 	assert.ok(component.render(80).length > collapsed, "the shortcut expands the box");
-	shortcuts.get("alt+o")!.handler(ctx);
+	(shortcuts.get("alt+o") ?? shortcuts.get("ctrl+alt+o"))!.handler(ctx);
 	assert.equal(component.render(80).length, collapsed, "the shortcut collapses it");
 });
 
@@ -168,7 +170,7 @@ test("the counters scroll the window, by click and by key", async () => {
 	// Six more tasks, so the five-row window has to leave something out.
 	await call({ action: "create", tasks: [4, 5, 6, 7, 8, 9].map((n) => ({ subject: `Task ${n}` })) });
 	const { component } = widget();
-	shortcuts.get("alt+o")!.handler(ctx);
+	(shortcuts.get("alt+o") ?? shortcuts.get("ctrl+alt+o"))!.handler(ctx);
 
 	// The subjects of the five rows on screen, in order.
 	const shown = (lines: string[]): string[] =>
@@ -189,9 +191,9 @@ test("the counters scroll the window, by click and by key", async () => {
 	);
 
 	// The keyboard path, for regular mode where pi hands the mouse to the terminal.
-	shortcuts.get("alt+j")!.handler(ctx);
+	(shortcuts.get("alt+j") ?? shortcuts.get("ctrl+alt+j"))!.handler(ctx);
 	assert.equal(shown(component.render(80))[0]!.split(" ·")[0], "Tiga", "alt+j scrolls down");
-	shortcuts.get("alt+k")!.handler(ctx);
+	(shortcuts.get("alt+k") ?? shortcuts.get("ctrl+alt+k"))!.handler(ctx);
 	assert.deepEqual(shown(component.render(80)), shown(scrolled), "alt+k scrolls back up");
 
 	// Clicking ↑ works too, and parks at the top instead of running off it.
@@ -200,7 +202,7 @@ test("the counters scroll the window, by click and by key", async () => {
 	assert.ok(!component.render(80).some((line) => line.includes("↑")), "at the top there is no ↑ counter left to click");
 
 	// Past the end the window parks instead of drifting, so the last task stays visible.
-	for (let i = 0; i < 20; i++) shortcuts.get("alt+j")!.handler(ctx);
+	for (let i = 0; i < 20; i++) (shortcuts.get("alt+j") ?? shortcuts.get("ctrl+alt+j"))!.handler(ctx);
 	const tail = component.render(80);
 	assert.ok(tail.some((line) => line.includes("Task 9")), "the last task is reachable");
 	assert.ok(!tail.some((line) => line.includes("↓")), "nothing is left below the last window");
@@ -211,7 +213,7 @@ test("the counters scroll the window, by click and by key", async () => {
 });
 
 test("a finished box waits, then leaves the screen on its own", async () => {
-	if (widget().component.render(80).length === 3) shortcuts.get("alt+o")!.handler(ctx);
+	if (widget().component.render(80).length === 3) (shortcuts.get("alt+o") ?? shortcuts.get("ctrl+alt+o"))!.handler(ctx);
 	assert.ok(widget().component.render(80).length > 3, "the box is open before the last update");
 	for (let id = 1; id <= 8; id++) await call({ action: "update", id, status: "completed" });
 	assert.ok(widgets.get("arnative-todos"), "work is left, so the box stays");
