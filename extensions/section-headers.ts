@@ -12,11 +12,12 @@
  * - Box divider '├────┤'. Active tab content is left-aligned, wrapped, soft.
  * - Hides pi's built-in stacked list in loadedResourcesContainer.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { userInfo } from "node:os";
+import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import {
+	CONFIG_DIR_NAME,
 	UserMessageComponent,
 	getAgentDir,
 	VERSION,
@@ -140,14 +141,6 @@ export function sectionNameOf(text: string): "Context" | "Skills" | "Extensions"
 	return null;
 }
 
-export function packageNameOf(label: string): string | null {
-	const base = label.split(":")[0].trim();
-	if (base === "") return null;
-	const at = base.lastIndexOf("@");
-	if (at > 0 && /^\d/.test(base.slice(at + 1))) return null;
-	return /^[\w.@/-]+$/.test(base) ? base : null;
-}
-
 /**
  * OS account name of whoever is running pi, for the header greeting. Falls back to the
  * usual env vars, then to a neutral word so the line is never empty.
@@ -163,8 +156,6 @@ export function deviceUser(): string {
 	return u || "there";
 }
 
-const versionCache = new Map<string, string | null>();
-
 export function readVersion(dir: string): string | null {
 	try {
 		const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: unknown };
@@ -174,27 +165,100 @@ export function readVersion(dir: string): string | null {
 	}
 }
 
-export function installedVersion(
-	label: string,
-	root = join(getAgentDir(), "npm", "node_modules"),
-	gitRoot = join(getAgentDir(), "git"),
-): string | null {
-	const name = packageNameOf(label);
-	if (!name) return null;
-	if (versionCache.has(name)) return versionCache.get(name) ?? null;
-	let version = readVersion(join(root, name));
-	if (!version && name.includes("/")) {
+// ---------------------------------------------------------------------------
+// Extensions tab = the `pi list` rows, then the loose extension files.
+// pi's own listing names one loaded module per row, so a package shows up as
+// eleven file names and the package itself never appears.
+// ---------------------------------------------------------------------------
+
+export interface InstalledPackage {
+	/** Row text: the configured source, without its `npm:` prefix. */
+	label: string;
+	/** Absolute dir for a local-path source (null for npm and git packages). */
+	localPath: string | null;
+}
+
+/** Slashes forward, `~` expanded, lower case: comparable against a listing path. */
+function comparablePath(path: string): string {
+	const home = homedir().replace(/\\/g, "/");
+	const expanded = path.startsWith("~") ? home + path.slice(1) : path;
+	return expanded.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * Packages configured in settings, in `pi list` order: user scope first, then project.
+ * Read straight from the two settings files; the header runs on every render, so it
+ * must not build a package manager for this.
+ */
+export function installedPackages(agentDir: string, cwd: string): InstalledPackage[] {
+	const sourcesOf = (file: string): string[] => {
 		try {
-			for (const host of readdirSync(gitRoot)) {
-				version = readVersion(join(gitRoot, host, name));
-				if (version) break;
-			}
+			const settings = JSON.parse(readFileSync(file, "utf8")) as {
+				packages?: Array<string | { source?: unknown }>;
+			};
+			return (settings.packages ?? [])
+				.map((pkg) => (typeof pkg === "string" ? pkg : typeof pkg.source === "string" ? pkg.source : ""))
+				.filter((source) => source !== "");
 		} catch {
-			version = null;
+			return []; // no settings file (or unreadable JSON): the tab shows no package, not an error
 		}
+	};
+	const scopes = [
+		{ sources: sourcesOf(join(agentDir, "settings.json")), baseDir: agentDir },
+		{ sources: sourcesOf(join(cwd, CONFIG_DIR_NAME, "settings.json")), baseDir: join(cwd, CONFIG_DIR_NAME) },
+	];
+	return scopes.flatMap(({ sources, baseDir }) =>
+		sources.map((source) => {
+			const packaged = /^(npm|git):/.test(source);
+			const label = source.startsWith("npm:") ? source.slice("npm:".length) : source;
+			// Relative local sources resolve against their own scope dir, the way pi installs them.
+			const absolute = /^([A-Za-z]:)?[\\/]/.test(source) || source.startsWith("~") ? source : join(baseDir, source);
+			return { label, localPath: packaged ? null : comparablePath(absolute) };
+		}),
+	);
+}
+
+/** Loose extension files from pi's expanded `[Extensions]` listing (never package modules). */
+export function listingLocalPaths(expanded: string): string[] {
+	const paths: string[] = [];
+	for (const line of stripAnsi(expanded).split("\n")) {
+		if (line.trim() === "") continue;
+		// pi indents the groups by 2, a loose path or a package source by 4, a package module by 6.
+		if (line.length - line.trimStart().length !== 4) continue;
+		const text = line.trim();
+		if (!/^(npm|git):/.test(text)) paths.push(text);
 	}
-	versionCache.set(name, version);
-	return version;
+	return paths;
+}
+
+/** Last segment of a path; an `index.ts` file names its folder instead. */
+function fileLabel(path: string): string {
+	const segments = path.split("/").filter(Boolean);
+	const last = segments[segments.length - 1] ?? path;
+	if ((last === "index.ts" || last === "index.js") && segments.length > 1) {
+		return segments[segments.length - 2]!;
+	}
+	return last;
+}
+
+/** Tab rows: one per installed package, then the loose extension files, sorted. */
+export function extensionTabItems(expanded: string, agentDir: string, cwd: string): string[] {
+	const packages = installedPackages(agentDir, cwd);
+	const localRoots = packages.map((pkg) => pkg.localPath).filter((root): root is string => root !== null);
+	const items = packages.map((pkg) => pkg.label);
+	const seen = new Set(items);
+	const locals: string[] = [];
+	for (const path of listingLocalPaths(expanded)) {
+		const comparable = comparablePath(path);
+		// Modules of a local-path package are rows of that package, not files of their own.
+		if (localRoots.some((root) => comparable === root || comparable.startsWith(`${root}/`))) continue;
+		const label = fileLabel(path.replace(/\\/g, "/"));
+		if (seen.has(label)) continue;
+		seen.add(label);
+		locals.push(label);
+	}
+	locals.sort((a, b) => a.localeCompare(b));
+	return [...items, ...locals];
 }
 
 // Arnative build actually running: package.json one level above this extension file.
@@ -202,7 +266,7 @@ export function installedVersion(
 // behind whenever the local clone (or a hand-copied extensions/) is what pi loaded.
 const ARNATIVE_VERSION = readVersion(fileURLToPath(new URL("..", import.meta.url)));
 
-export function extractItemsFromBody(body: string, isExtensions = false): string[] {
+export function extractItemsFromBody(body: string): string[] {
 	const plain = stripAnsi(body).trim();
 	if (!plain) return [];
 	const lines = plain.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -214,17 +278,7 @@ export function extractItemsFromBody(body: string, isExtensions = false): string
 			items.push(line);
 		}
 	}
-	if (!isExtensions) return items;
-	// One row per package (like `pi list`): drop the `:subpath` of every module inside a
-	// package and repeat nothing. Local single-file extensions (`hark.ts`) stay as they are.
-	const labels = new Set<string>();
-	for (const item of items) {
-		const colon = item.indexOf(":");
-		const base = (colon === -1 ? item : item.slice(0, colon)).trim();
-		const ver = installedVersion(base);
-		labels.add(ver ? `${base}@${ver}` : base);
-	}
-	return [...labels];
+	return items;
 }
 
 // Cheatsheet for the Shortcut tab. Mirrors README "Shortcuts" plus the bindings the
@@ -731,9 +785,14 @@ if (UserMessageComponent?.prototype) {
 					(this as Record<string, unknown>)._isLoadedResourcesContainer = true;
 
 					countsKnown = true;
-					const rawBody = body.split("\n").slice(1).join("\n");
-					const items = extractItemsFromBody(rawBody, sectionName === "Extensions");
-					tabStore.set(sectionName, items);
+					if (sectionName === "Extensions") {
+						// The expanded listing carries the loose files; the packages come from settings.
+						const expanded = typeof child.getExpandedText === "function" ? String(child.getExpandedText()) : "";
+						tabStore.set("Extensions", extensionTabItems(expanded, getAgentDir(), getCwd() || process.cwd()));
+					} else {
+						const rawBody = body.split("\n").slice(1).join("\n");
+						tabStore.set(sectionName, extractItemsFromBody(rawBody));
+					}
 
 					// Hide this child from the built-in display so it does not stack under the header
 					child.render = () => [];
