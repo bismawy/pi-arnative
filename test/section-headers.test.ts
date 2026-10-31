@@ -6,7 +6,7 @@
  * Run with `npm test`.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -109,14 +109,16 @@ test("section-headers visual suite", () => {
 	// Extensions tab: the `pi list` rows (settings packages, npm prefix dropped), then the
 	// loose extension files from pi's expanded listing, never a module of a package.
 	const pkgFixture = mkdtempSync(join(tmpdir(), "arnative-pkg-"));
+	mkdirSync(join(pkgFixture, "npm", "node_modules", "alpha"), { recursive: true });
+	writeFileSync(join(pkgFixture, "npm", "node_modules", "alpha", "package.json"), JSON.stringify({ version: "1.0.0" }));
 	writeFileSync(
 		join(pkgFixture, "settings.json"),
 		JSON.stringify({ packages: ["npm:alpha", "D:/work/beta", { source: "npm:gamma@1.2.3" }, "git:github.com/x/y"] }),
 	);
 	assert(
 		JSON.stringify(installedPackages(pkgFixture, join(pkgFixture, "cwd")).map((pkg) => pkg.label)) ===
-			JSON.stringify(["alpha", "D:/work/beta", "gamma@1.2.3", "git:github.com/x/y"]),
-		"installedPackages keeps settings order and drops the npm: prefix",
+			JSON.stringify(["alpha@1.0.0", "D:/work/beta", "gamma@1.2.3", "git:github.com/x/y"]),
+		"installedPackages keeps settings order, drops the npm: prefix and adds the installed version",
 	);
 	const expandedListing = [
 		"[Extensions]",
@@ -141,7 +143,7 @@ test("section-headers visual suite", () => {
 	);
 	assert(
 		JSON.stringify(extensionTabItems(expandedListing, pkgFixture, join(pkgFixture, "cwd"))) ===
-			JSON.stringify(["alpha", "D:/work/beta", "gamma@1.2.3", "git:github.com/x/y", "hark.ts", "omnirush"]),
+			JSON.stringify(["alpha@1.0.0", "D:/work/beta", "gamma@1.2.3", "git:github.com/x/y", "hark.ts", "omnirush"]),
 		"extensionTabItems: one row per package, a local-path package collapses to one row, loose files last",
 	);
 	rmSync(pkgFixture, { recursive: true, force: true });
