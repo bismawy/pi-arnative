@@ -9,7 +9,7 @@
  * Reads are memoised per process; every write re-reads the file and replaces it atomically
  * (temp file + rename), so concurrent pi sessions that write different keys keep both.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -72,8 +72,21 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 	return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
 }
 
+/** Reading order of `config.json`: the presets in the order the settings menu shows them,
+ *  then `layoutVersion`, then anything else (a key from another module or a newer version).
+ *  Times a user edits the file by hand or reads it back. */
+const KEY_ORDER = ["headerPreset", "footerPreset", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
+
+/** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
+function ordered(record: Record<string, unknown>): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const key of KEY_ORDER) if (Object.hasOwn(record, key)) out[key] = record[key];
+	for (const [key, value] of Object.entries(record)) if (!Object.hasOwn(out, key)) out[key] = value;
+	return out;
+}
+
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
-export function saveChoice(key: string, value: string): void {
+export function saveChoice(key: string, value: string, rename: (from: string, to: string) => void = renameSync): void {
 	if (readConfig()[key] === value) return;
 	// Re-read: another pi session may have written its own key since this one loaded.
 	memo = { ...readDisk().record, [key]: value };
@@ -81,11 +94,33 @@ export function saveChoice(key: string, value: string): void {
 		const path = configPath();
 		const tmp = `${path}.${process.pid}.tmp`;
 		mkdirSync(dirname(path), { recursive: true });
-		writeFileSync(tmp, `${JSON.stringify(memo, null, 2)}\n`, "utf8");
-		renameSync(tmp, path);
+		const payload = `${JSON.stringify(ordered(memo), null, 2)}\n`;
+		writeFileSync(tmp, payload, "utf8");
+		try {
+			rename(tmp, path);
+		} catch (e) {
+			// Windows: a running pi session can hold config.json open, and then the atomic
+			// replace fails with EPERM while an in-place write still lands. A setting that
+			// silently never reaches disk is worse than the small truncation window here.
+			const code = (e as NodeJS.ErrnoException).code;
+			if (code !== "EPERM" && code !== "EBUSY" && code !== "EXDEV") throw e;
+			writeFileSync(path, payload, "utf8");
+			rmSync(tmp, { force: true });
+		}
 	} catch {
 		// ignore: the choice still applies for this session
 	}
+}
+
+/** Record the choices in use, so `config.json` names every preset instead of only the ones a
+ *  user changed — a fresh install then reads a complete profile instead of an empty file.
+ *  Runs at `session_start`; after the first run every key already matches and nothing is
+ *  written. A present-but-unreadable config is never replaced by this partial record (the
+ *  same rule the layout stamp follows), because that would drop the other keys. */
+export function ensureChoices(values: Record<string, string>): void {
+	const { parsed } = readDisk();
+	if (!parsed && existsSync(configPath())) return;
+	for (const [key, value] of Object.entries(values)) saveChoice(key, value);
 }
 
 /** Drop the in-memory copy so the next read hits disk (a restart, in a test). */
@@ -148,6 +183,50 @@ if (isMain(import.meta.url)) {
 	const stamped = JSON.parse(readFileSync(join(stamp, "arnative", "config.json"), "utf8")) as Record<string, unknown>;
 	assert(stamped.headerPreset === "b" && stamped.layoutVersion === "1", "stamping merges, it does not replace");
 	rmSync(stamp, { recursive: true, force: true });
+
+	// The startup record names every choice, including the ones still at their default.
+	const profile = mkdtempSync(join(tmpdir(), "arnative-preset-profile-"));
+	process.env.PI_CODING_AGENT_DIR = profile;
+	resetPresetCache();
+	ensureChoices({ headerPreset: "Arnative (Full)", footerPreset: "Arnative (Full)" });
+	assert(loadChoice(HEADER_PRESET_KEY, ["Arnative (Full)"] as const) === "Arnative (Full)", "a default choice is written, not skipped");
+	assert(loadChoice(FOOTER_PRESET_KEY, ["Arnative (Full)"] as const) === "Arnative (Full)", "every key in the batch is written");
+	const profiled = readFileSync(join(profile, "arnative", "config.json"), "utf8");
+	ensureChoices({ headerPreset: "Arnative (Full)", footerPreset: "Arnative (Full)" });
+	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === profiled, "a second record writes nothing");
+
+	// The file keeps one key order whatever order the writes arrived in.
+	const keyOrder = () => Object.keys(JSON.parse(readFileSync(join(profile, "arnative", "config.json"), "utf8")) as Record<string, unknown>);
+	assert(
+		keyOrder().join(",") === "headerPreset,footerPreset,layoutVersion",
+		"known keys follow KEY_ORDER, layoutVersion after the presets: " + keyOrder().join(","),
+	);
+	saveChoice("spinnerPreset", "Circle Wave");
+	saveChoice("zzz-other", "x");
+	assert(
+		keyOrder().join(",") === "headerPreset,footerPreset,spinnerPreset,layoutVersion,zzz-other",
+		"a newly written key slots into place, an unknown one goes last: " + keyOrder().join(","),
+	);
+
+	// Windows: a running pi session can hold the file open, so the atomic replace fails
+	// while the setting still has to land. The seam stands in for that rename.
+	const locked = () => {
+		throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+	};
+	saveChoice(HEADER_PRESET_KEY, "b", locked);
+	resetPresetCache();
+	assert(loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "a refused rename still writes the choice in place");
+	saveChoice(FOOTER_PRESET_KEY, "a", locked);
+	resetPresetCache();
+	assert(loadChoice(FOOTER_PRESET_KEY, ["a", "b"] as const) === "a" && loadChoice(HEADER_PRESET_KEY, ["a", "b"] as const) === "b", "the in-place write keeps the other keys");
+	assert(!existsSync(join(profile, "arnative")) || readdirSync(join(profile, "arnative")).every((f) => !f.endsWith(".tmp")), "no temp file is left behind");
+
+	writeFileSync(join(profile, "arnative", "config.json"), "{not json", "utf8");
+	resetPresetCache();
+	ensureChoices({ headerPreset: "b" });
+	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === "{not json", "the startup record leaves an unreadable config alone");
+	rmSync(profile, { recursive: true, force: true });
+
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	resetPresetCache();
 
