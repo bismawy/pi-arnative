@@ -1,8 +1,8 @@
 /**
  * The todo box as the session draws it: a real `ToolExecutionComponent` with the real tool
  * definition and a real tool result, so the assertion covers the path the terminal takes.
- * `tools.ts` gives the todo tool a dedicated box (`formatTodoRows`), which bypasses the generic
- * title row every other tool uses; a test of the generic path does not reach it.
+ * `tools.ts` routes the todo tool through `titleRow` and `todoTitleDetail` so the title row
+ * names the status or action the call left behind.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";

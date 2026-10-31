@@ -369,6 +369,10 @@ if (isMain(import.meta.url)) {
 
 	state = patchTodo(state, 2, { status: "completed" })!;
 	assert(activeTodo(state) === undefined, "no active task after completing the only one");
+	// The extension folds the widget away once the list is done, yet the renderer still
+	// describes that state: it is a pure function of the list, not of who paints it.
+	const doneState = { ...state, tasks: state.tasks.map((task) => ({ ...task, status: "completed" as const })) };
+	assert(allDone(doneState) && collapsedText(doneState).endsWith(COLLAPSED_DONE), "a finished list names its end");
 	assert(headingText(state) === "Todos (1/5)", "heading counts completed over total");
 	assert(patchTodo(state, 99, { status: "completed" }) === null, "an unknown id is rejected");
 	assert(removeTodo(state, 99) === null, "removing an unknown id is rejected");

@@ -10,59 +10,30 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 
 ## Overview
 
-pi-arnative replaces pi’s default terminal chrome with a unified, cohesive visual aesthetic.
+pi-arnative replaces pi’s default terminal chrome with a unified visual interface.
 
-- Warm Themes: Cohesive, contrast-checked OKLCH color palettes generated without drift.
+- Warm Themes: Contrast-checked OKLCH color palettes generated without drift (`arnative` plus 10 variants).
 - Tabbed Header: Compact box menu showing Directory, Model, Context, Skills, Extensions, and Shortcuts.
-- Rounded Tool Boxes: Status, spinner, and duration for every tool call with expandable outputs.
-- Enhanced Footer: 3-row status grid tracking branch, active duration (30s idle freeze), and token speed.
-- Transcript Clock: Timestamps for conversation messages with clean bubble backgrounds.
-- Usage Dashboard: Real-time token counts and cost tracking across all local sessions via `/usage`.
-- Custom Providers: any OpenAI-, Anthropic-, Gemini- or Ollama-compatible endpoint from three inputs — URL, key, name; models are probed and picked, saved to pi's own `models.json`/`auth.json`, together with the context window and output cap the probe answered and the compat flags the endpoint needs. Enter on a stored provider edits: reselect models, re-probe the endpoint, cycle per-model thinking levels (off → auto → minimal → low → medium → high → xhigh → max, auto-detected from ids), set all of them at once (`[A]` auto, `[R]` off), probe which effort levels the channel really accepts (`p`), or delete.
-- Model Heal: keeps `models.json` correct with no command (adopted from pi-auto-compat) — missing compat flags, the context window and output cap each channel's `/models` publishes, and the effort levels a relay really accepts. Explicit values always win.
+- Rounded Tool Boxes: Status, spinner, runtime duration, and clickable `[show]` / `[hide]` output toggles.
+- Task List: `todo` tool, `/todos` view, and a boxed widget above the editor that auto-hides 30s after all tasks finish.
+- Enhanced Footer: 3-row status grid (`Arnative (Full)`) or single collapsible row (`Arnative (Minimal)`) tracking branch, diff, active duration, and token speed.
+- Working Spinners: 18 animated presets with live picker preview and optional `[g]` gradient sweep.
+- Transcript Clock: Per-message timestamps with clean bubble backgrounds.
+- Usage Dashboard: Real-time token counts and cost tracking across local sessions via `/usage`.
+- Custom Providers: Interactive `/providers` wizard to probe endpoints, pick models, set thinking levels, and save OpenAI-, Anthropic-, Gemini-, or Ollama-compatible channels to `models.json` and `auth.json`.
+- Model Heal: Background sync (`/model-heal`) that fills missing compat flags, `/models` token limits, and accepted reasoning effort levels in `models.json`.
+- Auto-compact: Automatic context compaction after a turn settles using smart window tiers or a fixed token budget.
 
 <details>
 <summary><b>Configuration & Presets</b></summary>
 
-### Working Spinner Presets
-Configurable via `/arnative` → **Animations** (saved to `~/.pi/agent/arnative/config.json`).
-Features 18 presets with live animated preview in the picker (`Arnative` as default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle Google brand gradient sweep on accent presets.
+Saved to `~/.pi/agent/arnative/config.json` via `/arnative`:
 
-### Footer Presets
-Configurable via `/arnative` → **Footers**:
-- `Arnative (Full)` (default 3-row grid)
-- `Arnative (Minimal)` (single collapsible head row; click or `ctrl+alt+m` to toggle)
-- `Pi (system)` (built-in footer)
-
-### Auto-compact
-Configurable via `/arnative` → **Auto-compact** (saved to `~/.pi/agent/arnative/config.json`).
-When the context crosses the chosen threshold after a run settles, pi's own compaction fires — the same machinery and summary as `/compact`, keeping long sessions light without the manual step. Two shapes of control:
-- **Smart** (tiered by context window): ≥768k→20% · ≥384k→40% · ≥192k→80% · below 192k→pi core. Every tier lands the trigger near the same ~200k-token transcript ceiling — a 1M window trips at a fifth of its window, a 256k at 80%, and a 128k model defers entirely to pi's own near-full compaction (the behavior that is already safe there).
-- **A manual token budget** (`100k`–`400k`): one absolute number, whatever the window.
-
-Off by default. Guards: no re-trigger while a compaction runs, a growth-margin wait (5% of the threshold) after an attempt that freed too little or failed, and a full reset on session start. Pi's own `compaction.reserveTokens` threshold, including per-model overrides, is unaffected; whichever fires first wins.
-
-### Model heal
-Configurable via `/arnative` → **Model heal** (saved to `~/.pi/agent/arnative/config.json`). Runs on its own on session start, model select, a change to `models.json`, and an error that names a rejected parameter:
-- **Full** (default): compat flags offline, plus `contextWindow`/`maxTokens` from each channel's `GET /models` (6 h TTL) and the accepted `reasoning_effort` levels written as a `thinkingLevelMap` (24 h TTL).
-- **Flags**: the offline compat pass only, no network.
-- **Off**: nothing.
-
-`/model-heal` forces every pass now, ignoring the TTLs (`/auto-compat` is an alias once pi-auto-compat is uninstalled). A value you set by hand — even `false` — is never overwritten, a corrupt `models.json` is reported and never rewritten, and the first write keeps a backup. While pi-auto-compat is still installed, pi-arnative defers to it and says so once.
-
-### Task list
-The `todo` tool, a boxed widget above the editor and the `/todos` screen. This package registers the `todo` tool name, so uninstall `@juicesharp/rpiv-todo` first.
-
-- Collapsed, the widget is one row: `\uf03a Todos (3/7) · Tulis widget [click to expand]`.
-- Expanded, it shows a window around the task in progress, with `↑ n more` and `↓ n more` for the rest. The window follows the terminal height: three rows on a short screen, five at 24 lines, up to nine past 28 (`listRowsFor`).
-- The heading icon and `✓` are accent, the count beside them is soft accent. `◉` in progress takes the footer's model-name colour (`mdHeading`, accent when a theme omits it), `◌` queued is dim.
-- The task text carries the state as well: the running task in soft accent (with its note in dim), queued dim, a finished one plain. The box border follows the session thinking level.
-- Once every task is done the box folds itself to one row: ` Todos (7/7) · All tasks finished [click to expand]`.
-- The tool box title names the status the call left behind: `✓ todo · completed`, `· created`, `· list`, with `󱞩 Updated #1` and the task name on the line below.
-- Click a counter row to scroll the window one task; `alt+j` / `alt+k` do the same from the keyboard, which is the only path in regular mode.
-- Click the box to expand or collapse in fullscreen mode; `alt+o` (`ctrl+alt+o` elsewhere) works in every mode.
-- The list is per session, kept in `~/.pi/agent/arnative/todos/<session id>.json`.
-- `/todos` lists every task, in progress first.
+- **Headers & Footers:** `Arnative (Full)` (default), `Arnative (Minimal)` (footer only; click head text or press `ctrl+alt+m` to toggle), or `Pi (system)`.
+- **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle the Google gradient sweep.
+- **Auto-compact:** Off by default. **Smart** tiers trigger near ~200k tokens (`≥768k→20%`, `≥384k→40%`, `≥192k→80%`, `<192k→pi core`), or pick a fixed budget (`100k` to `400k`).
+- **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with 6h TTL, reasoning effort probe with 24h TTL), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten.
+- **Task list (`todo`):** Stored per session in `~/.pi/agent/arnative/todos/<session-id>.json` (uninstall `@juicesharp/rpiv-todo` first to avoid tool name conflict). Click `[click to expand]` / `[click to collapse]` or press `ctrl+alt+o` (`alt+o`) to toggle; click `↑`/`↓` counters or press `ctrl+alt+j`/`k` (`alt+j`/`k`) to scroll. Auto-hides 30s after completion (set `PI_ARNATIVE_TODO_HIDE_MS` to override, `0` for immediate hide; expanding pauses the timer).
 
 </details>
 
@@ -72,11 +43,9 @@ The `todo` tool, a boxed widget above the editor and the `/todos` screen. This p
 pi install npm:@bismawy/pi-arnative
 ```
 
-Apply a theme via `/settings` → **Theme** → `arnative` (or variant). Requires a [Nerd Font](https://www.nerdfonts.com/font-downloads).
-On a fresh install the `arnative` theme is applied automatically when pi has no theme of its
-own; a theme you already chose is never overridden.
+Requires a [Nerd Font](https://www.nerdfonts.com/font-downloads). On a fresh install, `arnative` is applied automatically if no theme is set; switch anytime via `/arnative themes` or `/settings` → **Theme**.
 
-To test locally:
+Local development:
 ```bash
 npm run dev
 ```
@@ -89,31 +58,30 @@ npm run dev
 | `ctrl+alt+r` · `alt+r` | Quick reload (`/reload`) |
 | `ctrl+alt+n` · `alt+n` | New session (`/new`) |
 | `ctrl+alt+m` · `alt+m` | Toggle Minimal footer |
-| `ctrl+alt+o` · `alt+o` | Expand or collapse the task list |
-| `ctrl+alt+j` · `alt+j` | Scroll the task list down one task |
-| `ctrl+alt+k` · `alt+k` | Scroll the task list up one task |
-| `/usage` | Token & cost dashboard (or `/arnative` → **Usage**) |
-| `/todos` | Task list recap, in progress first |
+| `ctrl+alt+o` · `alt+o` | Expand or collapse task list |
+| `ctrl+alt+j` · `alt+j` | Scroll task list down |
+| `ctrl+alt+k` · `alt+k` | Scroll task list up |
+| Click `[show]` / `[hide]` · `ctrl+o` | Toggle tool output box |
+| `←` / `Esc` | Step back to parent menu / close active screen |
 | `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Model heal, Providers, Usage) |
-| `/providers` | Provider screen (or `/arnative` → **Providers**) |
-| `/model-heal` | Heal `models.json` now (or `/arnative` → **Model heal**) |
-| Click tool / `ctrl+o` | Toggle tool output box |
-| `←` | Back — step back from submenus/dashboard to menu |
+| `/usage` | Token & cost dashboard |
+| `/todos` | Full task list recap |
+| `/providers` | Custom provider manager |
+| `/model-heal` | Run `models.json` heal passes now |
 
 <details>
 <summary><b>Keybindings & Platform Notes</b></summary>
 
-To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
+Bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 ```json
 {
   "app.session.new": ["ctrl+alt+n", "alt+n"]
 }
 ```
 
-- **Windows / WSL:** Windows Terminal aliases `Ctrl+Alt` to AltGr; use `alt+…` (or disable `altGrAliasing` in WT profile).
-- **macOS:** Uses `ctrl+option+…`.
-- **tmux / Herdr:** If Esc has delay, set `PI_TUI_ESC_TIMEOUT=100` in your environment.
-- **Navigation:** `←` navigates back to parent menus; `Esc` cancels or closes the active screen.
+- **Windows / WSL:** Windows Terminal maps `Ctrl+Alt` to AltGr; use `alt+…` or disable `altGrAliasing`.
+- **macOS:** Use `ctrl+option+…`.
+- **tmux / Herdr:** Set `PI_TUI_ESC_TIMEOUT=100` if `Esc` has a delay.
 
 </details>
 
@@ -124,52 +92,35 @@ To bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 
 | File | Role |
 | --- | --- |
-| `extensions/tools.ts` | Rounded tool boxes, spinners, and duration |
-| `extensions/section-headers.ts` | Tabbed header and resource box (preset: `/arnative headers`) |
-| `extensions/footer.ts` | 3-row status grid footer and boxed editor (preset: `/arnative footers`) |
-| `extensions/animations.ts` | Working spinner presets and `/arnative` → Animations picker |
-| `extensions/autocompact.ts` | Auto-compact: Smart tiers by window or a fixed token budget (`/arnative` → Auto-compact) |
-| `extensions/model-heal.ts` | Model heal triggers: session start, model select, `models.json` watcher, rejected-parameter errors, `/model-heal` |
-| `lib/model-heal.ts` | Model heal passes: compat flags, `/models` limits sync, effort probe |
-| `lib/spinner.ts` | Spinner preset catalog: frames, cadence, and painters |
-| `extensions/arnative.ts` | Settings menu with live preview and navigation |
-| `lib/provider.ts` | Custom provider wizard: probe, model pick, edit actions, `models.json`/`auth.json` save |
-| `lib/list-picker.ts` | The live-preview/multi-select picker every arnative screen shares |
+| `extensions/arnative.ts` | `/arnative` settings menu and live preview pickers |
+| `extensions/section-headers.ts` | Tabbed header and resource box |
+| `extensions/footer.ts` | 3-row status grid, Minimal footer, and boxed editor |
+| `extensions/tools.ts` | Rounded tool boxes, spinners, duration, and `[show]` / `[hide]` toggles |
+| `extensions/todos.ts` | `todo` tool, boxed widget above editor, and `/todos` screen |
+| `extensions/animations.ts` | Spinner preset picker and live preview |
+| `extensions/autocompact.ts` | Smart and fixed-budget context compaction |
+| `extensions/model-heal.ts` | Automatic `models.json` heal triggers and `/model-heal` |
 | `extensions/timestamps.ts` | Message timestamps and bubble backgrounds |
-| `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection style, and UI polish |
+| `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection styling, and UI polish |
 | `extensions/usage.ts` | Token and cost dashboard (`/usage`) |
+| `lib/todos.ts` | Task state, window layout, box rows, and session store |
+| `lib/spinner.ts` | Spinner preset catalog, frames, and gradient painters |
+| `lib/provider.ts` | Custom provider probe, model picker, and config writer |
+| `lib/model-heal.ts` | Compat flags, `/models` limit sync, and reasoning effort probe |
+| `lib/list-picker.ts` | Shared live-preview and multi-select picker component |
 
 </details>
 
 <details>
-<summary><b>Theme Variants</b></summary>
+<summary><b>Theme Variants & Development</b></summary>
 
-Theme definitions are generated via `themes/gen-themes.mjs` using OKLCH color math (`lib/color.ts`).
-
-**Variants:** `sun` · `zinc` · `violet` · `emerald` · `matrix` · `cyberpunk` · `synthwave` · `gruvbox` · `nord` · `dracula`
-
-</details>
-
-<details>
-<summary><b>Development & Verification</b></summary>
+**Themes (`themes/gen-themes.mjs` + `lib/color.ts`):** `arnative` · `sun` · `zinc` · `violet` · `emerald` · `matrix` · `cyberpunk` · `synthwave` · `gruvbox` · `nord` · `dracula`
 
 ```bash
-npm test        # Run unit tests and self-checks
-npm run themes  # Rebuild all theme variants
-npm run preview # Live preview the working tree in your own Pi (stamps a pushable commit)
-```
-
-Pre-publish verification and tag validation are enforced via `scripts/release-check.mjs`.
-
-**Local-first push gate:** the pre-push hook (`.githooks/pre-push`) rejects any branch push whose commit
-carries no live-preview stamp, so a fix cannot reach GitHub unseen. `npm run preview`
-launches Pi with this working tree and writes `.git/arnative-preview` for the exact commit
-that was shown; editing `extensions/`, `lib/`, `themes/`, or `package.json` afterwards
-invalidates it and the hook asks for a fresh preview. The preview must run on a clean tree
-— commit or stash first. Git does not auto-install hooks; activate per clone:
-
-```bash
-git config core.hooksPath .githooks
+npm test                              # Run self-checks and unit tests
+npm run themes                        # Regenerate theme JSON files
+npm run preview                       # Live preview in Pi and stamp .git/arnative-preview
+git config core.hooksPath .githooks   # Enable pre-push preview verification hook
 ```
 
 </details>

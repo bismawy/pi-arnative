@@ -11,6 +11,8 @@ import test from "node:test";
 
 const agentDir = mkdtempSync(join(tmpdir(), "arnative-todos-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
+// The finished box waits 30s in real use; a test needs the wait, not the 30s.
+process.env.PI_ARNATIVE_TODO_HIDE_MS = "20";
 
 const { default: extension } = await import("../extensions/todos.ts");
 
@@ -208,13 +210,38 @@ test("the counters scroll the window, by click and by key", async () => {
 	assert.ok(component.render(80).some((line) => line.includes("Dua")), "the active task is back on screen");
 });
 
-test("the box folds itself once every task is done", async () => {
+test("a finished box waits, then leaves the screen on its own", async () => {
 	if (widget().component.render(80).length === 3) shortcuts.get("alt+o")!.handler(ctx);
 	assert.ok(widget().component.render(80).length > 3, "the box is open before the last update");
-	for (let id = 1; id <= 9; id++) await call({ action: "update", id, status: "completed" });
+	for (let id = 1; id <= 8; id++) await call({ action: "update", id, status: "completed" });
+	assert.ok(widgets.get("arnative-todos"), "work is left, so the box stays");
+	await call({ action: "update", id: 9, status: "completed" });
+	// Folded to one row first: the row says nothing is left, and it stays readable for the wait.
 	const folded = widget().component.render(80);
-	assert.equal(folded.length, 3, "a finished list collapses to one row by itself");
-	assert.ok(folded[1]!.includes("Todos (9/9) · All tasks finished [click to expand]"), `the folded row, got ${folded[1]}`);
+	assert.equal(folded.length, 3, "a finished list folds to one row");
+	assert.ok(folded[1]!.includes("Todos (9/9) · All tasks finished"), `the folded row, got ${folded[1]}`);
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.equal(widgets.get("arnative-todos"), undefined, "the box leaves after the wait");
+	// The list survives: a task that reopens brings the box back at once, no stale timer.
+	await call({ action: "update", id: 9, status: "in_progress" });
+	assert.ok(widgets.get("arnative-todos"), "live work brings the box back");
+});
+
+test("a task reopened during the wait keeps the box", async () => {
+	for (let id = 1; id <= 9; id++) await call({ action: "update", id, status: "completed" });
+	assert.ok(widgets.get("arnative-todos"), "the finished box is still on screen");
+	// Opening the finished box to read it cancels the wait; closing it starts the wait again.
+	clickHint(widget().component, "[click to expand]");
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.ok(widgets.get("arnative-todos"), "an expanded box stays on screen while the user reads it");
+	clickHint(widget().component, "[click to collapse]");
+	await call({ action: "update", id: 1, status: "in_progress" });
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.ok(widgets.get("arnative-todos"), "the wait was cancelled, the box stays");
+	// Done again: a fresh wait, and this time it runs out.
+	await call({ action: "update", id: 1, status: "completed" });
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.equal(widgets.get("arnative-todos"), undefined, "the box leaves once the wait is over");
 });
 
 test("/todos shows the recap in the screen chrome", async () => {
@@ -228,4 +255,12 @@ test("/todos shows the recap in the screen chrome", async () => {
 	// Colour goes through the theme object, never a hardcoded escape: the tokens above are the ones
 	// the picker asks for, so a theme switch repaints the screen.
 	assert.ok(palette.length >= 3, `the screen paints through the theme, got ${palette.length} calls`);
+});
+
+test("a new session with no stored file starts with an empty list", async () => {
+	const freshCtx = { ...ctx, sessionManager: { getSessionId: () => "widget-fresh-session" } };
+	await handlers.get("session_start")!({ reason: "new" }, freshCtx);
+	assert.equal(widgets.get("arnative-todos"), undefined, "the old session's widget is cleared");
+	const listed = await registered!.execute("call-1", { action: "list" }, undefined, undefined, freshCtx) as { content: { text: string }[] };
+	assert.equal(listed.content[0]!.text, "The list is empty", "the previous session's tasks do not leak into the new session");
 });

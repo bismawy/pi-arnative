@@ -53,6 +53,15 @@ interface WidgetStore {
 	registered: boolean;
 	/** The TUI handle from the widget factory, for a redraw after a shortcut or a mutation. */
 	tui?: { requestRender(force?: boolean): void };
+	/** Pending removal of a finished list's box; see {@link doneHideMs}. */
+	hideTimer?: ReturnType<typeof setTimeout>;
+}
+
+/** How long the finished box stays: long enough to read `All tasks finished`, short enough
+ *  that the screen clears itself. `PI_ARNATIVE_TODO_HIDE_MS` overrides it (0 removes at once). */
+function doneHideMs(): number {
+	const raw = Number(process.env.PI_ARNATIVE_TODO_HIDE_MS);
+	return Number.isFinite(raw) && raw >= 0 ? raw : 30_000;
 }
 
 /** Module state on globalThis, like the other arnative extensions: `/reload` re-imports the
@@ -68,13 +77,20 @@ function store(): WidgetStore {
 const stateFile = (ctx: ExtensionContext): string =>
 	join(getAgentDir(), "arnative", "todos", `${ctx.sessionManager.getSessionId()}.json`);
 
-function loadState(ctx: ExtensionContext): void {
+function loadState(ctx: ExtensionContext, reload = false): void {
+	const s = store();
+	cancelHide(s);
+	if (!reload) {
+		s.expanded = false;
+		s.top = null;
+	}
 	try {
-		const parsed = normalizeState(JSON.parse(readFileSync(stateFile(ctx), "utf8")) as unknown);
-		if (parsed) store().state = parsed;
+		s.state = normalizeState(JSON.parse(readFileSync(stateFile(ctx), "utf8")) as unknown) ?? emptyTodos();
 	} catch {
 		// absent, unreadable or not JSON: the session starts with an empty list
+		s.state = emptyTodos();
 	}
+	if (allDone(s.state)) s.expanded = false;
 }
 
 function saveState(ctx: ExtensionContext): void {
@@ -192,15 +208,40 @@ export function runTodo(params: Record<string, unknown>) {
 	return fail(`unknown action: ${action}`);
 }
 
+/** Queue the removal of a finished list's box. Idempotent: a redraw or a click must not
+ *  restart the wait, or the box could outlive the interest in it. */
+function scheduleHide(ctx: ExtensionContext, s: WidgetStore): void {
+	if (s.hideTimer) return;
+	s.hideTimer = setTimeout(() => {
+		s.hideTimer = undefined;
+		ctx.ui?.setWidget?.(TODO_WIDGET_KEY, undefined);
+		s.registered = false;
+		s.tui = undefined;
+	}, doneHideMs());
+	// Never hold pi's process open for a cosmetic row.
+	s.hideTimer.unref?.();
+}
+
+function cancelHide(s: WidgetStore): void {
+	if (!s.hideTimer) return;
+	clearTimeout(s.hideTimer);
+	s.hideTimer = undefined;
+}
+
 /** Register the widget with this session, or redraw it. `force` re-registers after `/reload`,
  *  where pi keeps the key but the old component is gone. */
 function refresh(ctx: ExtensionContext, force = false): void {
 	const s = store();
 	if (s.state.tasks.length === 0) {
+		cancelHide(s);
 		ctx.ui?.setWidget?.(TODO_WIDGET_KEY, undefined);
 		s.registered = false;
 		return;
 	}
+	// Work left keeps the box; a finished list folds to its `All tasks finished` row and
+	// leaves after {@link doneHideMs}, unless the user opened the box to read it.
+	if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
+	else cancelHide(s);
 	if (!force && s.registered) {
 		s.tui?.requestRender(true);
 		return;
@@ -236,23 +277,24 @@ function refresh(ctx: ExtensionContext, force = false): void {
 				invalidate: (): void => {},
 				// Two click targets, both drawn as affordances: the hint text expands or folds the
 				// box, and the counter rows scroll the window. Every other cell is left to pi, so
-				// the task names stay selectable and copyable.
+				// the task names stay selectable and copyable. The work is done on the press: pi
+				// only synthesizes a click when the pointer did not move at all.
 				handleMouse: (event: TuiMouseEvent) => {
 					if (event.button !== "left" || event.y >= height) return undefined;
 					const onHint = inSpans(spans, event.y, event.x);
 					const onCounter = event.y === layout.up || event.y === layout.down;
 					if (!onHint && !onCounter) return undefined;
-					if (event.type === "press") return { handled: true, render: false };
-					if (event.type !== "click") return undefined;
-					if (event.y === layout.up) {
-						scroll(-1);
-						return { handled: true, render: true };
-					}
-					if (event.y === layout.down) {
-						scroll(1);
+					// The press already did it, so the release and the click that may follow are
+					// swallowed: toggling again on the click would undo the press.
+					if (event.type !== "press") return { handled: true, render: false };
+					if (onCounter) {
+						scroll(event.y === layout.up ? -1 : 1);
 						return { handled: true, render: true };
 					}
 					s.expanded = !s.expanded;
+					s.top = null;
+					if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
+					else cancelHide(s);
 					s.tui?.requestRender(true);
 					return { handled: true, render: true };
 				},
@@ -336,7 +378,7 @@ export default function (pi: ExtensionAPI) {
 			const s = store();
 			s.top = null;
 			const result = runTodo(params as unknown as Record<string, unknown>);
-			// Nothing left to watch: fold the box back to one row, the way a finished run ends.
+			// Nothing left to watch: the widget folds away, and the next task opens folded.
 			if (allDone(s.state)) s.expanded = false;
 			saveState(ctx);
 			refresh(ctx);
@@ -344,8 +386,8 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
-		loadState(ctx);
+	pi.on("session_start", async (event, ctx) => {
+		loadState(ctx, (event as { reason?: string } | undefined)?.reason === "reload");
 		refresh(ctx, true);
 	});
 
@@ -417,5 +459,31 @@ if (isMain(import.meta.url)) {
 	for (const [x, y] of [[5, 1], [5, 2], [5, 3]] as const) {
 		assert(widget.handleMouse({ type: "press", button: "left", x, y }) === undefined, `widget: a press at ${x},${y} is left to pi`);
 	}
+	// A finished list shows its `All tasks finished` row, then leaves: /todos still lists it.
+	process.env.PI_ARNATIVE_TODO_HIDE_MS = "10";
+	let lastFactory: any = "untouched";
+	const hideCtx: any = { ui: { setWidget: (_key: string, f: any) => (lastFactory = f), theme: null }, thinkingLevel: "off" };
+	for (const task of [...store().state.tasks]) runTodo({ action: "update", id: task.id, status: "completed" });
+	refresh(hideCtx, true);
+	assert(typeof lastFactory === "function", "widget: a finished list keeps its box for the wait");
+	assert(allDone(store().state), "widget: the list really is finished");
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	assert(lastFactory === undefined && store().registered === false, "widget: the box leaves once the wait is over");
+	// A task reopened during the wait cancels it: the box must not vanish under live work.
+	for (const task of [...store().state.tasks]) runTodo({ action: "update", id: task.id, status: "completed" });
+	refresh(hideCtx, true);
+	const reopened = store().state.tasks[0]!;
+	runTodo({ action: "update", id: reopened.id, status: "in_progress" });
+	refresh(hideCtx, true);
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	assert(typeof lastFactory === "function" && store().registered === true, "widget: live work cancels the wait");
+	delete process.env.PI_ARNATIVE_TODO_HIDE_MS;
+	// A new task cancels nothing (the timer already fired) and brings the box back at once.
+	runTodo({ action: "create", subject: "Lagi" });
+	refresh(hideCtx, true);
+	assert(typeof lastFactory === "function", "widget: a new task brings the box back");
+	// A new session with no file on disk starts empty instead of inheriting the previous session's list.
+	loadState({ sessionManager: { getSessionId: () => `empty-${process.pid}-${Date.now()}` } } as never);
+	assert(store().state.tasks.length === 0 && store().expanded === false, "session_start: a fresh session starts with an empty list");
 	console.log("todos extension self-check OK");
 }

@@ -518,7 +518,7 @@ export function shouldApplyDefaultTheme(
  *  set without starting a session. */
 export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): void {
 	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, providers, usage",
+		description: "Arnative settings menu: themes, headers, footers, animations, auto-compact, model heal, providers, usage",
 		getArgumentCompletions: arnativeCompletions,
 		handler: arnativeHandler,
 	});
