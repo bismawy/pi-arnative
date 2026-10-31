@@ -6,7 +6,7 @@
  * Run with `npm test`.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,8 +24,9 @@ import {
 	formatModelDisplayName,
 	HEADER_BRAND,
 	HEADER_PRESETS,
-	installedVersion,
-	packageNameOf,
+	installedPackages,
+	listingLocalPaths,
+	extensionTabItems,
 	resourcesListingShown,
 	sectionBodyOf,
 	sectionNameOf,
@@ -77,11 +78,6 @@ test("section-headers visual suite", () => {
 	// Parsing & wrapping
 	assert(extractItemsFromBody("  a, b, c").length === 3, "extractItemsFromBody splits 3 comma items");
 	assert(extractItemsFromBody("  x\n  y\n  z").length === 3, "extractItemsFromBody returns 3 lines");
-	assert(
-		JSON.stringify(extractItemsFromBody("pkg@1.0.0:a.ts, pkg@1.0.0:b.ts, other@2.0.0:dist, hark.ts", true)) ===
-			JSON.stringify(["pkg@1.0.0", "other@2.0.0", "hark.ts"]),
-		"extensions collapse to one row per package",
-	);
 
 	// Directory path wrapping: never truncated, always the full path
 	const wp = wrapPath("/run/media/bisma/DATA/Pi/pi-arnative", 20);
@@ -110,20 +106,50 @@ test("section-headers visual suite", () => {
 		"formatModelDisplayName converts id to titlecase",
 	);
 
-	// Package & version resolver
-	assert(packageNameOf("@bismawy/pi-agentrouter") === "@bismawy/pi-agentrouter", "plain npm label");
-	assert(packageNameOf("footer.ts") === "footer.ts", "local label");
-
-	const gitTmp = mkdtempSync(join(tmpdir(), "pi-ver-"));
-	mkdirSync(join(gitTmp, "git", "github.com", "test/arnative"), { recursive: true });
-	writeFileSync(join(gitTmp, "git", "github.com", "test/arnative", "package.json"), JSON.stringify({ version: "9.9.9" }));
-	assert(installedVersion("test/arnative", join(gitTmp, "npm"), join(gitTmp, "git")) === "9.9.9", "version from the git clone");
-	rmSync(gitTmp, { recursive: true, force: true });
+	// Extensions tab: the `pi list` rows (settings packages, npm prefix dropped), then the
+	// loose extension files from pi's expanded listing, never a module of a package.
+	const pkgFixture = mkdtempSync(join(tmpdir(), "arnative-pkg-"));
+	writeFileSync(
+		join(pkgFixture, "settings.json"),
+		JSON.stringify({ packages: ["npm:alpha", "D:/work/beta", { source: "npm:gamma@1.2.3" }, "git:github.com/x/y"] }),
+	);
+	assert(
+		JSON.stringify(installedPackages(pkgFixture, join(pkgFixture, "cwd")).map((pkg) => pkg.label)) ===
+			JSON.stringify(["alpha", "D:/work/beta", "gamma@1.2.3", "git:github.com/x/y"]),
+		"installedPackages keeps settings order and drops the npm: prefix",
+	);
+	const expandedListing = [
+		"[Extensions]",
+		"  project",
+		"    D:/work/beta/extensions/a.ts",
+		"    D:/work/beta/extensions/b.ts",
+		"    npm:alpha",
+		"      extensions/index.ts",
+		"  user",
+		"    ~/.pi/agent/extensions/hark.ts",
+		"    ~/.pi/agent/extensions/omnirush",
+	].join("\n");
+	assert(
+		JSON.stringify(listingLocalPaths(expandedListing)) ===
+			JSON.stringify([
+				"D:/work/beta/extensions/a.ts",
+				"D:/work/beta/extensions/b.ts",
+				"~/.pi/agent/extensions/hark.ts",
+				"~/.pi/agent/extensions/omnirush",
+			]),
+		"listingLocalPaths takes loose paths, never a package module",
+	);
+	assert(
+		JSON.stringify(extensionTabItems(expandedListing, pkgFixture, join(pkgFixture, "cwd"))) ===
+			JSON.stringify(["alpha", "D:/work/beta", "gamma@1.2.3", "git:github.com/x/y", "hark.ts", "omnirush"]),
+		"extensionTabItems: one row per package, a local-path package collapses to one row, loose files last",
+	);
+	rmSync(pkgFixture, { recursive: true, force: true });
 
 	// ArnativeHeader component & mouse tab click
 	tabStore.set("Context", ["AGENTS.md"]);
 	tabStore.set("Skills", ["agents-sdk", "cloudflare"]);
-	tabStore.set("Extensions", ["@bismawy/pi-agentrouter@1.6.1", "footer.ts"]);
+	tabStore.set("Extensions", ["@bismawy/pi-agentrouter", "footer.ts"]);
 
 	let renderRequested = false;
 	const fakeTui: any = {
@@ -157,7 +183,7 @@ test("section-headers visual suite", () => {
 	assert(new ArnativeHeader(fakeTui, ansiTheme, fakeCtx).getTabsData(120).some((t) => t.label === "Skills [0]"), "shown listing: 0 is a real count again");
 	tabStore.set("Context", ["AGENTS.md"]);
 	tabStore.set("Skills", ["agents-sdk", "cloudflare"]);
-	tabStore.set("Extensions", ["@bismawy/pi-agentrouter@1.6.1", "footer.ts"]);
+	tabStore.set("Extensions", ["@bismawy/pi-agentrouter", "footer.ts"]);
 	const hdr = new ArnativeHeader(fakeTui, ansiTheme, fakeCtx);
 	assert(hdr.activeTab === "Directory", "default tab is Directory");
 
@@ -279,7 +305,7 @@ test("section-headers visual suite", () => {
 	assert(renderRequested === true, "requestRender called when the tab switches");
 
 	const linesExt = hdr.render(100);
-	assert(stripAnsi(linesExt[5]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter@1.6.1" : ""), "active tab data on the last info line");
+	assert(stripAnsi(linesExt[5]!).includes(extRegion.key === "Extensions" ? "@bismawy/pi-agentrouter" : ""), "active tab data on the last info line");
 
 	// Click the Skills tab (measured at a width where every tab fits)
 	const wide = hdr.render(140);
