@@ -172,10 +172,33 @@ export function readVersion(dir: string): string | null {
 // ---------------------------------------------------------------------------
 
 export interface InstalledPackage {
-	/** Row text: the configured source, without its `npm:` prefix. */
+	/** Row text: the configured source without its `npm:` prefix, plus the installed version
+	 *  when the source names none. */
 	label: string;
 	/** Absolute dir for a local-path source (null for npm and git packages). */
 	localPath: string | null;
+}
+
+/** Installed version per `agentDir` and package name; one read per package per process. */
+const versionCache = new Map<string, string | null>();
+
+/** `name@1.2.3` -> `{ name: "name", version: "1.2.3" }`; a scope's `@` is not a version. */
+function splitVersion(label: string): { name: string; version: string | null } {
+	const at = label.lastIndexOf("@");
+	if (at > 0 && /\d/.test(label.slice(at + 1))) return { name: label.slice(0, at), version: label.slice(at + 1) };
+	return { name: label, version: null };
+}
+
+/** The row text of an npm package: the source as configured, or with the installed version.
+ *  The version lives in the package's own `package.json`, the same place `pi list` resolves it. */
+function npmRow(source: string, agentDir: string): string {
+	const label = source.slice("npm:".length);
+	const { name, version } = splitVersion(label);
+	if (version !== null) return label; // pinned in settings: show what was asked for
+	const key = `${agentDir}\0${name}`;
+	if (!versionCache.has(key)) versionCache.set(key, readVersion(join(agentDir, "npm", "node_modules", name)));
+	const installed = versionCache.get(key) ?? null;
+	return installed ? `${label}@${installed}` : label;
 }
 
 /** Slashes forward, `~` expanded, lower case: comparable against a listing path. */
@@ -210,9 +233,9 @@ export function installedPackages(agentDir: string, cwd: string): InstalledPacka
 	return scopes.flatMap(({ sources, baseDir }) =>
 		sources.map((source) => {
 			const packaged = /^(npm|git):/.test(source);
-			const label = source.startsWith("npm:") ? source.slice("npm:".length) : source;
 			// Relative local sources resolve against their own scope dir, the way pi installs them.
 			const absolute = /^([A-Za-z]:)?[\\/]/.test(source) || source.startsWith("~") ? source : join(baseDir, source);
+			const label = source.startsWith("npm:") ? npmRow(source, agentDir) : source;
 			return { label, localPath: packaged ? null : comparablePath(absolute) };
 		}),
 	);
