@@ -20,7 +20,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified visual interf
 - Working Spinners: 18 animated presets with live picker preview and optional `[g]` gradient sweep.
 - Transcript Clock: Per-message timestamps with clean bubble backgrounds.
 - Usage Dashboard: Real-time token counts and cost tracking across local sessions via `/usage`.
-- Custom Providers: Interactive `/providers` wizard to probe endpoints, pick models, set thinking levels, and save OpenAI-, Anthropic-, Gemini-, or Ollama-compatible channels to `models.json` and `auth.json`.
+- Custom Providers: Interactive `/providers` wizard to probe endpoints, pick models, set thinking levels, edit the base URL, provider id or API key, and save OpenAI-, Anthropic-, Gemini-, or Ollama-compatible channels to `models.json` and `auth.json`.
 - Model Heal: Background sync (`/model-heal`) that fills missing compat flags, `/models` token limits, and accepted reasoning effort levels in `models.json`.
 - Auto-compact: Automatic context compaction after a turn settles using smart window tiers or a fixed token budget.
 
@@ -47,8 +47,16 @@ Requires a [Nerd Font](https://www.nerdfonts.com/font-downloads). On a fresh ins
 
 Local development:
 ```bash
-npm run dev
+npm run dev                  # run pi against this checkout, nothing installed
+npm run overlay              # copy extensions/ lib/ themes/ into the installed npm package
 ```
+
+To see a change before publishing it: `npm run overlay`, then press `/reload` in pi — pi
+re-evaluates extension TypeScript in the same process, so the reload loads the copied code with no
+reinstall and no restart. The package stays an npm install; nothing points pi at this directory. A
+module deleted here is pruned from the installed copy (a stale entry point would keep loading), and
+`pi update --extensions` restores the published code once a higher version exists.
+`npm run overlay -- --dry-run` lists what would move; `PI_CODING_AGENT_DIR` targets another agent dir.
 
 ## Shortcuts
 
