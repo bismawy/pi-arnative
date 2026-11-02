@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-02
+
 ### Added
 - **Providers → Edit changes the endpoint, the id or the key, one field per row.** Opening a provider now leads with `Edit`, and its menu shows what is stored beside each row: the base URL, the provider id, the key masked to its last four characters. A base URL is saved as typed (only a bare host gains its `http://`), so an edit lands what the user wrote instead of re-deriving `/v1` the way the add flow does, and the notify points at `Probe models` for the list that may have moved with it. A rename moves the models.json key and the auth.json credential together — the provider keeps its place in the list, a `name` that only repeated the old id follows it, the id is checked against the same `[A-Za-z0-9_-]` rule as create, and an id already taken is refused; if models.json cannot be written the credential is put back, so a failed rename never orphans the key. A new key lands in auth.json, the store pi reads before an inline `models.json` key, and the literal inline copy is dropped so the secret lives in one place, while an env-var or shell reference (`$VAR`, `!cmd`) is configuration and stays untouched; an emptied field keeps what is stored rather than blanking an endpoint or a credential. The three write paths share one row picker and one field patch with the action menu, which also gained the `Edit` row (`lib/provider.ts`, `withProviderFields`, `renameProvider`, `renameAuth`, `saveProviderKey`, `inlineKey`, `keyHint`; pinned in the module self-check).
 
