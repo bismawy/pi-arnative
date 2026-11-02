@@ -47,8 +47,16 @@ Requires a [Nerd Font](https://www.nerdfonts.com/font-downloads). On a fresh ins
 
 Local development:
 ```bash
-npm run dev
+npm run dev                  # run pi against this checkout, nothing installed
+npm run overlay              # copy extensions/ lib/ themes/ into the installed npm package
 ```
+
+To see a change before publishing it: `npm run overlay`, then press `/reload` in pi — pi
+re-evaluates extension TypeScript in the same process, so the reload loads the copied code with no
+reinstall and no restart. The package stays an npm install; nothing points pi at this directory. A
+module deleted here is pruned from the installed copy (a stale entry point would keep loading), and
+`pi update --extensions` restores the published code once a higher version exists.
+`npm run overlay -- --dry-run` lists what would move; `PI_CODING_AGENT_DIR` targets another agent dir.
 
 ## Shortcuts
 
