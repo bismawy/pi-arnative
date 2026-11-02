@@ -250,6 +250,43 @@ export function providerNames(config: unknown): string[] {
 	return isObj(config) && isObj(config.providers) ? Object.keys(config.providers) : [];
 }
 
+/** Pure patch of one provider's scalar fields (endpoint, id, display name, inline key).
+ *  `undefined` drops the field; models, compat, headers and every sibling survive — the
+ *  same contract as {@link withProviderModels}. */
+export function withProviderFields(config: unknown, name: string, patch: Record<string, string | undefined>): Record<string, unknown> {
+	const root = isObj(config) ? { ...config } : {};
+	const providers = isObj(root.providers) ? { ...root.providers } : {};
+	const next: Record<string, unknown> = { ...(isObj(providers[name]) ? providers[name] : {}), ...patch };
+	for (const [key, value] of Object.entries(next)) if (value === undefined) delete next[key];
+	providers[name] = next;
+	root.providers = providers;
+	return root;
+}
+
+/** Pure rename: the provider keeps its position in the list, and a `name` that only
+ *  repeated the old id follows it (a hand-written display name stays as written). */
+export function renameProvider(config: unknown, from: string, to: string): Record<string, unknown> {
+	const root = isObj(config) ? { ...config } : {};
+	const providers = isObj(root.providers) ? { ...root.providers } : {};
+	if (!(from in providers)) return root;
+	root.providers = Object.fromEntries(
+		Object.entries(providers).map(([key, value]): [string, unknown] => {
+			if (key !== from) return [key, value];
+			const entry: Record<string, unknown> = isObj(value) ? { ...value } : {};
+			if (entry.name === from) entry.name = to;
+			return [to, entry];
+		}),
+	);
+	return root;
+}
+
+/** The credential follows its provider in auth.json; a provider with no entry stays without one. */
+export function renameAuth(auth: unknown, from: string, to: string): Record<string, unknown> {
+	const root = isObj(auth) ? { ...auth } : {};
+	if (!(from in root)) return root;
+	return Object.fromEntries(Object.entries(root).map(([key, value]): [string, unknown] => [key === from ? to : key, value]));
+}
+
 export interface ProviderSummary {
 	name: string;
 	api?: string;
@@ -393,6 +430,34 @@ export function saveModelsConfig(value: unknown): void {
 export function saveProvider(name: string, entry: ProviderEntry, key: string | undefined): void {
 	writeJson(modelsPath(), withProvider(readJson(modelsPath()), name, entry));
 	if (key) writeJson(authPath(), withAuth(readJson(authPath()), name, key));
+}
+
+/** Writes one provider's key: a real key lands in auth.json (the file /login writes, and the
+ *  credential pi prefers over an inline models.json apiKey), `undefined` removes it. A
+ *  literal inline key is dropped from models.json so the secret lives in one place; an
+ *  env-var or shell reference is configuration, not a secret, and stays put. */
+export function saveProviderKey(name: string, key: string | undefined): void {
+	const auth = readJson(authPath());
+	// Nothing stored and nothing to store: leave a missing auth.json missing.
+	if (key || (isObj(auth) && name in auth)) writeJson(authPath(), key ? withAuth(auth, name, key) : withoutAuth(auth, name));
+	const config = readJson(modelsPath());
+	const entry = isObj(config) && isObj(config.providers) && isObj(config.providers[name]) ? (config.providers[name] as Record<string, unknown>) : undefined;
+	if (!entry || typeof entry.apiKey !== "string" || /^[$!]/.test(entry.apiKey)) return;
+	writeJson(modelsPath(), withProviderFields(config, name, { apiKey: undefined }));
+}
+
+/** `dummy`/`ollama` are placeholders a keyless entry carries so pi can list its models;
+ *  `$VAR`, `${VAR}` and `!command` are references, not secrets. Neither is a stored key. */
+const PLACEHOLDER_KEYS = new Set(["dummy", "ollama"]);
+export function inlineKey(entry: ProviderEntry): string | undefined {
+	const value = entry.apiKey;
+	if (!value || PLACEHOLDER_KEYS.has(value) || /^[$!]/.test(value)) return undefined;
+	return value;
+}
+
+/** One secret as it may be shown on screen: its last four characters, never the whole key. */
+export function keyHint(key: string): string {
+	return key.length > 8 ? `••••${key.slice(-4)}` : "••••";
 }
 
 export function deleteProviderNamed(name: string): boolean {
@@ -685,10 +750,8 @@ const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entr
 };
 
 const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
-	// The real key lives in auth.json; an inline dummy never authenticates a probe.
-	const stored = readAuthKey(name);
-	const inline = entry.apiKey && entry.apiKey !== "dummy" && entry.apiKey !== "ollama" ? entry.apiKey : "";
-	const key = stored ?? inline;
+	// The real key lives in auth.json; a placeholder never authenticates a probe.
+	const key = readAuthKey(name) ?? inlineKey(entry) ?? "";
 	probingStatus(ctx, "probing endpoint…");
 	let result: ProbeResult | undefined;
 	try {
@@ -755,13 +818,12 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 		busy = label;
 		progress = "starting…";
 		refresh();
-		const inline = entry.apiKey && entry.apiKey !== "dummy" && entry.apiKey !== "ollama" ? entry.apiKey : undefined;
 		try {
 			const supported = await probeEffort(
 				{ provider: name, id: label, api: entry.api, baseUrl: entry.baseUrl, reasoning: true, compat },
 				{
 					baseUrl: entry.baseUrl,
-					key: readAuthKey(name) ?? inline,
+					key: readAuthKey(name) ?? inlineKey(entry),
 					onLevel: (level, _accepted, index) => {
 						progress = `${level} · ${index + 1}/7`;
 						refresh();
@@ -872,66 +934,172 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 	if (warn) ctx.ui.notify(`[arnative] ${warn}`, "info");
 };
 
+const ACTION_EDIT = "Edit";
 const ACTION_SELECT = "Select models";
 const ACTION_PROBE = "Probe models";
 const ACTION_THINKING = "Thinking";
 const ACTION_DELETE = "Delete";
 
-const ACTIONS_TEXT: ScreenText = {
-	title: screenTitle("Provider"),
-	description: "Edit the models, re-probe, toggle thinking, or delete.",
-	legend: LIST_LEGEND_MOVE,
+const EDIT_BASE = "Base URL";
+const EDIT_NAME = "Provider name";
+const EDIT_KEY = "API key";
+
+const ACTIONS_DESCRIPTION = "Edit the endpoint, key or models, re-probe, or delete.";
+
+/** One menu row picker shared by the action and edit menus: Enter returns the row's label,
+ *  `←` and Esc return undefined (the caller decides what that leaves for). */
+const chooseRow = async (ctx: ExtensionCommandContext, title: string, description: string, rows: ListRow[]): Promise<string | undefined> => {
+	if (ctx.mode !== "tui") {
+		const picked = await ctx.ui.select(title, rows.map(rowText));
+		if (picked === undefined) return undefined;
+		// Labels are distinct prefixes of their own flat row, so `startsWith` is unambiguous.
+		return rows.find((r) => picked.startsWith(r.label))?.label;
+	}
+	const chosen = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+		const picker = new ListPicker(
+			theme,
+			rows,
+			undefined,
+			{
+				preview: () => {},
+				revert: () => {},
+				done: () => done(rows[picker.index]?.label),
+				cancel: () => done(null),
+				// `←` leaves this menu for its parent; Esc closes the screen it is on.
+				back: () => done(null),
+				requestRender: () => tui.requestRender(),
+			},
+			{ title: screenTitle(title), description, legend: LIST_LEGEND_MOVE },
+			false,
+			ctx.thinkingLevel,
+		);
+		return picker;
+	});
+	return chosen ?? undefined;
+};
+
+/** One field written through to models.json, with the notify that says what landed. */
+const saveField = (ctx: ExtensionCommandContext, name: string, patch: Record<string, string | undefined>, note: string): void => {
+	try {
+		writeJson(modelsPath(), withProviderFields(readJson(modelsPath()), name, patch));
+	} catch (error) {
+		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
+		return;
+	}
+	ctx.ui.notify(`[arnative] ${note}`, "info");
+};
+
+/** Base URL: stored exactly as typed (normalized only for a bare host). The flavor's own
+ *  `/v1` rewriting stays in the add flow — an edit must land what the user wrote. */
+const editBaseUrlFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
+	const value = await readInput(ctx, "Edit", "Base URL — the endpoint pi calls (include /v1 for OpenAI-style)", "https://api.example.com/v1", entry.baseUrl);
+	// Esc cancels; an emptied field keeps what is stored rather than blanking the endpoint.
+	if (!value) return;
+	const baseUrl = normalizeBase(value);
+	if (baseUrl === entry.baseUrl) return;
+	saveField(ctx, name, { baseUrl }, `${name}: base URL is now ${baseUrl}. Run Probe models to re-read its list.`);
+};
+
+/** Provider id: the models.json key and the auth.json credential move together, so the key
+ *  never ends up under an id no provider answers to. Returns the id to keep using. */
+const editNameFlow = async (ctx: ExtensionCommandContext, name: string): Promise<string> => {
+	const value = await readInput(ctx, "Edit", "provider id (letters, digits, - and _)", name, name);
+	if (!value || value === name) return name;
+	if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+		ctx.ui.notify(`[arnative] "${value}" is not a usable provider id (letters, digits, - and _ only).`, "warning");
+		return name;
+	}
+	if (providerNames(loadModelsConfig()).includes(value)) {
+		ctx.ui.notify(`[arnative] "${value}" is already a provider — pick another id.`, "warning");
+		return name;
+	}
+	const auth = readJson(authPath());
+	const holdsKey = isObj(auth) && isObj(auth[name]);
+	try {
+		if (holdsKey) writeJson(authPath(), renameAuth(auth, name, value));
+		try {
+			writeJson(modelsPath(), renameProvider(readJson(modelsPath()), name, value));
+		} catch (error) {
+			// Put the credential back where the old id still looks for it.
+			if (holdsKey) writeJson(authPath(), auth);
+			throw error;
+		}
+	} catch (error) {
+		ctx.ui.notify(`[arnative] Not renamed: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
+		return name;
+	}
+	ctx.ui.notify(`[arnative] Renamed ${name} → ${value}. Open /model to refresh.`, "info");
+	return value;
+};
+
+/** API key: written to auth.json (the store pi prefers over an inline models.json key), so
+ *  a literal key leaves models.json instead of being stored twice. */
+const editKeyFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
+	const stored = readAuthKey(name) ?? inlineKey(entry);
+	const field = stored ? `API key — stored ${keyHint(stored)}, empty keeps it` : "API key — empty for a keyless endpoint";
+	const value = await readInput(ctx, "Edit", field, "sk-…");
+	if (!value) return;
+	try {
+		saveProviderKey(name, value);
+	} catch (error) {
+		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
+		return;
+	}
+	ctx.ui.notify(`[arnative] ${name}: API key replaced (${keyHint(value)}). Open /model to refresh.`, "info");
+};
+
+/** The Edit menu: one field per row, each write immediate. Returns the provider id to keep
+ *  using — a rename changes it, and every later action follows the new one. */
+const editFlow = async (ctx: ExtensionCommandContext, name: string): Promise<string> => {
+	let id = name;
+	for (;;) {
+		const entry = loadProviderEntry(loadModelsConfig(), id);
+		if (!entry) {
+			ctx.ui.notify(`[arnative] ${id} is gone — the list will refresh.`, "warning");
+			return id;
+		}
+		const key = readAuthKey(id) ?? inlineKey(entry);
+		const rows: ListRow[] = [
+			{ label: EDIT_BASE, note: entry.baseUrl || "not set" },
+			{ label: EDIT_NAME, note: id },
+			{ label: EDIT_KEY, note: key ? keyHint(key) : "not set" },
+		];
+		const action = await chooseRow(ctx, `Edit · ${id}`, "one field per row — each saves on Enter", rows);
+		if (!action) return id;
+		if (action === EDIT_BASE) await editBaseUrlFlow(ctx, id, entry);
+		else if (action === EDIT_NAME) id = await editNameFlow(ctx, id);
+		else await editKeyFlow(ctx, id, entry);
+	}
 };
 
 /** Enter on an existing provider: an action menu instead of a straight delete. Every
- *  action writes through to models.json (and auth.json for delete) before returning. */
+ *  action writes through to models.json (and auth.json for edit, rename and delete) before
+ *  returning. */
 const providerActionFlow = async (ctx: ExtensionCommandContext, name: string): Promise<void> => {
+	let id = name;
 	for (;;) {
-		const entry = loadProviderEntry(loadModelsConfig(), name);
+		const entry = loadProviderEntry(loadModelsConfig(), id);
 		if (!entry) {
-			ctx.ui.notify(`[arnative] ${name} is gone — the list will refresh.`, "warning");
+			ctx.ui.notify(`[arnative] ${id} is gone — the list will refresh.`, "warning");
 			return;
 		}
 		const rows: ListRow[] = [
+			{ label: ACTION_EDIT, note: "base URL, provider name, API key" },
 			{ label: ACTION_SELECT, note: "tick the models this provider exposes" },
 			{ label: ACTION_PROBE, note: "re-read the model list from the endpoint" },
 			{ label: ACTION_THINKING, note: "toggle reasoning per model (auto-detected)" },
 			{ label: ACTION_DELETE, note: "remove the provider and its stored key" },
 		];
-		let action: string | null | undefined;
-		if (ctx.mode === "tui") {
-			action = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-				const picker = new ListPicker(
-					theme,
-					rows,
-					undefined,
-					{
-						preview: () => {},
-						revert: () => {},
-						done: () => done(rows[picker.index]?.label),
-						cancel: () => done(null),
-						// `←` leaves the actions for the provider list; Esc closes the whole menu.
-						back: () => done(null),
-						requestRender: () => tui.requestRender(),
-					},
-					{ ...ACTIONS_TEXT, title: screenTitle(`Provider · ${name}`) },
-					false,
-					ctx.thinkingLevel,
-				);
-				return picker;
-			});
-		} else {
-			const picked = await ctx.ui.select(`${name} — edit or delete`, rows.map(rowText));
-			action = picked === undefined ? undefined : rows.find((r) => picked.startsWith(r.label))?.label;
-		}
+		const action = await chooseRow(ctx, `Provider · ${id}`, ACTIONS_DESCRIPTION, rows);
 		if (!action) return;
 		if (action === ACTION_DELETE) {
-			await deleteProviderFlow(ctx, name);
+			await deleteProviderFlow(ctx, id);
 			return;
 		}
-		if (action === ACTION_SELECT) await selectModelsFlow(ctx, name, entry);
-		else if (action === ACTION_PROBE) await probeModelsFlow(ctx, name, entry);
-		else if (action === ACTION_THINKING) await thinkingFlow(ctx, name, entry);
+		if (action === ACTION_EDIT) id = await editFlow(ctx, id);
+		else if (action === ACTION_SELECT) await selectModelsFlow(ctx, id, entry);
+		else if (action === ACTION_PROBE) await probeModelsFlow(ctx, id, entry);
+		else if (action === ACTION_THINKING) await thinkingFlow(ctx, id, entry);
 	}
 };
 
@@ -1067,6 +1235,34 @@ if (isMain(import.meta.url)) {
 	assert((auth.b as { key: string }).key === "2" && auth.a !== undefined, "withAuth adds one credential");
 	assert(withoutAuth(auth, "a").a === undefined, "withoutAuth removes one");
 
+	// Secrets: the hint never shows more than the tail, and only a literal inline key counts.
+	assert(keyHint("sk-abcdefgh1234") === "••••1234", "the hint keeps the last four characters");
+	assert(keyHint("short") === "••••", "a short secret shows nothing at all");
+	assert(!keyHint("sk-abcdefgh1234").includes("abcdefgh"), "the body of the key never reaches the screen");
+	assert(inlineKey({ baseUrl: "b", api: "openai-completions", apiKey: "dummy", models: [] }) === undefined, "a placeholder is not a key");
+	assert(inlineKey({ baseUrl: "b", api: "openai-completions", apiKey: "ollama", models: [] }) === undefined, "the keyless placeholder is not a key");
+	assert(inlineKey({ baseUrl: "b", api: "openai-completions", apiKey: "$OPENAI_KEY", models: [] }) === undefined, "an env reference is not a key");
+	assert(inlineKey({ baseUrl: "b", api: "openai-completions", apiKey: "sk-1", models: [] }) === "sk-1", "a literal key is read back");
+
+	// The Edit screen's patches: one field lands, the models and every sibling survive, and
+	// a rename keeps the provider's place in the list with its credential following it.
+	const fieldEntry = { providers: { r: { name: "r", baseUrl: "old", api: "openai-completions", apiKey: "sk-1", compat: { x: 1 }, models: [{ id: "m1" }] } } };
+	const patched = withProviderFields(fieldEntry, "r", { baseUrl: "https://new.example/v1" });
+	const patchedEntry = (patched.providers as Record<string, Record<string, unknown>>).r!;
+	assert(patchedEntry.baseUrl === "https://new.example/v1" && patchedEntry.apiKey === "sk-1", "withProviderFields rewrites the named field only");
+	assert((patchedEntry.models as unknown[]).length === 1 && patchedEntry.compat !== undefined, "an endpoint edit keeps models and compat");
+	assert(((fieldEntry.providers as Record<string, Record<string, unknown>>).r!).baseUrl === "old", "withProviderFields does not mutate its input");
+	assert((withProviderFields(fieldEntry, "r", { apiKey: undefined }).providers as Record<string, Record<string, unknown>>).r!.apiKey === undefined, "an undefined patch drops the field");
+	const renamed = renameProvider({ providers: { a: { name: "a", models: [{ id: "m" }] }, b: { name: "" } } }, "a", "c");
+	assert(providerNames(renamed).join() === "c,b", "renameProvider keeps the position and changes the id");
+	assert((renamed.providers as Record<string, { name?: string; models?: unknown[] }>).c!.name === "c", "a name that repeated the old id follows it");
+	assert(((renamed.providers as Record<string, { models?: unknown[] }>).c!.models ?? []).length === 1, "a rename keeps the models");
+	assert((renameProvider({ providers: { a: { name: "Keep" } } }, "a", "c").providers as Record<string, { name?: string }>).c!.name === "Keep", "a hand-written display name is untouched");
+	assert((renameProvider({ providers: { a: {} } }, "missing", "c").providers as Record<string, unknown>).a !== undefined, "renaming a missing provider writes nothing");
+	const movedAuth = renameAuth({ a: { type: "api_key", key: "1" }, b: { type: "api_key", key: "2" } }, "a", "c");
+	assert((movedAuth.c as { key: string }).key === "1" && movedAuth.a === undefined && (movedAuth.b as { key: string }).key === "2", "renameAuth moves one credential");
+	assert(renameAuth({}, "a", "c").a === undefined, "an absent credential is not invented");
+
 	// The model picker screen: checks toggle, `a` cycles, Esc leaves, Enter returns the ids.
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 	const renderModels = (checked: Set<string>, rows: ListRow[]) =>
@@ -1184,6 +1380,23 @@ if (isMain(import.meta.url)) {
 	assert(readAuthKey("t2") === undefined, "the interrupted save never reached auth.json");
 	rmSync(blockedTmp, { recursive: true, force: true });
 	assert(readdirSync(tmp).every((f) => !f.endsWith(".tmp")), "a completed save leaves no temp files behind");
+	// Edit writes: the key moves to auth.json and leaves models.json, so the secret lives in
+	// one place; an env reference is configuration and stays put.
+	saveProvider("t3", { name: "t3", baseUrl: "https://z.com/v1", api: "openai-completions", apiKey: "sk-inline", models: [{ id: "m" }] }, undefined);
+	saveProviderKey("t3", "sk-edited");
+	assert(readAuthKey("t3") === "sk-edited", "an edited key lands in auth.json");
+	const t3 = (loadModelsConfig().providers as Record<string, Record<string, unknown>>).t3!;
+	assert(t3.apiKey === undefined, "the inline copy is dropped, so the secret lives in one place");
+	assert(t3.baseUrl === "https://z.com/v1" && (t3.models as unknown[]).length === 1, "the key edit leaves the rest of the entry alone");
+	saveProviderKey("t3", undefined);
+	assert(readAuthKey("t3") === undefined, "an empty key removes the credential");
+	saveProvider("t4", { name: "t4", baseUrl: "https://w.com/v1", api: "openai-completions", apiKey: "$W_KEY", models: [] }, undefined);
+	saveProviderKey("t4", "sk-y");
+	assert((loadModelsConfig().providers as Record<string, Record<string, unknown>>).t4!.apiKey === "$W_KEY", "an env reference survives an edit");
+	saveProvider("t5", { name: "t5", baseUrl: "https://v.com/v1", api: "openai-completions", models: [{ id: "m" }] }, "sk-t5");
+	saveModelsConfig(renameProvider(loadModelsConfig(), "t5", "t6"));
+	assert(providerNames(loadModelsConfig()).includes("t6") && !providerNames(loadModelsConfig()).includes("t5"), "a rename reaches models.json");
+	assert(loadProviderEntry(loadModelsConfig(), "t6")?.models[0]!.id === "m", "the renamed provider keeps its models");
 	delete process.env.PI_CODING_AGENT_DIR;
 	rmSync(tmp, { recursive: true, force: true });
 
