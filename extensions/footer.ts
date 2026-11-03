@@ -18,7 +18,14 @@ import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
 import { formatTokens } from "../lib/usage-store.ts";
-import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import {
+	FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY,
+	FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY,
+	loadChoice,
+	resetPresetCache,
+	saveChoice,
+} from "../lib/preset-store.ts";
+import { formatCost } from "./usage.ts";
 import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../lib/spinner.ts";
 
@@ -48,6 +55,22 @@ export function minimalExpanded(): { left: boolean; right: boolean } {
 }
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
+const FOOTER_COST_KEY = Symbol.for("pi-arnative.footerCost");
+
+/** Is the session cost cell on? Stored as `"on"`/`"off"` so an absent key reads as off
+ *  through the same allow-list path every other choice uses. */
+export function activeFooterCost(): boolean {
+	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_COST_KEY] ?? loadChoice(FOOTER_COST_CONFIG_KEY, ["on", "off"] as const);
+	return stored === "on";
+}
+
+/** Flip the cost cell, persist it, and repaint the footer at once — the choice is a command
+ *  the user asked for, so it is not part of the picker's preview/revert dance. */
+export function setFooterCost(on: boolean): void {
+	(globalThis as Record<symbol, unknown>)[FOOTER_COST_KEY] = on ? "on" : "off";
+	saveChoice(FOOTER_COST_CONFIG_KEY, on ? "on" : "off");
+	poke();
+}
 
 export function activeFooterPreset(): FooterPreset {
 	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] ?? loadChoice(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS);
@@ -609,19 +632,40 @@ export function piCacheHit(): string | null {
 
 let usageScanAt = 0;
 let usageScanLen = -1;
-let usageScanNums = { inp: 0, out: 0, read: 0 };
+interface UsageTotals {
+	inp: number;
+	out: number;
+	read: number;
+	cost: number;
+	/** At least one message carried a provider-billed total, so the sum is not an estimate. */
+	billed: boolean;
+}
+
+let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, cost: 0, billed: false };
 // Usage of the branch's last entry at scan time: a stream tick mutates that message
 // in place (branch length unchanged), so the delta is applied on top of the cached
 // sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
-let usageScanLast = { inp: 0, out: 0, read: 0 };
+let usageScanLast: UsageTotals = { inp: 0, out: 0, read: 0, cost: 0, billed: false };
 
-const lastUsageOf = (branch: readonly unknown[]): { inp: number; out: number; read: number } => {
+const lastUsageOf = (branch: readonly unknown[]): UsageTotals => {
 	const last = branch[branch.length - 1] as
-		| { type?: string; message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number } } }
+		| {
+				type?: string;
+				message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+		  }
 		| undefined;
 	const u = last?.type === "message" && last.message?.role === "assistant" ? last.message.usage : undefined;
-	return u ? { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0 } : { inp: 0, out: 0, read: 0 };
+	return u
+		? { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, cost: u.cost?.total || 0, billed: u.cost?.totalFromProvider === true }
+		: { inp: 0, out: 0, read: 0, cost: 0, billed: false };
 };
+
+/** The session cost cell: `$0.42`, or `~$0.42` when no provider reported a billed total
+ *  (pi's `cost.total` is then the catalog estimate) — the same promise `/usage` makes. */
+export function costCell(cost: number, billed: boolean, acc: (t: string) => string, soft: (t: string) => string): string {
+	if (!(cost > 0)) return "";
+	return `${acc("\uf155")} ${soft(`${billed ? "" : "~"}${formatCost(cost)}`)}`;
+}
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
 // without this every frame rescans the whole branch (O(N) per frame).
@@ -629,17 +673,23 @@ export function getUsage(
 	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	acc: (t: string) => string,
 	soft: (t: string) => string,
+	/** Off by default: the cost cell is opt-in (`/arnative` → Footers → `[c]`). */
+	showCost: boolean = activeFooterCost(),
 ): string {
 	const branch = ctx.sessionManager.getBranch();
 	const last = lastUsageOf(branch);
 	let inp = 0;
 	let out = 0;
 	let read = 0;
+	let cost = 0;
+	let billed = false;
 	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
 		// Cached sums + the streaming delta of the last message (mutated in place).
 		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
 		out = usageScanNums.out + last.out - usageScanLast.out;
 		read = usageScanNums.read + last.read - usageScanLast.read;
+		cost = usageScanNums.cost + last.cost - usageScanLast.cost;
+		billed = usageScanNums.billed || last.billed;
 	} else {
 		for (const e of branch) {
 			if (e && typeof e === "object" && "type" in e && e.type === "message") {
@@ -650,11 +700,13 @@ export function getUsage(
 						inp += u.input || 0;
 						out += u.output || 0;
 						read += u.cacheRead || 0;
+						cost += u.cost?.total || 0;
+						if (u.cost?.totalFromProvider) billed = true;
 					}
 				}
 			}
 		}
-		usageScanNums = { inp, out, read };
+		usageScanNums = { inp, out, read, cost, billed };
 		usageScanLast = last;
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
@@ -667,6 +719,10 @@ export function getUsage(
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
+	}
+	if (showCost) {
+		const cell = costCell(cost, billed, acc, soft);
+		if (cell) parts.push(cell);
 	}
 	return parts.join(" ");
 }
@@ -1371,6 +1427,17 @@ if (isMain(import.meta.url)) {
 	// No pi-cache-stats status (provider without an optimizer adapter): the cache cell
 	// falls back to Pi's own usage, cacheRead / (input + cacheRead) = 10 / 1110.
 	assert(piCacheHit() === "pi 0.9%", "cache fallback reads Pi's built-in usage: " + piCacheHit());
+	// Cost cell: opt-in, and the branch scan sums pi's per-message `cost.total`.
+	assert(costCell(0, true, id, id) === "", "no cost: no cell");
+	assert(costCell(0.42, true, id, id).endsWith("$0.42") && !costCell(0.42, true, id, id).includes("~"), "a billed cost shows without ~");
+	assert(costCell(0.42, false, id, id).includes("~$0.42"), "a catalog estimate is marked with ~");
+	const costBranch: Array<{
+		type: string;
+		message: { role: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+	}> = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 0, cost: { total: 0.42, totalFromProvider: true } } } }];
+	const costCtx = { sessionManager: { getBranch: () => costBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	assert(!getUsage(costCtx, id, id, false).includes("$0.42"), "cost cell is off unless the switch is on");
+	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's cost.total when on");
 
 	// regression: a refresh arriving while one is in flight is re-run with the newest
 	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger).

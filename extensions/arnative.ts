@@ -6,7 +6,7 @@
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, type AutocompleteItem } from "@earendil-works/pi-tui";
+import { visibleWidth, matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../lib/ansi.ts";
 import { screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
@@ -22,8 +22,8 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { FOOTER_PRESET_KEY, HEADER_PRESET_KEY, ensureChoices } from "../lib/preset-store.ts";
-import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
+import { FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { FOOTER_PRESETS, activeFooterCost, activeFooterPreset, setFooterCost, setFooterPreset, type FooterPreset } from "./footer.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
 import {
 	AUTO_COMPACT_CHOICES,
@@ -35,6 +35,7 @@ import {
 import { healNow } from "./model-heal.ts";
 import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
+import { BACK_KEY_LABEL } from "../lib/shortcuts.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
 
@@ -108,11 +109,14 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void>
 	return goBack === true;
 };
 
-const FOOTERS_PICKER_TEXT: ListPickerText = {
+/** The Footers screen copy. The legend states the cost switch's live value, like the
+ *  Animations screen does for the gradient — a constant legend would advertise the value
+ *  the screen opened with. */
+const footersPickerText = (): ListPickerText => ({
 	title: screenTitle("Footers"),
 	description: "Selection applies live — custom footer or built-in.",
-	legend: LIST_LEGEND_LIVE,
-};
+	legend: `[↑↓] Preview  [c] Cost ${activeFooterCost() ? "on" : "off"}  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
+});
 
 const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeFooterPreset();
@@ -120,7 +124,7 @@ const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void
 	if (ctx.mode !== "tui") {
 		// No custom components (RPC/headless): fall back to the blocking picker.
 		const labels = markedLabels(FOOTER_PRESETS, opened);
-		const pick = await ctx.ui.select(FOOTERS_PICKER_TEXT.title, labels);
+		const pick = await ctx.ui.select(footersPickerText().title, labels);
 		if (pick === undefined) return;
 		const name = FOOTER_PRESETS[labels.indexOf(pick)]!;
 		setFooterPreset(name, ctx);
@@ -142,9 +146,17 @@ const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void
 					if (activeFooterPreset() !== opened) setFooterPreset(opened, ctx);
 					done(true);
 				},
+				// `[c]` is a switch, not a preview: the user asked for it and the legend states
+				// its state, so Esc and `←` leave it on. Only the preset preview reverts.
+				press: (keyData) => {
+					if (!matchesKey(keyData, "c")) return;
+					setFooterCost(!activeFooterCost());
+					tui.requestRender();
+				},
+				legend: () => footersPickerText().legend,
 				requestRender: () => tui.requestRender(),
 			},
-			FOOTERS_PICKER_TEXT,
+			footersPickerText(),
 			true,
 			ctx.thinkingLevel,
 		),
@@ -543,6 +555,7 @@ export function recordProfile(): void {
 	ensureChoices({
 		[HEADER_PRESET_KEY]: activeHeaderPreset(),
 		[FOOTER_PRESET_KEY]: activeFooterPreset(),
+		[FOOTER_COST_KEY]: activeFooterCost() ? "on" : "off",
 		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
@@ -793,12 +806,13 @@ if (isMain(import.meta.url)) {
 
 	// Footers reuses the same picker too.
 	assert(FOOTER_PRESETS[0] === "Pi (system)", "built-in footer preset is listed first");
-	const footerPicker = new ListPicker(fakeTheme, nameRows(FOOTER_PRESETS), "Pi (system)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, FOOTERS_PICKER_TEXT);
+	const footerPicker = new ListPicker(fakeTheme, nameRows(FOOTER_PRESETS), "Pi (system)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, footersPickerText());
 	const footerLines = footerPicker.render(50);
 	assert(footerLines.some((l) => l.includes(screenTitle("Footers"))), "footers picker title");
 	assert(footerLines.some((l) => l.includes("→ Pi (system)")), "footers picker cursors the active preset");
 	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
 	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
+	assert(/\[c\] Cost (on|off)/.test(footersPickerText().legend), "footers legend advertises the cost switch and its live state");
 
 	// Animations picker: "Pi (system)" carries a note AND renders "(system)" in dim
 	const animPicker = new ListPicker(

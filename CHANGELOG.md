@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **The footer can show what the session cost, off by default.** `/arnative` → **Footers** → `[c]` adds a cost cell to the metrics row: the sum of pi's per-message `cost.total` over the branch, so it follows the live stream the way the token cells do (same 2s scan cache, same in-place delta on a streaming tick). A session where no provider reported a billed total is prefixed `~`, because `cost.total` is then the catalog estimate — the same promise `/usage` makes; a session with no cost at all shows no cell rather than `-`. The switch is a command, not a preview: the legend states its state and `Esc`/`←` leave it on, only the preset preview reverts. Stored as `footerCost` (`"on"`/`"off"`, absent reads as off) and recorded in the profile at `session_start` (`extensions/footer.ts`, `activeFooterCost`, `setFooterCost`, `costCell`; `lib/preset-store.ts`, `FOOTER_COST_KEY`; `extensions/arnative.ts`, `footersPickerText`; pinned in the footer and arnative self-checks and in `test/profile.test.ts`).
+
 ## [0.9.1] - 2026-11-02
 
 ### Added

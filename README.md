@@ -30,6 +30,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified visual interf
 Saved to `~/.pi/agent/arnative/config.json` via `/arnative`:
 
 - **Headers & Footers:** `Arnative (Full)` (default), `Arnative (Minimal)` (footer only; click head text or press `ctrl+alt+m` to toggle), or `Pi (system)`.
+- **Footer cost:** off by default. Press `[c]` in the Footers picker to add the session's cost (`$0.42`, `~$0.42` when no provider reported a billed total) to the metrics row; the choice is stored as `footerCost` in `config.json`.
 - **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle the Google gradient sweep.
 - **Auto-compact:** Off by default. **Smart** tiers trigger near ~200k tokens (`≥768k→20%`, `≥384k→40%`, `≥192k→80%`, `<192k→pi core`), or pick a fixed budget (`100k` to `400k`).
 - **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with 6h TTL, reasoning effort probe with 24h TTL), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten.

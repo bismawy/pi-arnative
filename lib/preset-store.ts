@@ -17,6 +17,8 @@ import { assert, isMain } from "./check.ts";
 
 export const HEADER_PRESET_KEY = "headerPreset";
 export const FOOTER_PRESET_KEY = "footerPreset";
+/** Footer cost cell: `"on"`/`"off"`, absent reads as off. */
+export const FOOTER_COST_KEY = "footerCost";
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
 // Everything pi-arnative writes lives in one folder (agent dir/arnative); the config moved
@@ -75,7 +77,7 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 /** Reading order of `config.json`: the presets in the order the settings menu shows them,
  *  then `layoutVersion`, then anything else (a key from another module or a newer version).
  *  Times a user edits the file by hand or reads it back. */
-const KEY_ORDER = ["headerPreset", "footerPreset", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
+const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
 
 /** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
 function ordered(record: Record<string, unknown>): Record<string, unknown> {
