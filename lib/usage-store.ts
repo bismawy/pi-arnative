@@ -118,6 +118,7 @@ interface UsageModelStats {
 	input: number;
 	output: number;
 	cacheRead: number;
+	cacheWrite: number;
 	totalTokens: number;
 	/** Billed cost only (`totalFromProvider`); catalog estimates live in `estimatedCost`. */
 	cost: number;
@@ -158,6 +159,8 @@ export interface UsageProjectStats {
 export interface UsageDayWindow {
 	/** Billed cost only, like the summary's `cost`. */
 	cost: number;
+	/** Catalog-estimated cost in the same window: a budget warns on it, never blocks. */
+	estimated: number;
 	input: number;
 	output: number;
 	cacheRead: number;
@@ -314,11 +317,15 @@ const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.
 /** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
  *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
 const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
-const CACHE_VERSION = 8; // v8: tool-result spend in the rollups (`t` marks it; v7: cacheWrite + the billed split in the rows, v6 day buckets + cwd, v5 compact rows, v4 full rollup)
+const CACHE_VERSION = 8; // v8: cacheWrite + the billed split in the rows (v7: day buckets + cwd, v6: the compact rows, v5: model rows only, v4: full rollup)
 
-/** Synthetic provider for spend pi attaches to a tool result instead of an assistant message
- *  (a subagent or a nested tool call): attributed to `tool` + the tool name, never to the
- *  parent's provider/model. Shared with the /usage renderer, which paints these rows dim. */
+/** Where pi-subagents keeps a run's transcript, inside the session's own project dir. */
+const SUBAGENT_ARTIFACTS_DIR = "subagent-artifacts";
+
+/** Synthetic provider for the spend pi attaches to a tool result instead of an assistant
+ *  message (a subagent or a nested tool call). The store never reads it — the child's own
+ *  session file already carries it — but the footer does, from the branch, where no child
+ *  file exists. */
 export const TOOL_PROVIDER = "tool";
 
 /** The v8 disk shape: one-char keys, model rows in `r`, day rows in `d` (keyed
@@ -354,21 +361,23 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	if ("rollup" in raw) {
 		const v4 = raw as FileCacheItem;
 		if (!v4.rollup) return null;
-		// A v4 rollup predates cache writes and the billed split: its cost counts as billed,
-		// so the migrated headline number is unchanged.
+		// A v4 rollup predates cache writes, the billed split and the day buckets: its cost
+		// counts as billed so a migrated headline is unchanged, but the item is stamped 5 so the
+		// scan re-parses its file once and re-saves it with its days and its real billed split.
 		for (const r of Object.values(v4.rollup.providers)) {
 			if (typeof r.cacheWrite !== "number") r.cacheWrite = 0;
 			if (typeof r.billed !== "number") r.billed = r.cost;
 		}
-		// A v4 rollup has no day buckets: default them so the v8 code paths always see the field.
-		return { ...v4, v: CACHE_VERSION, rollup: { days: {}, ...v4.rollup } };
+		return { ...v4, v: 5, rollup: { days: {}, ...v4.rollup } };
 	}
 	const d = raw as Partial<DiskItem>;
 	if (typeof d.m !== "number" || typeof d.s !== "number" || !d.r) return null;
 	const rollup: FileRollup = { providers: {}, days: {} };
 	// v7+ rows are 7 numbers; a shorter row means a pre-v7 entry, stamped below 7 so the scan
-	// re-parses its file once and re-saves it with cache writes and the billed split.
-	const wide = Object.values(d.r).some((a) => Array.isArray(a) && a.length >= 7);
+	// re-parses its file once and re-saves it with cache writes and the billed split. An empty
+	// `r` (a session with no assistant message) is a v7 item, not a pre-v7 one: `some` over an
+	// empty map is false, and treating it as old would re-read that file on every start.
+	const wide = !Object.values(d.r).some((a) => Array.isArray(a) && a.length < 7);
 	for (const [pm, a] of Object.entries(d.r)) {
 		const row = rowOf(a);
 		if (!row) continue;
@@ -492,13 +501,16 @@ function scanSessionFiles(dir: string): string[] {
 	const files: string[] = [];
 	try {
 		if (!existsSync(dir)) return files;
-		const list = readdirSync(dir, { withFileTypes: true });
-		for (const ent of list) {
-			const full = join(dir, ent.name);
-			if (ent.isDirectory()) {
-				files.push(...scanSessionFiles(full));
-			} else if (ent.isFile() && ent.name.endsWith(".jsonl")) {
-				files.push(full);
+		for (const ent of readdirSync(dir, { withFileTypes: true })) {
+			if (!ent.isDirectory() || ent.name === SUBAGENT_ARTIFACTS_DIR) continue;
+			const projectDir = join(dir, ent.name);
+			for (const f of readdirSync(projectDir, { withFileTypes: true })) {
+				// A session file lives directly in its project dir (`<ts>_<id>.jsonl`).
+				if (f.isFile() && f.name.endsWith(".jsonl")) files.push(join(projectDir, f.name));
+				// A subagent run is a session of its own, one level deeper
+				// (`<project>/<parent id>/<run id>/run-N/session.jsonl`): its spend is real and
+				// must be counted once, under its own provider/model.
+				else if (f.isDirectory()) files.push(...childSessionFiles(join(projectDir, f.name)));
 			}
 		}
 	} catch {
@@ -507,40 +519,38 @@ function scanSessionFiles(dir: string): string[] {
 	return files;
 }
 
-/** Extract a usage entry from one line, or null when the line carries none. An assistant
- *  message carries its own call's usage; a tool result carries the usage of the tool
- *  execution itself (a subagent or a nested call), which pi never puts in an assistant
- *  message — so the two are summed, once each, never double counted. */
+/** The child sessions of subagent runs under one project dir. Only `session.jsonl` counts: the
+ *  run's transcript (`<project>/subagent-artifacts/*.jsonl`) repeats the same messages, and
+ *  counting both billed every child twice — the same tokens also ride on the parent's tool
+ *  result, which the store never reads for the same reason. */
+function childSessionFiles(dir: string): string[] {
+	const files: string[] = [];
+	try {
+		for (const ent of readdirSync(dir, { withFileTypes: true })) {
+			if (ent.name === SUBAGENT_ARTIFACTS_DIR) continue;
+			const full = join(dir, ent.name);
+			if (ent.isDirectory()) files.push(...childSessionFiles(full));
+			else if (ent.name === "session.jsonl") files.push(full);
+		}
+	} catch {
+		// ignore
+	}
+	return files;
+}
+
+/** Extract a usage entry from one line, or null when the line carries none. Only an
+ *  assistant message is read: pi also attaches child spend to a tool result
+ *  (`ToolResultMessage.usage`), but that spend already sits in the child's own session file
+ *  (see {@link scanSessionFiles}), so reading it here would count it twice. The footer reads
+ *  it from the branch instead, where no child file exists. */
 function entryOfLine(line: string): UsageEntry | null {
 	// Loose prefilter (fast path only): exact key would break on JSON formatting changes
 	// and silently drop usage. The role is re-checked on the parsed object below.
 	if (!line || !line.includes('"role"')) return null;
 	try {
 		const m = JSON.parse(line)?.message;
-		if (m?.role !== "assistant" && m?.role !== "toolResult") return null;
+		if (m?.role !== "assistant") return null;
 		const u = m.usage || {};
-		if (m.role === "toolResult") {
-			const input = Number(u.input) || 0;
-			const output = Number(u.output) || 0;
-			const cacheRead = Number(u.cacheRead) || 0;
-			const cacheWrite = Number(u.cacheWrite) || 0;
-			const cost = Number(u.cost?.total) || 0;
-			// A tool result without any usage field adds nothing.
-			if (!(input || output || cacheRead || cacheWrite || cost)) return null;
-			return {
-				// A tool result's usage names no provider/model: attribute it to the tool itself
-				// (`tool` · toolName) unless the tool attached one — never to the parent's model.
-				provider: String(u.provider || TOOL_PROVIDER),
-				model: String(u.model || m.toolName || TOOL_PROVIDER),
-				input,
-				output,
-				cacheRead,
-				cacheWrite,
-				cost,
-				billed: u.cost?.totalFromProvider === true,
-				ts: Number(m.timestamp) || 0,
-			};
-		}
 		return {
 			provider: String(m.provider || "unknown"),
 			model: String(m.model || "unknown"),
@@ -550,11 +560,18 @@ function entryOfLine(line: string): UsageEntry | null {
 			cacheWrite: Number(u.cacheWrite) || 0,
 			cost: Number(u.cost?.total) || 0,
 			billed: u.cost?.totalFromProvider === true,
-			ts: Number(m.timestamp) || 0,
+			ts: tsOf(m.timestamp),
 		};
 	} catch {
 		return null;
 	}
+}
+
+/** A usable timestamp, or 0. `new Date(1e16).toISOString()` throws a RangeError, and one
+ *  corrupt line must not break the whole scan (`/usage` and the Model tab both read it). */
+function tsOf(raw: unknown): number {
+	const ts = Number(raw);
+	return Number.isFinite(ts) && ts > 0 && ts <= 8.64e15 ? ts : 0;
 }
 
 /** The cwd of a session-header line (`{"type":"session",...,"cwd":...}`), the first line of a
@@ -744,6 +761,7 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 				input: mData.input,
 				output: mData.output,
 				cacheRead: mData.cacheRead,
+				cacheWrite: mData.cacheWrite,
 				totalTokens: mData.input + mData.output,
 				cost: mData.billed,
 				estimatedCost,
@@ -921,6 +939,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	/** Sum of the day buckets over the last `n` UTC days, today included. */
 	const windowOf = (n: number): UsageDayWindow => {
 		let cost = 0;
+		let estimated = 0;
 		let input = 0;
 		let output = 0;
 		let cacheRead = 0;
@@ -928,11 +947,12 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			const r = dayMap.get(dayKey(now - i * 86_400_000));
 			if (!r) continue;
 			cost += r.billed;
+			estimated += Math.max(0, r.cost - r.billed);
 			input += r.input;
 			output += r.output;
 			cacheRead += r.cacheRead;
 		}
-		return { cost, input, output, cacheRead };
+		return { cost, estimated, input, output, cacheRead };
 	};
 
 	const totals: UsageSummary["totals"] = {
@@ -1109,9 +1129,9 @@ if (isMain(import.meta.url)) {
 	const reparsed6 = collectUsageSummary(true);
 	assert(reparsed6.totals.msgs === 6 && reparsed6.totals.input === 1181, "a v6 cache item is re-parsed from its file (the stale 99 is not counted)");
 
-	// Child spend rides on the tool result, not on any assistant message: one assistant message
-	// plus one tool result that carries usage must total the sum of both, once each, and a tool
-	// result without usage adds nothing. Its own fixture, so the totals above stay untouched.
+	// Child spend: pi attaches it to the tool result, but the child also writes its own session
+	// file, so the store must not read the tool result — that counts the same tokens twice.
+	// Its own fixture, so the totals above stay untouched.
 	assert(TOOL_PROVIDER === "tool", "child spend is attributed to the synthetic `tool` provider");
 	const toolFixture = mkdtempSync(join(tmpdir(), "arnative-tool-"));
 	process.env.PI_CODING_AGENT_DIR = toolFixture;
@@ -1128,25 +1148,31 @@ if (isMain(import.meta.url)) {
 			header("/repo/alpha"),
 			asst("m1", 100, tsToday),
 			toolResult("subagent", { input: 40, output: 6, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01, totalFromProvider: true } }),
-			toolResult("bash"), // no usage at all: adds nothing
+			toolResult("bash"), // no usage at all
 		].join(NL) + NL,
 	);
-	const child = collectUsageSummary(true);
-	assert(child.totals.msgs === 2, "an assistant message and a usage-carrying tool result count once each");
-	assert(child.totals.input === 140 && child.totals.output === 11 && child.totals.cacheRead === 3, "the child's tokens are summed with the parent's, once");
-	assert(Math.abs(child.totals.cost - 0.03) < 1e-9, "the child's cost is summed once");
-	const tool = child.providers.find((p) => p.name === TOOL_PROVIDER)!;
-	assert(tool !== undefined && tool.models.length === 1 && tool.models[0]!.name === "subagent", "a tool result is attributed to `tool` · toolName");
-	assert(tool.models[0]!.input === 40 && Math.abs(tool.models[0]!.cost - 0.01) < 1e-9, "the tool row carries the child's own numbers");
-	const parent = child.providers.find((p) => p.name === "google")!;
-	assert(parent !== undefined && parent.models.length === 1 && parent.models[0]!.name === "m1" && parent.input === 100, "the parent's row is not widened by the child's spend");
-	const toolDisk = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, { r: Record<string, number[]>; t?: number }>;
-	const toolRow = toolDisk[join("p", "t.jsonl")]!.r[`${TOOL_PROVIDER}\u0000subagent`]!;
-	assert(toolRow !== undefined && toolRow[0] === 1 && toolRow[1] === 40, "the child row is cached under `tool\0toolName`, once");
-	assert(toolDisk[join("p", "t.jsonl")]!.t === CACHE_VERSION, "a fresh item is saved as v8 (`t` marks tool-result spend)");
+	const parentOnly = collectUsageSummary(true);
+	assert(parentOnly.totals.msgs === 1 && parentOnly.totals.input === 100, "a tool result's usage is not read: the child's own session file carries it");
+	assert(parentOnly.providers.every((p) => p.name !== TOOL_PROVIDER), "no synthetic `tool` row: /usage never sees child spend twice");
+
+	// A subagent run writes <project>/<parent id>/<run id>/run-N/session.jsonl, and its
+	// transcript under <project>/subagent-artifacts/: the child session is real spend, the
+	// transcript is the same messages again.
+	const childDir = join(toolFixture, "sessions", "p", "parent-1", "run-1", "run-0");
+	mkdirSync(childDir, { recursive: true });
+	writeFileSync(join(childDir, "session.jsonl"), [header("/repo/alpha"), asst("m1", 40, tsToday)].join(NL) + NL);
+	mkdirSync(join(toolFixture, "sessions", "p", SUBAGENT_ARTIFACTS_DIR), { recursive: true });
+	writeFileSync(
+		join(toolFixture, "sessions", "p", SUBAGENT_ARTIFACTS_DIR, "x_transcript.jsonl"),
+		[header("/repo/alpha"), asst("m1", 7, tsToday)].join(NL) + NL,
+	);
+	resetUsageCache();
+	const nested = collectUsageSummary(true);
+	assert(nested.totals.msgs === 2 && nested.totals.input === 140, "a child session is counted once (40), its transcript not at all (7)");
+	assert(nested.totals.sessions === 2, "the parent session and the child session, not the transcript");
 
 	// A v7 item (7-number rows with day buckets, no `t`) is re-parsed once from its file — not
-	// trusted — and re-saved as v8, so the tool results it predates are picked up.
+	// trusted — and re-saved as v8.
 	const tStat = statSync(toolFile);
 	writeFileSync(
 		join(toolFixture, "arnative", "usage-cache.json"),
@@ -1163,8 +1189,23 @@ if (isMain(import.meta.url)) {
 	resetUsageCache();
 	const reparsed7 = collectUsageSummary(true);
 	assert(reparsed7.totals.msgs === 2 && reparsed7.totals.input === 140, "a v7 cache item is re-parsed from its file (the stale 99 is not counted)");
-	const after7 = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, { t?: number; r: Record<string, number[]> }>;
-	assert(after7[join("p", "t.jsonl")]!.t === CACHE_VERSION && after7[join("p", "t.jsonl")]!.r[`${TOOL_PROVIDER}\u0000subagent`] !== undefined, "the re-parsed item is re-saved as v8 with the tool row");
+	const after7 = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, { t?: number }>;
+	assert(after7[join("p", "t.jsonl")]!.t === CACHE_VERSION, "the re-parsed item is re-saved as the current version");
+
+	// An empty session (no assistant message) writes `r: {}`: that is a current item, not a
+	// pre-v7 one — `some` over an empty map is false, and treating it as old would re-read that
+	// file on every start. A tampered row proves the item is trusted rather than re-parsed.
+	const emptyFile = join(toolFixture, "sessions", "p", "empty.jsonl");
+	writeFileSync(emptyFile, header("/repo/alpha") + NL);
+	resetUsageCache();
+	collectUsageSummary(true);
+	const emptyCachePath = join(toolFixture, "arnative", "usage-cache.json");
+	const emptyDisk = JSON.parse(readFileSync(emptyCachePath, "utf8")) as Record<string, { r: Record<string, number[]> }>;
+	assert(emptyDisk[join("p", "empty.jsonl")] !== undefined, "an empty session is cached");
+	emptyDisk[join("p", "empty.jsonl")]!.r = { "google\u0000m9": [5, 500, 0, 0, 0, 0, 0] };
+	writeFileSync(emptyCachePath, JSON.stringify(emptyDisk));
+	resetUsageCache();
+	assert(collectUsageSummary(true).totals.input === 640, "an empty `r` item is trusted, not re-read on every start");
 	rmSync(toolFixture, { recursive: true, force: true });
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	resetUsageCache();

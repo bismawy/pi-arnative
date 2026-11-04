@@ -55,11 +55,9 @@ export function renderProm(summary: UsageSummary, now: number): string {
 	gauge("arnative_cost_today", "Provider-billed cost in USD in the current UTC day (the day buckets).", t.today?.cost ?? 0);
 	gauge("arnative_cost_30d", "Provider-billed cost in USD over the last 30 UTC days (the day buckets).", t.last30d?.cost ?? 0);
 	lines.push("# HELP arnative_tokens_total Token usage by provider, model and kind.", "# TYPE arnative_tokens_total gauge");
-	// UsageSummary carries no per-model cacheWrite (the rollups keep it, providerStatsOf drops
-	// it), so that kind is omitted rather than exported as a fabricated 0.
 	for (const p of summary.providers) {
 		for (const m of p.models) {
-			for (const [kind, value] of [["input", m.input], ["output", m.output], ["cache_read", m.cacheRead]] as const) {
+			for (const [kind, value] of [["input", m.input], ["output", m.output], ["cache_read", m.cacheRead], ["cache_write", m.cacheWrite]] as const) {
 				const labels: [string, string][] = [
 					["provider", p.name],
 					["model", m.name],
@@ -107,7 +105,9 @@ export function exportProm(now: number, path: string = promFilePath()): boolean 
 	try {
 		if (process.env[EXPORT_ENV] === "0") return false;
 		if (now - lastExportMs < EXPORT_THROTTLE_MS) return false;
-		const summary = collectUsageSummary();
+		// Force the scan: the memo can be up to 5s old, and the turn that just ended is exactly
+		// the one this export is for. The throttle above keeps this to one scan per minute.
+		const summary = collectUsageSummary(true);
 		// The scan timestamp only moves when the data does, so an idle session renders
 		// byte-identical text and the diff below skips the write.
 		const key = JSON.stringify(summary);
@@ -129,6 +129,12 @@ export function exportProm(now: number, path: string = promFilePath()): boolean 
 
 export default function registerUsageExport(pi: ExtensionAPI): void {
 	pi.on("turn_end", () => {
+		exportProm(Date.now());
+	});
+	// The throttle must not swallow the last turns of a session: reset it and flush once, so a
+	// quit does not leave the file reporting an hour-old total.
+	pi.on("session_shutdown", () => {
+		lastExportMs = 0;
 		exportProm(Date.now());
 	});
 }
@@ -180,10 +186,11 @@ if (isMain(import.meta.url)) {
 				input: 10,
 				output: 5,
 				cacheRead: 2,
+				cacheWrite: 4,
 				totalTokens: 15,
 				cost: 0.02,
 				estimatedCost: 0.01,
-				models: [{ name: "m\n1", sessions: 1, msgs: 1, input: 10, output: 5, cacheRead: 2, totalTokens: 15, cost: 0.02, estimatedCost: 0.01 }],
+				models: [{ name: "m\n1", sessions: 1, msgs: 1, input: 10, output: 5, cacheRead: 2, cacheWrite: 4, totalTokens: 15, cost: 0.02, estimatedCost: 0.01 }],
 			},
 		],
 		projects: [],
@@ -197,8 +204,8 @@ if (isMain(import.meta.url)) {
 			cost: 0.02,
 			reportedCost: 0.02,
 			estimatedCost: 0.01,
-			today: { cost: 0.02, input: 10, output: 5, cacheRead: 2 },
-			last30d: { cost: 0.02, input: 10, output: 5, cacheRead: 2 },
+			today: { cost: 0.02, estimated: 0, input: 10, output: 5, cacheRead: 2 },
+			last30d: { cost: 0.02, estimated: 0, input: 10, output: 5, cacheRead: 2 },
 		},
 	};
 	const text = renderProm(full, 1_700_000_000_000);

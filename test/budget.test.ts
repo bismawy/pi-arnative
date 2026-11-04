@@ -32,10 +32,12 @@ test("the month cap is checked too, and over wins over warn", () => {
 });
 
 test("estimate-only spend never reaches over (rule 4)", () => {
-	assert.equal(budgetState({ today: 120, month: 0, estimated: true }, { day: 100 }, true).level, "warn");
-	assert.equal(budgetState({ today: 120, month: 0, estimated: true }, { day: 100 }, false).level, "warn");
-	assert.equal(budgetState({ today: 79, month: 0, estimated: true }, { day: 100 }, true).level, "ok", "an estimate below 80% is still ok");
-	assert.match(budgetState({ today: 120, month: 0, estimated: true }, { day: 100 }, true).reason!, /estimate only, never blocked$/);
+	assert.equal(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, true).level, "warn");
+	assert.equal(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, false).level, "warn");
+	assert.equal(budgetState({ today: 0, month: 0, estimatedToday: 79 }, { day: 100 }, true).level, "ok", "an estimate below 80% is still ok");
+	assert.match(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, true).reason!, /estimate only, never blocked$/);
+	// A billed crossing is over even when estimates are in the same window.
+	assert.equal(budgetState({ today: 120, month: 0, estimatedToday: 30 }, { day: 100 }, true).level, "over");
 });
 
 test("the reason names the cap, the percent and the spend, and says what happens", () => {

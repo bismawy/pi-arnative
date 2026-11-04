@@ -699,6 +699,9 @@ const hasUsage = (u: MessageUsage | undefined): u is MessageUsage =>
 
 /** Attribution of one branch message's usage: a tool result's usage names no provider/model,
  *  so it is attributed to the tool itself (`tool` · toolName), never to the parent's model. */
+/** A tool result names no provider/model: it is attributed to the tool itself, never to the
+ *  parent's model. pi-subagents does not set `totalFromProvider` on that usage, so child spend
+ *  always lands in the estimated part of the cell (`~`) even when the children were billed. */
 const attributionOf = (
 	m: { role: string; provider?: string; model?: string; toolName?: string },
 	u: MessageUsage,
@@ -1231,8 +1234,8 @@ export default function (pi: ExtensionAPI) {
 							try {
 								// The cost cell's colour follows the budget band — amber at ≥80% of a
 								// cap, red at ≥100% — read from the memoized usage summary, so the
-								// render path never scans.
-								const band = budgetLevelNow();
+								// render path never scans. Nothing is read at all while the cell is off.
+								const band = activeFooterCost() ? budgetLevelNow() : "ok";
 								const bandPaint = band === "warn" ? colorOr("warning", acc) : band === "over" ? colorOr("error", acc) : undefined;
 								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width, bandPaint);
 							} catch {
@@ -1244,7 +1247,11 @@ export default function (pi: ExtensionAPI) {
 							// messages, the first two skipped): soft ≥70%, amber 40–70% (`warning`
 							// slot, accent when the theme has none), red below 40% (`error`). A passive
 							// colour only — never a notify. The `pi …%` text itself stays as is.
-							const band = cacheHitBand(usageWindow.inp, usageWindow.read);
+							// Only pi's own number may be coloured by pi's window: a cache-stats plugin
+							// publishes its own rate (often per request, not per token), and painting it
+							// with our band would contradict the number printed next to it.
+							const fromPi = !parseOptimizer(rawCache);
+							const band = fromPi ? cacheHitBand(usageWindow.inp, usageWindow.read) : null;
 							const bandPaint = band === "warning" ? colorOr("warning", acc) : band === "error" ? colorOr("error", acc) : null;
 							const cacheCell = opt ? `${(bandPaint ?? acc)("\udb80\udf5b")} ${(bandPaint ?? secondarySoft)(opt)}` : "";
 							const metricCells = [speedStr, cacheCell, usageStr].filter(Boolean);

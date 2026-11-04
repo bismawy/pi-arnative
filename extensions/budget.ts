@@ -97,8 +97,9 @@ export interface BudgetSpend {
 	/** Billed spend in the current UTC day / the last 30 days (the cache's day buckets). */
 	today: number;
 	month: number;
-	/** True when no provider-billed total exists and the spend is estimate-only. */
-	estimated?: boolean;
+	/** Catalog-estimated spend in the same windows: it warns, it never blocks. */
+	estimatedToday?: number;
+	estimatedMonth?: number;
 }
 
 export interface BudgetVerdict {
@@ -111,42 +112,50 @@ export const WARN_PCT = 0.8;
 
 /**
  * Pure decision — no I/O, the unit under test. `warn` at ≥80% of any set cap, `over` at ≥100%.
- * Rule 4: estimate-only spend (`spend.estimated`, no provider-billed total — a cap on an
- * unpriced model would enforce $0) caps the level at `warn`. `enforce` only words the reason:
- * an `over` that will be blocked says so, one that only warns does not.
+ * Rule 4: only **billed** spend can cross a cap, because a cap computed from a catalog estimate
+ * would enforce $0 on an unpriced model. An estimate still counts towards the warning, so a
+ * provider that reports no billed total is not silently ignored. `enforce` only words the
+ * reason: an `over` that will be blocked says so, one that only warns does not.
  */
 export function budgetState(spend: BudgetSpend, caps: { day?: number; month?: number }, enforce: boolean): BudgetVerdict {
 	let level: BudgetLevel = "ok";
 	let reason: string | undefined;
-	const consider = (amount: number, cap: number | undefined, label: string): void => {
-		if (cap === undefined || !(cap > 0) || !(amount > 0)) return;
-		const pct = amount / cap;
-		if (pct >= 1) {
+	const consider = (billed: number, estimated: number, cap: number | undefined, label: string): void => {
+		if (cap === undefined || !(cap > 0)) return;
+		const total = billed + estimated;
+		if (!(total > 0)) return;
+		// `floor`, not `round`: 99.6 % of a cap must not read as "at 100 %".
+		const pct = Math.floor((total / cap) * 100);
+		if (billed >= cap) {
 			if (level !== "over") {
 				level = "over";
-				reason = `${label} cap ${formatCost(cap)} at ${Math.round(pct * 100)}% (${formatCost(amount)} spent)`;
+				reason = `${label} cap ${formatCost(cap)} at ${pct}% (${formatCost(total)} spent)`;
 			}
-		} else if (pct >= WARN_PCT && level === "ok") {
+		} else if (total / cap >= WARN_PCT && level === "ok") {
 			level = "warn";
-			reason = `${label} cap ${formatCost(cap)} at ${Math.round(pct * 100)}% (${formatCost(amount)} spent)`;
+			const note = estimated > 0 && billed < cap ? " — estimate only, never blocked" : "";
+			reason = `${label} cap ${formatCost(cap)} at ${pct}% (${formatCost(total)} spent)${note}`;
 		}
 	};
-	consider(spend.today, caps.day, "day");
-	consider(spend.month, caps.month, "month");
+	consider(spend.today, spend.estimatedToday ?? 0, caps.day, "day");
+	consider(spend.month, spend.estimatedMonth ?? 0, caps.month, "month");
 	if (level === "ok") return { level };
-	if (spend.estimated && level === "over") return { level: "warn", reason: `${reason} — estimate only, never blocked` };
 	if (level === "over") return { level, reason: `${reason}${enforce ? " — turn blocked" : " — enforcement off"}` };
 	return { level, reason };
 }
 
 /** The current spend from the memoized summary's day buckets, or null when they are absent
- *  (a cache with no buckets — the spend is then unknown, never a fabricated $0). */
-export function spendNow(): BudgetSpend | null {
-	const s = collectUsageSummary();
+ *  (a cache with no buckets — the spend is then unknown, never a fabricated $0). `force`
+ *  re-scans: the gate must not read a total up to 5s old, the footer render must not scan. */
+export function spendNow(force = false): BudgetSpend | null {
+	const s = collectUsageSummary(force);
 	if (!s.totals.today || !s.totals.last30d) return null;
-	const today = s.totals.today.cost;
-	const month = s.totals.last30d.cost;
-	return { today, month, estimated: s.totals.cost === 0 && s.totals.estimatedCost > 0 };
+	return {
+		today: s.totals.today.cost,
+		month: s.totals.last30d.cost,
+		estimatedToday: s.totals.today.estimated,
+		estimatedMonth: s.totals.last30d.estimated,
+	};
 }
 
 /** The budget level right now — read by the footer render, so it rides the same 5s memo and
@@ -167,7 +176,7 @@ export function budgetLevelNow(): BudgetLevel {
 
 const BUDGET_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Budget"),
-	description: "warn-only spend caps on today / 30d — enforce on blocks the next turn",
+	description: "warn-only caps on the UTC day and the rolling 30d — enforce on blocks the next turn",
 	legend: "[↑↓] Move  [Enter] Change  [←] Back  [Esc] Close",
 };
 
@@ -177,7 +186,7 @@ const ENFORCE_OFF_NOTE = "off — warns only";
 /** The live note of one Budget row, re-read on every render so a change shows at once. */
 function budgetRowNote(label: string): string | undefined {
 	if (label === "Day cap") return capLabel(activeBudgetDay());
-	if (label === "Month cap") return capLabel(activeBudgetMonth());
+	if (label === "30d cap") return capLabel(activeBudgetMonth());
 	if (label === "Enforce") return activeBudgetEnforce() ? ENFORCE_ON_NOTE : ENFORCE_OFF_NOTE;
 	if (label === "Spent") {
 		const s = spendNow();
@@ -188,7 +197,7 @@ function budgetRowNote(label: string): string | undefined {
 
 /** The Budget screen's rows: day cap, month cap, enforce, and the current spend. */
 export function budgetRows(): ListRow[] {
-	return ["Day cap", "Month cap", "Enforce", "Spent"].map((label) => ({ label, note: budgetRowNote(label) }));
+	return ["Day cap", "30d cap", "Enforce", "Spent"].map((label) => ({ label, note: budgetRowNote(label) }));
 }
 
 /** Enter on a row changes that row's value (the screen stays open, the note re-reads). */
@@ -255,7 +264,7 @@ export default function registerBudget(pi: ExtensionAPI): void {
 			if (event.source === "extension") return { action: "continue" };
 			const caps = { day: activeBudgetDay(), month: activeBudgetMonth() };
 			if (caps.day === undefined && caps.month === undefined) return { action: "continue" };
-			const spend = spendNow();
+			const spend = spendNow(true);
 			// Unknown spend (no day buckets): never block.
 			if (spend === null) return { action: "continue" };
 			const enforce = activeBudgetEnforce();
@@ -301,8 +310,9 @@ if (isMain(import.meta.url)) {
 	assert(budgetState({ today: 85, month: 120 }, { day: 100, month: 100 }, true).level === "over", "the month cap is checked and over wins");
 	assert(budgetState({ today: 85, month: 50 }, { day: 100, month: 100 }, true).level === "warn", "80% of either cap warns");
 	// Rule 4: estimate-only spend never reaches over.
-	assert(budgetState({ today: 120, month: 0, estimated: true }, { day: 100 }, true).level === "warn", "estimate-only spend is capped at warn, never over");
-	assert(budgetState({ today: 120, month: 0, estimated: true }, { day: 100 }, false).level === "warn", "estimate-only spend is warn with enforce off too");
+	assert(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, true).level === "warn", "estimate-only spend is capped at warn, never over");
+	assert(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, false).level === "warn", "estimate-only spend is warn with enforce off too");
+	assert(budgetState({ today: 120, month: 0, estimatedToday: 30 }, { day: 100 }, true).level === "over", "a billed crossing is over even with estimates in the mix");
 	// Pinned reason strings.
 	assert(
 		budgetState({ today: 6, month: 0 }, { day: 5 }, true).reason === "day cap $5.00 at 120% ($6.00 spent) — turn blocked",
@@ -314,7 +324,7 @@ if (isMain(import.meta.url)) {
 	);
 	assert(budgetState({ today: 4, month: 0 }, { day: 5 }, true).reason === "day cap $5.00 at 80% ($4.00 spent)", "warn reason pinned");
 	assert(
-		budgetState({ today: 6, month: 0, estimated: true }, { day: 5 }, true).reason === "day cap $5.00 at 120% ($6.00 spent) — estimate only, never blocked",
+		budgetState({ today: 0, month: 0, estimatedToday: 6 }, { day: 5 }, true).reason === "day cap $5.00 at 120% ($6.00 spent) — estimate only, never blocked",
 		"estimate-capped reason pinned",
 	);
 
@@ -340,7 +350,7 @@ if (isMain(import.meta.url)) {
 	writeFileSync(join(fixture, "sessions", "p", "s.jsonl"), asst(6) + "\n");
 	resetUsageCache();
 	const spend = spendNow();
-	assert(spend !== null && spend.today === 6 && spend.month === 6 && spend.estimated === false, "spend reads the day buckets (today / 30d): " + JSON.stringify(spend));
+	assert(spend !== null && spend.today === 6 && spend.month === 6 && spend.estimatedToday === 0, "spend reads the day buckets (today / 30d): " + JSON.stringify(spend));
 
 	// The level right now, through the same memoized summary.
 	assert(budgetLevelNow() === "ok", "no caps → ok");
@@ -400,13 +410,13 @@ if (isMain(import.meta.url)) {
 	// The Budget screen rows carry the live values and the pinned copy.
 	setBudgetDay(5);
 	const rows = budgetRows();
-	assert(rows.map((r) => r.label).join(",") === "Day cap,Month cap,Enforce,Spent", "the Budget rows: " + rows.map((r) => r.label).join(","));
+	assert(rows.map((r) => r.label).join(",") === "Day cap,30d cap,Enforce,Spent", "the Budget rows: " + rows.map((r) => r.label).join(","));
 	assert(rows[0]!.note === "$5.00" && rows[1]!.note === "off", "the cap rows show the stored caps");
 	assert(rows[2]!.note === ENFORCE_ON_NOTE && ENFORCE_ON_NOTE === "on — blocks the next turn over a cap", "the enforce row is pinned: " + rows[2]!.note);
 	assert(rows[3]!.note === "today $6.00 · 30d $6.00", "the spent row shows the day buckets: " + rows[3]!.note);
 	assert(BUDGET_PICKER_TEXT.title === "Budget - Arnative\u2819", "the Budget screen title is pinned: " + BUDGET_PICKER_TEXT.title);
 	assert(
-		BUDGET_PICKER_TEXT.description === "warn-only spend caps on today / 30d — enforce on blocks the next turn",
+		BUDGET_PICKER_TEXT.description === "warn-only caps on the UTC day and the rolling 30d — enforce on blocks the next turn",
 		"the Budget screen description is pinned",
 	);
 	assert(BUDGET_PICKER_TEXT.legend === "[↑↓] Move  [Enter] Change  [←] Back  [Esc] Close", "the Budget legend is pinned");

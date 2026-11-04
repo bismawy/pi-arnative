@@ -156,7 +156,7 @@ test("billed cost and estimates stay apart, cache writes counted and priced", ()
 	});
 });
 
-test("child spend from a tool result is counted once, never doubled", () => {
+test("a tool result's usage is not read, and a child session is counted once", () => {
 	withFixture((dir) => {
 		mkdirSync(join(dir, "sessions", "a"), { recursive: true });
 		const ts = Date.now();
@@ -166,33 +166,29 @@ test("child spend from a tool result is counted once, never doubled", () => {
 		const toolLine = (toolName: string, usage?: object) =>
 			JSON.stringify({ message: { role: "toolResult", toolCallId: "c1", toolName, content: [], isError: false, timestamp: ts, ...(usage ? { usage } : {}) } });
 		const child = { input: 40, output: 6, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01, totalFromProvider: true } };
-		// One assistant message, one tool result that carries usage, one that does not.
 		writeFileSync(join(dir, "sessions", "a", "a.jsonl"), [asstLine, toolLine("subagent", child), toolLine("bash")].join(NL) + NL);
 
+		// The child's spend is on the tool result AND in the child's own session file. The store
+		// reads the file only: reading both billed the same tokens twice.
 		const summary = collectUsageSummary(true);
-		// The total is the sum of both, once each: the child spend is on the tool result only,
-		// never also on the assistant message that issued the call.
-		assert.equal(summary.totals.msgs, 2);
-		assert.equal(summary.totals.input, 140);
-		assert.equal(summary.totals.output, 11);
-		assert.equal(summary.totals.cacheRead, 3);
-		assert.ok(Math.abs(summary.totals.cost - 0.03) < 1e-9);
-		// The child is attributed to `tool` · toolName, not to the parent's provider/model.
-		const tool = summary.providers.find((p) => p.name === "tool")!;
-		assert.equal(tool.models.length, 1);
-		assert.equal(tool.models[0]!.name, "subagent");
-		assert.equal(tool.models[0]!.input, 40);
-		assert.ok(Math.abs(tool.models[0]!.cost - 0.01) < 1e-9);
-		const google = summary.providers.find((p) => p.name === "google")!;
-		assert.equal(google.models.length, 1);
-		assert.equal(google.models[0]!.name, "m1");
-		assert.equal(google.input, 100, "the parent's row is not widened by the child's spend");
-		// The tool result without usage adds nothing: exactly one `tool` row, one message in it.
-		assert.equal(summary.providers.filter((p) => p.name === "tool").length, 1);
-		// On disk the child row is stored under `tool\0subagent` and counts once.
-		const row = cacheOf(dir)[join("a", "a.jsonl")]!.r["tool\u0000subagent"]!;
-		assert.equal(row[0], 1);
-		assert.equal(row[1], 40);
+		assert.equal(summary.totals.msgs, 1);
+		assert.equal(summary.totals.input, 100);
+		assert.equal(summary.providers.filter((p) => p.name === "tool").length, 0, "no synthetic `tool` row in /usage");
+
+		// pi-subagents writes <project>/<parent id>/<run id>/run-N/session.jsonl and its
+		// transcript under <project>/subagent-artifacts/: both are inside the sessions tree.
+		const childDir = join(dir, "sessions", "a", "parent-1", "run-1", "run-0");
+		mkdirSync(childDir, { recursive: true });
+		const childLine = JSON.stringify({
+			message: { role: "assistant", provider: "google", model: "m1", timestamp: ts, usage: { input: 40, output: 2, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01, totalFromProvider: true } } },
+		});
+		writeFileSync(join(childDir, "session.jsonl"), childLine + NL);
+		mkdirSync(join(dir, "sessions", "a", "subagent-artifacts"), { recursive: true });
+		writeFileSync(join(dir, "sessions", "a", "subagent-artifacts", "x_transcript.jsonl"), asstLine + NL);
+		resetUsageCache();
+		const nested = collectUsageSummary(true);
+		assert.equal(nested.totals.sessions, 2, "the parent session and the child session, not the transcript");
+		assert.equal(nested.totals.input, 140, "the child session counts once (100 + 40), its transcript not at all");
 	});
 });
 
@@ -202,10 +198,9 @@ test("a v7 cache item (no `t`) is re-parsed once and re-saved as v8", () => {
 		const ts = Date.now();
 		const file = join(dir, "sessions", "a", "a.jsonl");
 		const asstLine = JSON.stringify({ message: { role: "assistant", provider: "google", model: "m1", timestamp: ts, usage: { input: 100, output: 5, cacheRead: 1, cost: { total: 0.02, totalFromProvider: true } } } });
-		const toolLine = JSON.stringify({ message: { role: "toolResult", toolCallId: "c1", toolName: "subagent", content: [], isError: false, timestamp: ts, usage: { input: 40, output: 6, cacheRead: 2, cost: { total: 0.01, totalFromProvider: true } } } });
-		writeFileSync(file, [asstLine, toolLine].join(NL) + NL);
+		writeFileSync(file, asstLine + NL);
 		const cold = collectUsageSummary(true);
-		assert.equal(cold.totals.input, 140);
+		assert.equal(cold.totals.input, 100);
 
 		// Overwrite the cache with a v7-shaped item (7-number rows, day buckets, no `t`) claiming
 		// other numbers: it must not be trusted.
@@ -219,9 +214,8 @@ test("a v7 cache item (no `t`) is re-parsed once and re-saved as v8", () => {
 		resetUsageCache();
 		const reparsed = collectUsageSummary(true);
 		assert.equal(reparsed.totals.msgs, cold.totals.msgs);
-		assert.equal(reparsed.totals.input, 140, "the stale 99 is not counted; the tool result is picked up");
+		assert.equal(reparsed.totals.input, 100, "the stale 99 is not counted");
 		const disk = cacheOf(dir)[join("a", "a.jsonl")]!;
-		assert.equal(disk.t, 8, "the re-parsed item is re-saved as v8");
-		assert.ok(disk.r["tool\u0000subagent"] !== undefined, "the re-saved item carries the tool row");
+		assert.equal(disk.t, 8, "the re-parsed item is re-saved as the current version");
 	});
 });
