@@ -20,6 +20,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified visual interf
 - Working Spinners: 18 animated presets with live picker preview and optional `[g]` gradient sweep.
 - Transcript Clock: Per-message timestamps with clean bubble backgrounds.
 - Usage Dashboard: Real-time token counts and cost tracking across local sessions via `/usage`.
+- Prometheus Textfile Export: On every `turn_end` (at most one write per minute, and only when the numbers changed) the usage summary is written as an exposition file to `~/.pi/agent/arnative/usage.prom` — point a textfile collector at that folder (`node_exporter --collector.textfile.directory=~/.pi/agent/arnative`) and the spend lands in Grafana next to the infra metrics; set `PI_ARNATIVE_EXPORT=0` to turn it off.
 - Custom Providers: Interactive `/providers` wizard to probe endpoints, pick models, set thinking levels, edit the base URL, provider id or API key, and save OpenAI-, Anthropic-, Gemini-, or Ollama-compatible channels to `models.json` and `auth.json`.
 - Model Heal: Background sync (`/model-heal`) that fills missing compat flags, `/models` token limits, and accepted reasoning effort levels in `models.json`.
 - Auto-compact: Automatic context compaction after a turn settles using smart window tiers or a fixed token budget.
