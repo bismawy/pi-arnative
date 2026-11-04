@@ -12,7 +12,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { recordProfile } from "../extensions/arnative.ts";
 import { activeAutoCompact } from "../extensions/autocompact.ts";
-import { activeFooterPreset } from "../extensions/footer.ts";
+import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth } from "../extensions/budget.ts";
+import { activeFooterCost, activeFooterPreset } from "../extensions/footer.ts";
 import { activeHeaderPreset } from "../extensions/section-headers.ts";
 import { activeSpinnerGradient, activeSpinnerPreset } from "../extensions/animations.ts";
 import { activeModelHeal } from "../lib/model-heal.ts";
@@ -43,8 +44,8 @@ test("the file keeps one key order", () => {
 		recordProfile();
 		assert.deepEqual(
 			Object.keys(configOf(dir)),
-			["headerPreset", "footerPreset", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"],
-			"header first, then the rest of the menu, layoutVersion before the newer keys",
+			["headerPreset", "footerPreset", "footerCost", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"],
+			"header first, then the rest of the menu, the budget keys after footerCost, layoutVersion before the newer keys",
 		);
 	});
 });
@@ -57,10 +58,14 @@ test("the profile in use is recorded, defaults included", () => {
 		// behaviour of this build.
 		assert.equal(stored.headerPreset, activeHeaderPreset(), "header preset recorded");
 		assert.equal(stored.footerPreset, activeFooterPreset(), "footer preset recorded");
+		assert.equal(stored.footerCost, activeFooterCost() ? "on" : "off", "footer cost cell recorded");
 		assert.equal(stored.spinnerPreset, activeSpinnerPreset(), "spinner preset recorded");
 		assert.equal(stored.spinnerGradient, activeSpinnerGradient() ? "on" : "off", "spinner gradient recorded");
 		assert.equal(stored.autoCompact, activeAutoCompact(), "auto-compact recorded");
 		assert.equal(stored.modelHeal, activeModelHeal(), "model heal recorded");
+		assert.equal(stored.budgetDay, activeBudgetDay() === undefined ? "" : String(activeBudgetDay()), "day cap recorded (" + JSON.stringify(stored.budgetDay) + ")");
+		assert.equal(stored.budgetMonth, activeBudgetMonth() === undefined ? "" : String(activeBudgetMonth()), "month cap recorded");
+		assert.equal(stored.budgetEnforce, activeBudgetEnforce() ? "on" : "off", "budget enforcement recorded, off by default");
 		assert.equal(stored.layoutVersion, "1", "the layout stamp rides along");
 		// The default header is the case that used to be missing: it must be present even though
 		// the picker never wrote it.

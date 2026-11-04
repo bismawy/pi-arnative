@@ -6,7 +6,7 @@
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, type AutocompleteItem } from "@earendil-works/pi-tui";
+import { visibleWidth, matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../lib/ansi.ts";
 import { screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
@@ -22,8 +22,9 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { FOOTER_PRESET_KEY, HEADER_PRESET_KEY, ensureChoices } from "../lib/preset-store.ts";
-import { FOOTER_PRESETS, activeFooterPreset, setFooterPreset, type FooterPreset } from "./footer.ts";
+import { FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { FOOTER_PRESETS, activeFooterCost, activeFooterPreset, setFooterCost, setFooterPreset, type FooterPreset } from "./footer.ts";
+import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
 import {
 	AUTO_COMPACT_CHOICES,
@@ -35,6 +36,7 @@ import {
 import { healNow } from "./model-heal.ts";
 import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
+import { BACK_KEY_LABEL } from "../lib/shortcuts.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
 
@@ -54,7 +56,7 @@ export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): 
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
 export const MENU_TITLE = screenTitle("Settings");
 /** One-line description under the menu title. */
-export const MENU_DESC = "Themes, headers, footers, animations, auto-compact, providers, usage";
+export const MENU_DESC = "Themes, headers, footers, animations, auto-compact, providers, usage, budget";
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
@@ -108,11 +110,14 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void>
 	return goBack === true;
 };
 
-const FOOTERS_PICKER_TEXT: ListPickerText = {
+/** The Footers screen copy. The legend states the cost switch's live value, like the
+ *  Animations screen does for the gradient — a constant legend would advertise the value
+ *  the screen opened with. */
+const footersPickerText = (): ListPickerText => ({
 	title: screenTitle("Footers"),
 	description: "Selection applies live — custom footer or built-in.",
-	legend: LIST_LEGEND_LIVE,
-};
+	legend: `[↑↓] Preview  [c] Cost ${activeFooterCost() ? "on" : "off"}  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
+});
 
 const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeFooterPreset();
@@ -120,7 +125,7 @@ const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void
 	if (ctx.mode !== "tui") {
 		// No custom components (RPC/headless): fall back to the blocking picker.
 		const labels = markedLabels(FOOTER_PRESETS, opened);
-		const pick = await ctx.ui.select(FOOTERS_PICKER_TEXT.title, labels);
+		const pick = await ctx.ui.select(footersPickerText().title, labels);
 		if (pick === undefined) return;
 		const name = FOOTER_PRESETS[labels.indexOf(pick)]!;
 		setFooterPreset(name, ctx);
@@ -142,9 +147,17 @@ const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void
 					if (activeFooterPreset() !== opened) setFooterPreset(opened, ctx);
 					done(true);
 				},
+				// `[c]` is a switch, not a preview: the user asked for it and the legend states
+				// its state, so Esc and `←` leave it on. Only the preset preview reverts.
+				press: (keyData) => {
+					if (!matchesKey(keyData, "c")) return;
+					setFooterCost(!activeFooterCost());
+					tui.requestRender();
+				},
+				legend: () => footersPickerText().legend,
 				requestRender: () => tui.requestRender(),
 			},
-			FOOTERS_PICKER_TEXT,
+			footersPickerText(),
 			true,
 			ctx.thinkingLevel,
 		),
@@ -434,6 +447,12 @@ export const MENUS: ArnativeMenu[] = [
 		description: "open the token & cost dashboard (same as /usage)",
 		open: openUsage,
 	},
+	{
+		value: "budget",
+		label: "Budget",
+		description: "warn-only spend caps on today / 30d; enforce on blocks the next turn",
+		open: openBudget,
+	},
 ];
 
 /** The settings menu and the loop that gives `←` its meaning: a screen returning `true`
@@ -525,7 +544,7 @@ export function shouldApplyDefaultTheme(
  *  set without starting a session. */
 export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): void {
 	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, animations, auto-compact, model heal, providers, usage",
+		description: "Arnative settings menu: themes, headers, footers, animations, auto-compact, model heal, providers, usage, budget",
 		getArgumentCompletions: arnativeCompletions,
 		handler: arnativeHandler,
 	});
@@ -543,10 +562,14 @@ export function recordProfile(): void {
 	ensureChoices({
 		[HEADER_PRESET_KEY]: activeHeaderPreset(),
 		[FOOTER_PRESET_KEY]: activeFooterPreset(),
+		[FOOTER_COST_KEY]: activeFooterCost() ? "on" : "off",
 		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
 		[MODEL_HEAL_KEY]: activeModelHeal(),
+		[BUDGET_DAY_KEY]: activeBudgetDay() === undefined ? "" : String(activeBudgetDay()),
+		[BUDGET_MONTH_KEY]: activeBudgetMonth() === undefined ? "" : String(activeBudgetMonth()),
+		[BUDGET_ENFORCE_KEY]: activeBudgetEnforce() ? "on" : "off",
 	});
 }
 
@@ -573,10 +596,10 @@ if (isMain(import.meta.url)) {
 	assert(rowText(labels[0]!) === "Themes · arnative themes only (all themes: /settings → Theme)", "menu row text format");
 	assert(labels[0]!.label === "Themes" && labels[0]!.note === "arnative themes only (all themes: /settings → Theme)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
-	assert(MENU_DESC === "Themes, headers, footers, animations, auto-compact, providers, usage", `the menu description is the pinned string, got ${MENU_DESC}`);
+	assert(MENU_DESC === "Themes, headers, footers, animations, auto-compact, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 8, "eight settings screens");
+	assert(MENUS.length === 9, "nine settings screens");
 	{
 		const values = MENUS.map((m) => m.value);
 		assert(values.indexOf("heal") === values.indexOf("compact") + 1, "Model heal row sits right after Auto-compact");
@@ -584,7 +607,7 @@ if (isMain(import.meta.url)) {
 		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
 		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
 	}
-	for (const label of ["Themes", "Headers", "Footers", "Animations", "Auto-compact", "Providers", "Usage"]) {
+	for (const label of ["Themes", "Headers", "Footers", "Animations", "Auto-compact", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
@@ -615,11 +638,22 @@ if (isMain(import.meta.url)) {
 		assert([...registered.keys()].join(",") === "arnative,providers", "two commands: /arnative and /providers");
 		assert(typeof registered.get("providers")!.handler === "function", "/providers has a handler");
 		assert(MENUS.some((m) => m.value === "providers"), "/providers routes to a menu row that exists");
+		assert(
+			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, animations, auto-compact, model heal, providers, usage, budget",
+			"the /arnative command description names every screen: " + registered.get("arnative")!.description,
+		);
 	}
 	// Usage is reachable from /arnative even though it is a dashboard, not a setting.
 	assert(MENUS.some((m) => m.value === "usage"), "usage menu registered");
 	assert(arnativeCompletions("us")![0]!.value === "usage", "usage menu has completions");
 	assert(typeof MENUS.find((m) => m.value === "usage")!.open === "function", "the usage row opens the dashboard");
+	// The Budget row: warn-only caps, enforce on blocks the next turn.
+	assert(MENUS.some((m) => m.value === "budget" && typeof m.open === "function"), "budget menu registered");
+	assert(arnativeCompletions("b")![0]!.value === "budget", "budget menu has completions");
+	assert(
+		rowText(labels[labels.length - 1]!) === "Budget · warn-only spend caps on today / 30d; enforce on blocks the next turn",
+		"the budget row text is pinned: " + rowText(labels[labels.length - 1]!),
+	);
 
 	// The /arnative picker lists the package's family only; everything else (system, dark,
 	// light, a theme of the user's own) stays in /settings → Theme.
@@ -701,8 +735,8 @@ if (isMain(import.meta.url)) {
 		cancel: () => { menuCancelled = true; },
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
-	// 80 columns: the description names all seven screens (a tripwire — a screen added
-	// to MENUS must be added to the copy too), and that one-liner no longer fits 60.
+	// 80 columns: the description names the screens (a tripwire — a screen added to MENUS must
+	// be added to the copy too), and that one-liner no longer fits 60.
 	const menuLines = mainPicker.render(80);
 	assert(menuLines.some((l) => l.includes(MENU_TITLE)), "the main menu renders its title");
 	assert(menuLines.some((l) => l.includes("[Esc] Close") && !l.includes("←")), "the root menu legend renders without a back key");
@@ -793,12 +827,13 @@ if (isMain(import.meta.url)) {
 
 	// Footers reuses the same picker too.
 	assert(FOOTER_PRESETS[0] === "Pi (system)", "built-in footer preset is listed first");
-	const footerPicker = new ListPicker(fakeTheme, nameRows(FOOTER_PRESETS), "Pi (system)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, FOOTERS_PICKER_TEXT);
+	const footerPicker = new ListPicker(fakeTheme, nameRows(FOOTER_PRESETS), "Pi (system)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, footersPickerText());
 	const footerLines = footerPicker.render(50);
 	assert(footerLines.some((l) => l.includes(screenTitle("Footers"))), "footers picker title");
 	assert(footerLines.some((l) => l.includes("→ Pi (system)")), "footers picker cursors the active preset");
 	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
 	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
+	assert(/\[c\] Cost (on|off)/.test(footersPickerText().legend), "footers legend advertises the cost switch and its live state");
 
 	// Animations picker: "Pi (system)" carries a note AND renders "(system)" in dim
 	const animPicker = new ListPicker(

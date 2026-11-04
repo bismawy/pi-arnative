@@ -17,8 +17,16 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
-import { formatTokens } from "../lib/usage-store.ts";
-import { FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../lib/usage-store.ts";
+import {
+	FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY,
+	FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY,
+	loadChoice,
+	resetPresetCache,
+	saveChoice,
+} from "../lib/preset-store.ts";
+import { formatCost } from "./usage.ts";
+import { budgetLevelNow } from "./budget.ts";
 import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../lib/spinner.ts";
 
@@ -48,6 +56,22 @@ export function minimalExpanded(): { left: boolean; right: boolean } {
 }
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
+const FOOTER_COST_KEY = Symbol.for("pi-arnative.footerCost");
+
+/** Is the session cost cell on? Stored as `"on"`/`"off"` so an absent key reads as off
+ *  through the same allow-list path every other choice uses. */
+export function activeFooterCost(): boolean {
+	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_COST_KEY] ?? loadChoice(FOOTER_COST_CONFIG_KEY, ["on", "off"] as const);
+	return stored === "on";
+}
+
+/** Flip the cost cell, persist it, and repaint the footer at once — the choice is a command
+ *  the user asked for, so it is not part of the picker's preview/revert dance. */
+export function setFooterCost(on: boolean): void {
+	(globalThis as Record<symbol, unknown>)[FOOTER_COST_KEY] = on ? "on" : "off";
+	saveChoice(FOOTER_COST_CONFIG_KEY, on ? "on" : "off");
+	poke();
+}
 
 export function activeFooterPreset(): FooterPreset {
 	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] ?? loadChoice(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS);
@@ -601,27 +625,163 @@ function parseOptimizer(raw: string | undefined): string | null {
 
 // Pi's own per-message usage: shown when pi-cache-optimizer has no adapter for the
 // provider (a custom one like mytool.ts publishes no pi-cache-stats status).
+// The denominator (`input + cacheRead`) includes tool-result (child) tokens, because the ↑
+// cell above is total spend — the hit rate is measured against the same total, so do not
+// "fix" the denominator back to assistant messages only.
 let usageTotals = { inp: 0, read: 0 };
 export function piCacheHit(): string | null {
 	const total = usageTotals.inp + usageTotals.read;
 	return total > 0 ? "pi " + ((usageTotals.read / total) * 100).toFixed(1) + "%" : null;
 }
 
+// The cache cell's COLOUR comes from a recent window, not the session-wide rate above: the
+// last CACHE_WINDOW_MSGS assistant messages, with the session's first two always skipped
+// (turn 1 is a cold cache, so colouring it would cry wolf on every session). The `pi …%`
+// text stays session-wide; only the colour is windowed.
+export const CACHE_WINDOW_MSGS = 10;
+/** Windowed (input, cacheRead) sums of the last scan — read by the render for the colour. */
+let usageWindow = { inp: 0, read: 0 };
+
+export type CacheHitBand = "soft" | "warning" | "error";
+/** Colour band of a windowed cache-hit rate: ≥70% keeps the current soft tier, 40–70% is
+ *  amber (the theme's `warning` slot), below 40% is red (`error`). No rate yet (fewer than
+ *  3 assistant messages, so an empty window) stays soft. */
+export function cacheHitBand(winInp: number, winRead: number): CacheHitBand {
+	const total = winInp + winRead;
+	if (total <= 0) return "soft";
+	const rate = winRead / total;
+	if (rate >= 0.7) return "soft";
+	if (rate >= 0.4) return "warning";
+	return "error";
+}
+
 let usageScanAt = 0;
 let usageScanLen = -1;
-let usageScanNums = { inp: 0, out: 0, read: 0 };
-// Usage of the branch's last entry at scan time: a stream tick mutates that message
-// in place (branch length unchanged), so the delta is applied on top of the cached
-// sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
-let usageScanLast = { inp: 0, out: 0, read: 0 };
+interface UsageTotals {
+	inp: number;
+	out: number;
+	read: number;
+	/** Sum of `cost.total` over the messages the provider billed (`totalFromProvider`). */
+	costBilled: number;
+	/** Everything else: catalog totals, plus a price-table reconstruction for messages that
+	 *  carried no cost at all. Never blended into `costBilled`. */
+	costEstimated: number;
+	/** Only set on the branch-last snapshot (`lastUsageOf`): that entry is an assistant message. */
+	assistant?: boolean;
+}
 
-const lastUsageOf = (branch: readonly unknown[]): { inp: number; out: number; read: number } => {
-	const last = branch[branch.length - 1] as
-		| { type?: string; message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number } } }
-		| undefined;
-	const u = last?.type === "message" && last.message?.role === "assistant" ? last.message.usage : undefined;
-	return u ? { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0 } : { inp: 0, out: 0, read: 0 };
+let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
+// Usage of the branch's last entry at scan time (assistant or tool result): a stream tick
+// mutates that entry in place (branch length unchanged), so the delta is applied on top of
+// the cached sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
+let usageScanLast: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
+// Windowed sums at scan time, plus the window contribution of the branch's last entry
+// (`null` when that entry is not an assistant message inside the window): the in-place
+// delta of a stream tick lands in the window exactly when the last entry is one.
+let usageScanWin = { inp: 0, read: 0 };
+let usageScanWinLast: { inp: number; read: number } | null = null;
+
+type MessageUsage = {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	cost?: { total?: number; totalFromProvider?: boolean };
+	/** Only set by a tool that names what produced its own usage; absent on the main LLM calls. */
+	provider?: string;
+	model?: string;
 };
+
+/** True when a usage object carries any countable field: a tool result without usage (or with
+ *  an all-zero one) adds nothing to the sums. */
+const hasUsage = (u: MessageUsage | undefined): u is MessageUsage =>
+	!!u && !!((u.input || 0) || (u.output || 0) || (u.cacheRead || 0) || (u.cacheWrite || 0) || (u.cost?.total || 0));
+
+/** Attribution of one branch message's usage: a tool result's usage names no provider/model,
+ *  so it is attributed to the tool itself (`tool` · toolName), never to the parent's model. */
+/** A tool result names no provider/model: it is attributed to the tool itself, never to the
+ *  parent's model. pi-subagents does not set `totalFromProvider` on that usage, so child spend
+ *  always lands in the estimated part of the cell (`~`) even when the children were billed. */
+const attributionOf = (
+	m: { role: string; provider?: string; model?: string; toolName?: string },
+	u: MessageUsage,
+): { provider: string | undefined; model: string | undefined } =>
+	m.role === "toolResult"
+		? { provider: u.provider ?? TOOL_PROVIDER, model: u.model ?? m.toolName ?? TOOL_PROVIDER }
+		: { provider: m.provider, model: m.model };
+
+/** Billed vs estimated split of one message's usage: a provider-billed total goes to
+ *  `costBilled`, a catalog total (pi's own estimate) to `costEstimated`, and a message that
+ *  carried no cost at all is recomputed from the price table, cache writes included. */
+const costSplitOf = (
+	u: MessageUsage,
+	provider: string | undefined,
+	model: string | undefined,
+	table: PriceTable,
+): { costBilled: number; costEstimated: number } => {
+	const total = u.cost?.total || 0;
+	if (u.cost?.totalFromProvider === true) return { costBilled: total, costEstimated: 0 };
+	if (total > 0) return { costBilled: 0, costEstimated: total };
+	const est = provider && model ? estimateCost(u.input || 0, u.output || 0, u.cacheRead || 0, u.cacheWrite || 0, model, provider, table) : null;
+	return { costBilled: 0, costEstimated: est ?? 0 };
+};
+
+const lastUsageOf = (branch: readonly unknown[], table: PriceTable): UsageTotals => {
+	const zeros: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
+	const last = branch[branch.length - 1] as
+		| {
+				type?: string;
+				message?: { role?: string; provider?: string; model?: string; toolName?: string; usage?: MessageUsage };
+		  }
+		| undefined;
+	const m = last?.type === "message" ? last.message : undefined;
+	const role = m?.role;
+	const assistant = role === "assistant";
+	const u = role === "assistant" || role === "toolResult" ? m!.usage : undefined;
+	if (!hasUsage(u)) {
+		zeros.assistant = assistant;
+		return zeros;
+	}
+	const { provider, model } = attributionOf(m!, u);
+	const { costBilled, costEstimated } = costSplitOf(u, provider, model, table);
+	return { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, costBilled, costEstimated, assistant };
+};
+
+/** No burn rate below five minutes of active time: dividing a two-minute clock prints nonsense. */
+export const RATE_MIN_ACTIVE_MS = 5 * 60_000;
+/** Terminals narrower than this drop the rate — the cost alone still fits. */
+export const RATE_MIN_WIDTH = 80;
+
+/** The session cost cell, with the burn rate appended to it (one cell, not two): `$0.42 · $1.80/h`.
+ *  Billed and estimated never blend: `$0.42` when only the provider billed, `~$0.42` when only
+ *  an estimate exists, `$0.30 + ~$0.12` when the branch has both, and no cell at all when there
+ *  is no cost — the same promise `/usage` makes. The rate is cost per ACTIVE hour — the clock
+ *  counts active time (idle pauses excluded), not wall-clock — so it is labelled `$/h`; it
+ *  carries the `~` whenever estimated cost feeds it, like the estimated part of the cell, and
+ *  is hidden below RATE_MIN_ACTIVE_MS of active time and below RATE_MIN_WIDTH columns.
+ *  `bandPaint` paints the whole cell (icon and text) when a budget cap is near or over —
+ *  amber at `warn`, red at `over` (see `budgetLevelNow`); without it the icon keeps `acc` and
+ *  the text `soft`. */
+export function costCell(
+	costBilled: number,
+	costEstimated: number,
+	acc: (t: string) => string,
+	soft: (t: string) => string,
+	width: number = RATE_MIN_WIDTH,
+	bandPaint?: (t: string) => string,
+): string {
+	if (!(costBilled > 0) && !(costEstimated > 0)) return "";
+	const parts: string[] = [];
+	if (costBilled > 0) parts.push(formatCost(costBilled));
+	if (costEstimated > 0) parts.push(`~${formatCost(costEstimated)}`);
+	let text = parts.join(" + ");
+	const activeMs = clock.total();
+	if (activeMs >= RATE_MIN_ACTIVE_MS && width >= RATE_MIN_WIDTH) {
+		const rate = (costBilled + costEstimated) / (activeMs / 3_600_000);
+		text += ` · ${costEstimated > 0 ? "~" : ""}${formatCost(rate)}/h`;
+	}
+	return `${(bandPaint ?? acc)("\uf155")} ${(bandPaint ?? soft)(text)}`;
+}
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
 // without this every frame rescans the whole branch (O(N) per frame).
@@ -629,37 +789,78 @@ export function getUsage(
 	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	acc: (t: string) => string,
 	soft: (t: string) => string,
+	/** Off by default: the cost cell is opt-in (`/arnative` → Footers → `[c]`). */
+	showCost: boolean = activeFooterCost(),
+	/** Terminal width: the burn rate is dropped below RATE_MIN_WIDTH columns. */
+	width: number = RATE_MIN_WIDTH,
+	/** Budget band painter for the cost cell (amber at `warn`, red at `over`); absent keeps acc/soft. */
+	bandPaint?: (t: string) => string,
 ): string {
 	const branch = ctx.sessionManager.getBranch();
-	const last = lastUsageOf(branch);
+	// Memoized on models.json's stat, so this is one statSync per frame, not a read.
+	const priceTable = loadPriceTable();
+	const last = lastUsageOf(branch, priceTable);
 	let inp = 0;
 	let out = 0;
 	let read = 0;
+	let costBilled = 0;
+	let costEstimated = 0;
+	let winInp = 0;
+	let winRead = 0;
 	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
 		// Cached sums + the streaming delta of the last message (mutated in place).
 		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
 		out = usageScanNums.out + last.out - usageScanLast.out;
 		read = usageScanNums.read + last.read - usageScanLast.read;
+		costBilled = usageScanNums.costBilled + last.costBilled - usageScanLast.costBilled;
+		costEstimated = usageScanNums.costEstimated + last.costEstimated - usageScanLast.costEstimated;
+		// The window covers assistant messages only, so the in-place delta of the last
+		// entry lands in it exactly when that entry is an assistant message in the window.
+		winInp = usageScanWin.inp + (usageScanWinLast ? last.inp - usageScanWinLast.inp : 0);
+		winRead = usageScanWin.read + (usageScanWinLast ? last.read - usageScanWinLast.read : 0);
 	} else {
+		// (input, cacheRead) of the trailing assistant messages, capped so the window below
+		// is the last CACHE_WINDOW_MSGS of them once the first two are skipped.
+		const assist: [number, number][] = [];
 		for (const e of branch) {
-			if (e && typeof e === "object" && "type" in e && e.type === "message") {
-				const m = (e as { message?: unknown }).message;
-				if (m && typeof m === "object" && "role" in m && m.role === "assistant" && "usage" in m) {
-					const u = (m as AssistantMessage).usage;
-					if (u) {
-						inp += u.input || 0;
-						out += u.output || 0;
-						read += u.cacheRead || 0;
-					}
-				}
+			if (!e || typeof e !== "object" || !("type" in e) || e.type !== "message") continue;
+			const m = (e as { message?: unknown }).message as
+				| { role?: string; provider?: string; model?: string; toolName?: string; usage?: MessageUsage }
+				| undefined;
+			// Assistant messages carry their own call's usage; a tool result carries the child
+			// (subagent / nested tool) spend — pi puts that nowhere else, so summing both roles
+			// counts every token once, never twice.
+			if (!m || (m.role !== "assistant" && m.role !== "toolResult")) continue;
+			const u = m.usage;
+			if (m.role === "assistant") {
+				assist.push([u?.input || 0, u?.cacheRead || 0]);
+				if (assist.length > CACHE_WINDOW_MSGS + 2) assist.shift();
 			}
+			if (!hasUsage(u)) continue;
+			inp += u.input || 0;
+			out += u.output || 0;
+			read += u.cacheRead || 0;
+			const { provider, model } = attributionOf(m, u);
+			const split = costSplitOf(u, provider, model, priceTable);
+			costBilled += split.costBilled;
+			costEstimated += split.costEstimated;
 		}
-		usageScanNums = { inp, out, read };
+		usageScanNums = { inp, out, read, costBilled, costEstimated };
 		usageScanLast = last;
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
+		// Windowed cache rate, computed in this same pass: the last CACHE_WINDOW_MSGS
+		// assistant messages, the session's first two skipped (turn 1 is always cold).
+		const win = assist.slice(Math.max(2, assist.length - CACHE_WINDOW_MSGS));
+		for (const [wi, wr] of win) {
+			winInp += wi;
+			winRead += wr;
+		}
+		usageScanWin = { inp: winInp, read: winRead };
+		usageScanWinLast = last.assistant === true && assist.length > 2 ? { inp: last.inp, read: last.read } : null;
 	}
 	usageTotals = { inp, read };
+	usageWindow = { inp: winInp, read: winRead };
 	const parts: string[] = [];
 	if (inp > 0) parts.push(`${acc("↑")}${soft(formatTokens(inp))}`);
 	if (out > 0) parts.push(`${acc("↓")}${soft(formatTokens(out))}`);
@@ -667,6 +868,10 @@ export function getUsage(
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
+	}
+	if (showCost) {
+		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
+		if (cell) parts.push(cell);
 	}
 	return parts.join(" ");
 }
@@ -1027,13 +1232,30 @@ export default function (pi: ExtensionAPI) {
 
 							let usageStr = "";
 							try {
-								usageStr = getUsage(ctx, acc, secondarySoft);
+								// The cost cell's colour follows the budget band — amber at ≥80% of a
+								// cap, red at ≥100% — read from the memoized usage summary, so the
+								// render path scans at most once per 5s memo expiry, never per frame.
+								// Nothing is read at all while the cell is off.
+								const band = activeFooterCost() ? budgetLevelNow() : "ok";
+								const bandPaint = band === "warn" ? colorOr("warning", acc) : band === "over" ? colorOr("error", acc) : undefined;
+								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width, bandPaint);
 							} catch {
 								// fallback
 							}
 							const opt = parseOptimizer(rawCache) ?? piCacheHit();
 							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${secondarySoft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${secondarySoft(opt)}` : "", usageStr].filter(Boolean);
+							// The cache cell's colour follows the recent window (the last 10 assistant
+							// messages, the first two skipped): soft ≥70%, amber 40–70% (`warning`
+							// slot, accent when the theme has none), red below 40% (`error`). A passive
+							// colour only — never a notify. The `pi …%` text itself stays as is.
+							// Only pi's own number may be coloured by pi's window: a cache-stats plugin
+							// publishes its own rate (often per request, not per token), and painting it
+							// with our band would contradict the number printed next to it.
+							const fromPi = !parseOptimizer(rawCache);
+							const band = fromPi ? cacheHitBand(usageWindow.inp, usageWindow.read) : null;
+							const bandPaint = band === "warning" ? colorOr("warning", acc) : band === "error" ? colorOr("error", acc) : null;
+							const cacheCell = opt ? `${(bandPaint ?? acc)("\udb80\udf5b")} ${(bandPaint ?? secondarySoft)(opt)}` : "";
+							const metricCells = [speedStr, cacheCell, usageStr].filter(Boolean);
 
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
 							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
@@ -1371,6 +1593,145 @@ if (isMain(import.meta.url)) {
 	// No pi-cache-stats status (provider without an optimizer adapter): the cache cell
 	// falls back to Pi's own usage, cacheRead / (input + cacheRead) = 10 / 1110.
 	assert(piCacheHit() === "pi 0.9%", "cache fallback reads Pi's built-in usage: " + piCacheHit());
+	// Cost cell: opt-in, and the branch scan splits billed from estimated cost.
+	assert(costCell(0, 0, id, id) === "", "no cost at all: no cell");
+	assert(costCell(0.42, 0, id, id).endsWith("$0.42") && !costCell(0.42, 0, id, id).includes("~"), "billed only: $0.42 without ~");
+	assert(costCell(0, 0.42, id, id).includes("~$0.42") && !costCell(0, 0.42, id, id).includes("+"), "estimated only: ~$0.42");
+	assert(costCell(0.3, 0.12, id, id).includes("$0.30 + ~$0.12"), "both: $0.30 + ~$0.12, never blended");
+	// The budget band paints the cost cell — amber at `warn`, red at `over`; no band keeps acc/soft.
+	const warnPaint = (t: string) => `<warn>${t}</warn>`;
+	const overPaint = (t: string) => `<error>${t}</error>`;
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH, warnPaint) === `<warn>\uf155</warn> <warn>$0.42</warn>`, "the warn band paints icon and text: " + costCell(0.42, 0, id, id, RATE_MIN_WIDTH, warnPaint));
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH, overPaint) === `<error>\uf155</error> <error>$0.42</error>`, "the over band paints icon and text: " + costCell(0.42, 0, id, id, RATE_MIN_WIDTH, overPaint));
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH) === "\uf155 $0.42", "no band: acc icon, soft text, as before");
+
+	// Self-check: the burn rate appended to the cost cell — cost / ACTIVE hours of the clock
+	// (idle pauses excluded, not wall-clock), hidden below 5 active minutes, when the cost
+	// is 0, and below 80 columns. Freeze the clock's live part so total() is exactly `active`.
+	const clockBackup = { active: clock.active, runStarted: clock.runStarted, lastSeen: clock.lastSeen };
+	const freezeClock = (activeMs: number) => {
+		clock.active = activeMs;
+		clock.runStarted = Date.now();
+		clock.lastSeen = clock.runStarted - clock.pauseMs - 1;
+	};
+	freezeClock(14 * 60_000); // $0.42 over 14 active minutes = $1.80/h
+	assert(costCell(0.42, 0, id, id).includes("$0.42 · $1.80/h"), "the rate is cost / active hours: $0.42 over 14 active minutes is $1.80/h: " + costCell(0.42, 0, id, id));
+	assert(!costCell(0.42, 0, id, id).includes("~"), "a billed-only rate carries no ~");
+	assert(costCell(0, 0.42, id, id).includes("~$1.80/h"), "an estimate-based rate is prefixed ~, like the estimated part of the cell");
+	freezeClock(RATE_MIN_ACTIVE_MS - 1);
+	assert(!costCell(0.42, 0, id, id).includes("/h"), "no rate below 5 minutes of active time (a two-minute clock would print nonsense)");
+	freezeClock(RATE_MIN_ACTIVE_MS);
+	assert(costCell(0.42, 0, id, id).includes("/h"), "the rate appears at exactly 5 active minutes");
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH - 1).endsWith("$0.42"), "below 80 columns the rate is dropped, the cost stays");
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH).includes("/h"), "at 80 columns the rate is kept");
+	assert(costCell(0, 0, id, id) === "", "zero cost: no cell at all, so no rate either");
+	clock.active = clockBackup.active;
+	clock.runStarted = clockBackup.runStarted;
+	clock.lastSeen = clockBackup.lastSeen;
+
+	// Self-check: the cache cell's colour bands (the `pi …%` text itself stays session-wide).
+	assert(cacheHitBand(300, 700) === "soft" && cacheHitBand(200, 800) === "soft", "a windowed rate ≥70% keeps the soft tier");
+	assert(cacheHitBand(600, 400) === "warning" && cacheHitBand(550, 450) === "warning", "40–70% is the amber (warning) band");
+	assert(cacheHitBand(700, 300) === "error" && cacheHitBand(601, 399) === "error", "below 40% is the red (error) band");
+	assert(cacheHitBand(0, 0) === "soft", "an empty window (fewer than 3 assistant messages) stays soft");
+	// The windowed rate itself, through the scan pass: the first two assistant messages are
+	// ignored, the window is capped at the last CACHE_WINDOW_MSGS, and a stream tick moves
+	// it through the in-place delta without a rescan.
+	const asstMsg = (inp: number, read: number) => ({ type: "message", message: { role: "assistant", usage: { input: inp, output: 5, cacheRead: read } } });
+	const winBranch = [asstMsg(1000, 0), asstMsg(1000, 0), asstMsg(1000, 1000), asstMsg(1000, 1000)];
+	const winCtx = { sessionManager: { getBranch: () => winBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	usageScanAt = 0;
+	usageScanLen = -1;
+	getUsage(winCtx, id, id, false);
+	assert(usageWindow.inp === 2000 && usageWindow.read === 2000, "the windowed rate ignores the first two assistant messages: " + JSON.stringify(usageWindow));
+	assert(piCacheHit() === "pi 33.3%", "the pi …% text stays session-wide while the colour is windowed: " + piCacheHit());
+	const scanAtWin = usageScanAt;
+	winBranch[3] = asstMsg(1000, 0); // the last message mutates in place (stream tick)
+	getUsage(winCtx, id, id, false);
+	assert(usageWindow.inp === 2000 && usageWindow.read === 1000, "a stream tick moves the window through the delta: " + JSON.stringify(usageWindow));
+	assert(usageScanAt === scanAtWin, "the windowed delta took the cached path, not a rescan");
+	assert(cacheHitBand(usageWindow.inp, usageWindow.read) === "error", "a collapsed recent window is red even though the session rate is still 33.3%");
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const capBranch = [asstMsg(1000, 0), asstMsg(1000, 0), asstMsg(1000, 0), ...Array.from({ length: CACHE_WINDOW_MSGS }, () => asstMsg(600, 400))];
+	const capCtx = { sessionManager: { getBranch: () => capBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	getUsage(capCtx, id, id, false);
+	assert(usageWindow.inp === 6_000 && usageWindow.read === 4_000, "the window is capped at the last " + CACHE_WINDOW_MSGS + " assistant messages: " + JSON.stringify(usageWindow));
+	assert(cacheHitBand(usageWindow.inp, usageWindow.read) === "warning", "a 40% windowed rate is the amber band");
+	const costBranch: Array<{
+		type: string;
+		message: { role: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+	}> = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 0, cost: { total: 0.42, totalFromProvider: true } } } }];
+	const costCtx = { sessionManager: { getBranch: () => costBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	assert(!getUsage(costCtx, id, id, false).includes("$0.42"), "cost cell is off unless the switch is on");
+	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's billed cost when on");
+	assert(getUsage(costCtx, id, id, true, RATE_MIN_WIDTH, warnPaint).includes("<warn>$0.42</warn>"), "the warn band reaches the cost cell through getUsage");
+	assert(getUsage(costCtx, id, id, true, RATE_MIN_WIDTH, overPaint).includes("<error>$0.42</error>"), "the over band reaches the cost cell through getUsage");
+
+	// Child spend from a tool result: one assistant message + one tool result carrying usage —
+	// the sums are the sum of both, once each — and a tool result mutated in place (a finished
+	// child call updates its usage, branch length unchanged) still applies the delta on the
+	// cached sums, no rescan.
+	const childBranch: Array<{
+		type: string;
+		message: { role: string; toolName?: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+	}> = [
+		{ type: "message", message: { role: "assistant", usage: { input: 100, output: 50, cacheRead: 10 } } },
+		{
+			type: "message",
+			message: { role: "toolResult", toolName: "subagent", usage: { input: 400, output: 60, cacheRead: 20, cost: { total: 0.05, totalFromProvider: true } } },
+		},
+	];
+	const childCtx = { sessionManager: { getBranch: () => childBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const child1 = getUsage(childCtx, id, id, true);
+	assert(child1.includes("↑500") && child1.includes("↓110"), "a tool result's usage is summed with the assistant message's, once each: " + child1);
+	assert(child1.includes("$0.05"), "the tool result's billed cost is summed too: " + child1);
+	childBranch[1]!.message.usage = { input: 700, output: 60, cacheRead: 20, cost: { total: 0.05, totalFromProvider: true } }; // child finished, same branch length
+	const scanAtBefore = usageScanAt;
+	const child2 = getUsage(childCtx, id, id, true);
+	assert(child2.includes("↑800") && !child2.includes("↑500"), "a tool result mutated in place: the delta is applied without a rescan (length unchanged): " + child2);
+	assert(usageScanAt === scanAtBefore, "the tool-result tick took the in-place delta path, not a rescan");
+	childBranch[1]!.message.usage = undefined; // a tool result without usage adds nothing
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const child3 = getUsage(childCtx, id, id, true);
+	assert(child3.includes("↑100") && child3.includes("↓50") && !child3.includes("$0.05"), "a tool result without usage adds nothing: " + child3);
+
+	// Billed vs estimated in getUsage: a costless message is recomputed from models.json
+	// (cache writes included) and shown next to the billed total, not folded into it.
+	const costFixture = mkdtempSync(join(tmpdir(), "pi-arnative-cost-"));
+	const prevCostDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = costFixture;
+	writeFileSync(
+		join(costFixture, "models.json"),
+		JSON.stringify({ providers: { google: { models: [{ id: "m", cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 3 } }] } } }),
+	);
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const mixedBranch: Array<{
+		type: string;
+		message: { role: string; provider?: string; model?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+	}> = [
+		{ type: "message", message: { role: "assistant", provider: "google", model: "m", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.3, totalFromProvider: true } } } },
+		// No cost at all: 1M input at $1/M + 500k cache writes at $3/M = ~$2.50.
+		{ type: "message", message: { role: "assistant", provider: "google", model: "m", usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 500_000 } } },
+	];
+	const mixedCtx = { sessionManager: { getBranch: () => mixedBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	const mixedCell = getUsage(mixedCtx, id, id, true);
+	assert(mixedCell.includes("$0.30 + ~$2.50"), "a mixed branch shows the billed and estimated parts apart: " + mixedCell);
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const catalogBranch: typeof mixedBranch = [
+		{ type: "message", message: { role: "assistant", provider: "google", model: "m", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.12 } } } },
+	];
+	const catalogCtx = { sessionManager: { getBranch: () => catalogBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	const catalogCell = getUsage(catalogCtx, id, id, true);
+	assert(catalogCell.includes("~$0.12") && !catalogCell.includes("+"), "a catalog total (no totalFromProvider) is an estimate, marked ~: " + catalogCell);
+	if (prevCostDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = prevCostDir;
+	rmSync(costFixture, { recursive: true, force: true });
 
 	// regression: a refresh arriving while one is in flight is re-run with the newest
 	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger).
