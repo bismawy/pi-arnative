@@ -13,7 +13,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
 import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
 import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
-import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
+import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, resetUsageCache, TOOL_PROVIDER, type UsageSummary } from "../lib/usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -383,7 +383,10 @@ export class UsageModalComponent implements Component {
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			const paintName = isSelected ? acc : item.type === "provider" ? soft : plain;
+			// A synthetic `tool` row is child spend (a subagent / nested tool call), not a model
+			// the user picked: its name cell is the tool name only — no `tool ·` prefix, no new
+			// column — and it takes `dim` so it reads as derived rather than chosen.
+			const paintName = isSelected ? acc : item.type === "provider" ? soft : item.type === "model" && item.providerName === TOOL_PROVIDER ? dim : plain;
 			const paintVal = isSelected ? acc : dim;
 			const isPrice = item.type === "price";
 
@@ -1027,6 +1030,27 @@ if (isMain(import.meta.url)) {
 	// Only the two table rows — the detail line also carries the estimate.
 	const estRows = estLines.map(plain).filter((l) => /^\u2502 [\u25be\u25b8 ] (Alpha|deepseek)/.test(l));
 	assert(estRows.length === 2 && estRows.every((l) => l.includes("~$0.55")), `the estimate shows on the provider row and its model row, got ${JSON.stringify(estRows)}`);
+
+	// A synthetic `tool` row (child spend from a tool result): the provider row reads `Tool`, and
+	// its model row is labeled with the tool name only, painted dim — no `tool ·` prefix, no new column.
+	const toolModal = new UsageModalComponent(taggedTheme, () => {}, () => {}, "high");
+	(toolModal as unknown as { summary: unknown }).summary = {
+		providers: [
+			{
+				name: TOOL_PROVIDER, sessions: 1, msgs: 2, input: 400, output: 60, cacheRead: 20,
+				totalTokens: 460, cost: 0.05, estimatedCost: 0,
+				models: [{ name: "subagent", sessions: 1, msgs: 2, input: 400, output: 60, cacheRead: 20, totalTokens: 460, cost: 0.05, estimatedCost: 0 }],
+			},
+		],
+		projects: [],
+		totals: { sessions: 1, msgs: 2, input: 400, output: 60, cacheRead: 20, totalTokens: 460, cost: 0.05, reportedCost: 0.05, estimatedCost: 0 },
+	};
+	(toolModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set([TOOL_PROVIDER]);
+	const toolLines = toolModal.render(100);
+	const toolRow = toolLines.find((l) => plain(l).includes("subagent"))!;
+	assert(toolRow !== undefined && toolRow.includes(`<dim>subagent</>`), "a tool row's model cell is dim and labeled with the tool name only: " + toolRow);
+	assert(!plain(toolRow).includes("tool ·") && !plain(toolRow).includes("tool/"), "no `tool ·` prefix or extra column is invented for a tool row");
+	assert(toolLines.some((l) => plain(l).includes("Tool")), "the child spend gets a Tool provider row");
 
 	// Cost must survive every width: a clipped `$5` is worse than a dropped column.
 	for (const w of [60, 64, 78, 82, 90, 120]) {

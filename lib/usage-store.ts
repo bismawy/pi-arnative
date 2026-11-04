@@ -4,7 +4,9 @@
  * - mtime+size keyed cache in ~/.pi/agent/arnative/usage-cache.json, read into
  *   memory once (parsing 4MB per header frame cost ~50ms and lagged long chats).
  * - No double counting: the active session is already in its own file, so it is
- *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
+ *   NOT re-added from sessionManager (that inflated the ↑↓ totals). Child spend
+ *   (subagent / nested tool calls) rides on the tool result only, never on an
+ *   assistant message, so summing both roles counts it once.
  * - Rollups also keep per-day buckets (UTC) and the session cwd, so /usage can answer
  *   "today" and "per project" from the cache without a full re-scan.
  */
@@ -178,7 +180,7 @@ export interface UsageSummary {
 		reportedCost: number;
 		/** Catalog totals plus cost reconstructed from `models.json` rates. Shown with a `~`, never folded into `cost`. */
 		estimatedCost: number;
-		/** Day-bucket windows, present only when the scan saw day buckets (a v7 cache). */
+		/** Day-bucket windows, present only when the scan saw day buckets (a v8 cache). */
 		today?: UsageDayWindow;
 		last7d?: UsageDayWindow;
 		last30d?: UsageDayWindow;
@@ -312,14 +314,21 @@ const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.
 /** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
  *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
 const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
-const CACHE_VERSION = 7; // v7: cacheWrite + the billed split in the rows (v6 day buckets + cwd, v5 compact rows, v4 full rollup)
+const CACHE_VERSION = 8; // v8: tool-result spend in the rollups (`t` marks it; v7: cacheWrite + the billed split in the rows, v6 day buckets + cwd, v5 compact rows, v4 full rollup)
 
-/** The v7 disk shape: one-char keys, model rows in `r`, day rows in `d` (keyed
+/** Synthetic provider for spend pi attaches to a tool result instead of an assistant message
+ *  (a subagent or a nested tool call): attributed to `tool` + the tool name, never to the
+ *  parent's provider/model. Shared with the /usage renderer, which paints these rows dim. */
+export const TOOL_PROVIDER = "tool";
+
+/** The v8 disk shape: one-char keys, model rows in `r`, day rows in `d` (keyed
  *  `YYYY-MM-DD\0provider\0model`), the session cwd in `w` — provider-level and per-day
  *  rollups are derived on load, so every number is stored once. Keys on disk are
  *  paths relative to the sessions dir (the absolute path dominated the old size).
  *  A row is `[msgs, input, output, cacheRead, cacheWrite, cost, billed]`; the 5-number
- *  rows of v5/v6 are decoded with cacheWrite 0 and the whole cost counted as billed. */
+ *  rows of v5/v6 are decoded with cacheWrite 0 and the whole cost counted as billed.
+ *  `t` marks an item written by v8, i.e. one whose rollups already include tool-result
+ *  spend — a v7 item has no `t` and is re-parsed once. */
 type DiskItem = {
 	m: number;
 	s: number;
@@ -327,6 +336,7 @@ type DiskItem = {
 	r: Record<string, [number, number, number, number, number, number, number]>;
 	d?: Record<string, [number, number, number, number, number, number, number]>;
 	w?: string;
+	t?: number;
 };
 
 /** Decode one disk row: a 7-number v7 row verbatim, a pre-v7 5-number row with cacheWrite 0
@@ -338,7 +348,7 @@ const rowOf = (a: unknown): [number, number, number, number, number, number, num
 		: [a[0]!, a[1]!, a[2]!, a[3]!, 0, a[4]!, a[4]!];
 };
 
-/** Decode one disk item (v7 compact, v6/v5 compact or v4 full) into the in-memory shape. */
+/** Decode one disk item (v8 compact, v7/v6/v5 compact or v4 full) into the in-memory shape. */
 function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	if (!raw || typeof raw !== "object") return null;
 	if ("rollup" in raw) {
@@ -350,13 +360,13 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 			if (typeof r.cacheWrite !== "number") r.cacheWrite = 0;
 			if (typeof r.billed !== "number") r.billed = r.cost;
 		}
-		// A v4 rollup has no day buckets: default them so the v7 code paths always see the field.
+		// A v4 rollup has no day buckets: default them so the v8 code paths always see the field.
 		return { ...v4, v: CACHE_VERSION, rollup: { days: {}, ...v4.rollup } };
 	}
 	const d = raw as Partial<DiskItem>;
 	if (typeof d.m !== "number" || typeof d.s !== "number" || !d.r) return null;
 	const rollup: FileRollup = { providers: {}, days: {} };
-	// v7 rows are 7 numbers; a shorter row means a pre-v7 entry, stamped below 7 so the scan
+	// v7+ rows are 7 numbers; a shorter row means a pre-v7 entry, stamped below 7 so the scan
 	// re-parses its file once and re-saves it with cache writes and the billed split.
 	const wide = Object.values(d.r).some((a) => Array.isArray(a) && a.length >= 7);
 	for (const [pm, a] of Object.entries(d.r)) {
@@ -389,14 +399,17 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	return {
 		mtimeMs: d.m,
 		size: d.s,
-		v: hasDays ? (wide ? CACHE_VERSION : 6) : 5,
+		// Only an item carrying `t` is v8: a v7 item (wide rows, day buckets, no `t`) is stamped 7
+		// so the scan re-parses its file once to pick up the tool-result spend it lacks.
+		v: d.t === CACHE_VERSION ? CACHE_VERSION : hasDays ? (wide ? 7 : 6) : 5,
 		cwd: typeof d.w === "string" ? d.w : undefined,
 		consumed: typeof d.c === "number" ? d.c : d.s,
 		rollup,
 	};
 }
 
-/** Encode an in-memory item as v7: model rows in `r`, day rows in `d`, the cwd in `w`. */
+/** Encode an in-memory item as v8: model rows in `r`, day rows in `d`, the cwd in `w`, and `t`
+ *  marking that the rollups include tool-result spend. */
 function encodeDiskItem(item: FileCacheItem): DiskItem {
 	const r: DiskItem["r"] = {};
 	const d: DiskItem["d"] = {};
@@ -406,7 +419,7 @@ function encodeDiskItem(item: FileCacheItem): DiskItem {
 	for (const [dk, roll] of Object.entries(item.rollup.days)) {
 		d[dk] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cacheWrite, roll.cost, roll.billed];
 	}
-	const out: DiskItem = { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r, d };
+	const out: DiskItem = { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r, d, t: CACHE_VERSION };
 	if (item.cwd !== undefined) out.w = item.cwd;
 	return out;
 }
@@ -494,15 +507,40 @@ function scanSessionFiles(dir: string): string[] {
 	return files;
 }
 
-/** Extract a usage entry from one line, or null when it is not an assistant message. */
+/** Extract a usage entry from one line, or null when the line carries none. An assistant
+ *  message carries its own call's usage; a tool result carries the usage of the tool
+ *  execution itself (a subagent or a nested call), which pi never puts in an assistant
+ *  message — so the two are summed, once each, never double counted. */
 function entryOfLine(line: string): UsageEntry | null {
 	// Loose prefilter (fast path only): exact key would break on JSON formatting changes
 	// and silently drop usage. The role is re-checked on the parsed object below.
 	if (!line || !line.includes('"role"')) return null;
 	try {
 		const m = JSON.parse(line)?.message;
-		if (m?.role !== "assistant") return null;
+		if (m?.role !== "assistant" && m?.role !== "toolResult") return null;
 		const u = m.usage || {};
+		if (m.role === "toolResult") {
+			const input = Number(u.input) || 0;
+			const output = Number(u.output) || 0;
+			const cacheRead = Number(u.cacheRead) || 0;
+			const cacheWrite = Number(u.cacheWrite) || 0;
+			const cost = Number(u.cost?.total) || 0;
+			// A tool result without any usage field adds nothing.
+			if (!(input || output || cacheRead || cacheWrite || cost)) return null;
+			return {
+				// A tool result's usage names no provider/model: attribute it to the tool itself
+				// (`tool` · toolName) unless the tool attached one — never to the parent's model.
+				provider: String(u.provider || TOOL_PROVIDER),
+				model: String(u.model || m.toolName || TOOL_PROVIDER),
+				input,
+				output,
+				cacheRead,
+				cacheWrite,
+				cost,
+				billed: u.cost?.totalFromProvider === true,
+				ts: Number(m.timestamp) || 0,
+			};
+		}
 		return {
 			provider: String(m.provider || "unknown"),
 			model: String(m.model || "unknown"),
@@ -908,7 +946,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		reportedCost: totalCost,
 		estimatedCost,
 	};
-	// The windows exist only when the scan saw day buckets (a cache that is all v7).
+	// The windows exist only when the scan saw day buckets (a cache that is all v8).
 	if (dayMap.size > 0) {
 		totals.today = windowOf(1);
 		totals.last7d = windowOf(7);
@@ -1013,11 +1051,11 @@ if (isMain(import.meta.url)) {
 	const disk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { r: Record<string, number[]>; d?: Record<string, number[]>; w?: string }>;
 	const relA = join("proj-a", "a.jsonl");
 	const msgsOf = (rows: Record<string, number[]>) => Object.values(rows).reduce((n, a) => n + a[0]!, 0);
-	assert(disk[relA]!.w === "/repo/alpha", "v7 stores the session cwd in w");
+	assert(disk[relA]!.w === "/repo/alpha", "v8 stores the session cwd in w");
 	assert(disk[relA]!.d !== undefined && msgsOf(disk[relA]!.d!) === msgsOf(disk[relA]!.r), "day buckets sum to the file total on disk");
 	const rowA = disk[relA]!.r["google\u0000m1"]!;
-	assert(rowA.length === 7 && rowA[4] === 4, "v7 rows carry cacheWrite (two entries x 2)");
-	assert(Math.abs(rowA[6]! - 0.04) < 1e-9, "v7 rows carry the billed split of the cost");
+	assert(rowA.length === 7 && rowA[4] === 4, "v8 rows carry cacheWrite (two entries x 2)");
+	assert(Math.abs(rowA[6]! - 0.04) < 1e-9, "v8 rows carry the billed split of the cost");
 	assert(
 		Object.keys(disk[relA]!.d!).every((k) => k.startsWith(`${today}\u0000`) || k.startsWith(`${yesterday}\u0000`)) && disk[relA]!.d![`${today}\u0000google\u0000m1`] !== undefined,
 		"day keys are the UTC day + provider + model",
@@ -1034,8 +1072,8 @@ if (isMain(import.meta.url)) {
 	const grownDisk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { w?: string }>;
 	assert(grownDisk[relA]!.w === "/repo/alpha", "the cwd survives a tail fold on disk too");
 
-	// A pre-v7 (v5 compact, no `d`) cache item is re-parsed once from its file — not trusted —
-	// and re-saved as v7 with its days, cwd, cache writes and billed split, yielding the file's own totals.
+	// A pre-v8 (v5 compact, no `d`) cache item is re-parsed once from its file — not trusted —
+	// and re-saved as v8 with its days, cwd, cache writes, billed split and tool-result spend.
 	const fileC = join(fixture, "sessions", "proj-b", "c.jsonl");
 	writeFileSync(fileC, asst("m2", 11, tsToday) + NL);
 	const cStat = statSync(fileC);
@@ -1048,7 +1086,7 @@ if (isMain(import.meta.url)) {
 	assert(reparsed.totals.msgs === 5 && reparsed.totals.input === 1168, "a v5 cache item is re-parsed from the file (the stale 99 is not counted)");
 	const afterDisk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { d?: Record<string, number[]>; w?: string }>;
 	const relC = join("proj-b", "c.jsonl");
-	assert(afterDisk[relC]!.d !== undefined && msgsOf(afterDisk[relC]!.d!) === 1, "the re-parsed item is re-saved as v7 with day buckets");
+	assert(afterDisk[relC]!.d !== undefined && msgsOf(afterDisk[relC]!.d!) === 1, "the re-parsed item is re-saved as v8 with day buckets");
 
 	// A v6 item (day buckets but 5-number rows) is also re-parsed once: its rows carry neither
 	// cacheWrite nor the billed split, so it is stamped 6 and not trusted.
@@ -1070,6 +1108,66 @@ if (isMain(import.meta.url)) {
 	resetUsageCache();
 	const reparsed6 = collectUsageSummary(true);
 	assert(reparsed6.totals.msgs === 6 && reparsed6.totals.input === 1181, "a v6 cache item is re-parsed from its file (the stale 99 is not counted)");
+
+	// Child spend rides on the tool result, not on any assistant message: one assistant message
+	// plus one tool result that carries usage must total the sum of both, once each, and a tool
+	// result without usage adds nothing. Its own fixture, so the totals above stay untouched.
+	assert(TOOL_PROVIDER === "tool", "child spend is attributed to the synthetic `tool` provider");
+	const toolFixture = mkdtempSync(join(tmpdir(), "arnative-tool-"));
+	process.env.PI_CODING_AGENT_DIR = toolFixture;
+	resetUsageCache();
+	mkdirSync(join(toolFixture, "sessions", "p"), { recursive: true });
+	const toolFile = join(toolFixture, "sessions", "p", "t.jsonl");
+	const toolResult = (toolName: string, usage?: object) =>
+		JSON.stringify({
+			message: { role: "toolResult", toolCallId: "c1", toolName, content: [], isError: false, timestamp: tsToday, ...(usage ? { usage } : {}) },
+		});
+	writeFileSync(
+		toolFile,
+		[
+			header("/repo/alpha"),
+			asst("m1", 100, tsToday),
+			toolResult("subagent", { input: 40, output: 6, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01, totalFromProvider: true } }),
+			toolResult("bash"), // no usage at all: adds nothing
+		].join(NL) + NL,
+	);
+	const child = collectUsageSummary(true);
+	assert(child.totals.msgs === 2, "an assistant message and a usage-carrying tool result count once each");
+	assert(child.totals.input === 140 && child.totals.output === 11 && child.totals.cacheRead === 3, "the child's tokens are summed with the parent's, once");
+	assert(Math.abs(child.totals.cost - 0.03) < 1e-9, "the child's cost is summed once");
+	const tool = child.providers.find((p) => p.name === TOOL_PROVIDER)!;
+	assert(tool !== undefined && tool.models.length === 1 && tool.models[0]!.name === "subagent", "a tool result is attributed to `tool` · toolName");
+	assert(tool.models[0]!.input === 40 && Math.abs(tool.models[0]!.cost - 0.01) < 1e-9, "the tool row carries the child's own numbers");
+	const parent = child.providers.find((p) => p.name === "google")!;
+	assert(parent !== undefined && parent.models.length === 1 && parent.models[0]!.name === "m1" && parent.input === 100, "the parent's row is not widened by the child's spend");
+	const toolDisk = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, { r: Record<string, number[]>; t?: number }>;
+	const toolRow = toolDisk[join("p", "t.jsonl")]!.r[`${TOOL_PROVIDER}\u0000subagent`]!;
+	assert(toolRow !== undefined && toolRow[0] === 1 && toolRow[1] === 40, "the child row is cached under `tool\0toolName`, once");
+	assert(toolDisk[join("p", "t.jsonl")]!.t === CACHE_VERSION, "a fresh item is saved as v8 (`t` marks tool-result spend)");
+
+	// A v7 item (7-number rows with day buckets, no `t`) is re-parsed once from its file — not
+	// trusted — and re-saved as v8, so the tool results it predates are picked up.
+	const tStat = statSync(toolFile);
+	writeFileSync(
+		join(toolFixture, "arnative", "usage-cache.json"),
+		JSON.stringify({
+			[join("p", "t.jsonl")]: {
+				m: tStat.mtimeMs,
+				s: tStat.size,
+				c: tStat.size,
+				r: { "google\u0000m1": [99, 999, 1, 1, 1, 9, 9] },
+				d: { [`${today}\u0000google\u0000m1`]: [99, 999, 1, 1, 1, 9, 9] },
+			},
+		}),
+	);
+	resetUsageCache();
+	const reparsed7 = collectUsageSummary(true);
+	assert(reparsed7.totals.msgs === 2 && reparsed7.totals.input === 140, "a v7 cache item is re-parsed from its file (the stale 99 is not counted)");
+	const after7 = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, { t?: number; r: Record<string, number[]> }>;
+	assert(after7[join("p", "t.jsonl")]!.t === CACHE_VERSION && after7[join("p", "t.jsonl")]!.r[`${TOOL_PROVIDER}\u0000subagent`] !== undefined, "the re-parsed item is re-saved as v8 with the tool row");
+	rmSync(toolFixture, { recursive: true, force: true });
+	process.env.PI_CODING_AGENT_DIR = fixture;
+	resetUsageCache();
 
 	// Price table: cacheWrite is priced like the other three, and an unchanged models.json is
 	// read once — two loadPriceTable() calls return the same memo object.

@@ -17,7 +17,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
-import { estimateCost, formatTokens, loadPriceTable, type PriceTable } from "../lib/usage-store.ts";
+import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../lib/usage-store.ts";
 import {
 	FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY,
 	FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY,
@@ -624,6 +624,9 @@ function parseOptimizer(raw: string | undefined): string | null {
 
 // Pi's own per-message usage: shown when pi-cache-optimizer has no adapter for the
 // provider (a custom one like mytool.ts publishes no pi-cache-stats status).
+// The denominator (`input + cacheRead`) includes tool-result (child) tokens, because the ↑
+// cell above is total spend — the hit rate is measured against the same total, so do not
+// "fix" the denominator back to assistant messages only.
 let usageTotals = { inp: 0, read: 0 };
 export function piCacheHit(): string | null {
 	const total = usageTotals.inp + usageTotals.read;
@@ -644,9 +647,9 @@ interface UsageTotals {
 }
 
 let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
-// Usage of the branch's last entry at scan time: a stream tick mutates that message
-// in place (branch length unchanged), so the delta is applied on top of the cached
-// sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
+// Usage of the branch's last entry at scan time (assistant or tool result): a stream tick
+// mutates that entry in place (branch length unchanged), so the delta is applied on top of
+// the cached sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
 let usageScanLast: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
 
 type MessageUsage = {
@@ -655,7 +658,25 @@ type MessageUsage = {
 	cacheRead?: number;
 	cacheWrite?: number;
 	cost?: { total?: number; totalFromProvider?: boolean };
+	/** Only set by a tool that names what produced its own usage; absent on the main LLM calls. */
+	provider?: string;
+	model?: string;
 };
+
+/** True when a usage object carries any countable field: a tool result without usage (or with
+ *  an all-zero one) adds nothing to the sums. */
+const hasUsage = (u: MessageUsage | undefined): u is MessageUsage =>
+	!!u && !!((u.input || 0) || (u.output || 0) || (u.cacheRead || 0) || (u.cacheWrite || 0) || (u.cost?.total || 0));
+
+/** Attribution of one branch message's usage: a tool result's usage names no provider/model,
+ *  so it is attributed to the tool itself (`tool` · toolName), never to the parent's model. */
+const attributionOf = (
+	m: { role: string; provider?: string; model?: string; toolName?: string },
+	u: MessageUsage,
+): { provider: string | undefined; model: string | undefined } =>
+	m.role === "toolResult"
+		? { provider: u.provider ?? TOOL_PROVIDER, model: u.model ?? m.toolName ?? TOOL_PROVIDER }
+		: { provider: m.provider, model: m.model };
 
 /** Billed vs estimated split of one message's usage: a provider-billed total goes to
  *  `costBilled`, a catalog total (pi's own estimate) to `costEstimated`, and a message that
@@ -674,15 +695,18 @@ const costSplitOf = (
 };
 
 const lastUsageOf = (branch: readonly unknown[], table: PriceTable): UsageTotals => {
+	const zeros: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
 	const last = branch[branch.length - 1] as
 		| {
 				type?: string;
-				message?: { role?: string; provider?: string; model?: string; usage?: MessageUsage };
+				message?: { role?: string; provider?: string; model?: string; toolName?: string; usage?: MessageUsage };
 		  }
 		| undefined;
-	const u = last?.type === "message" && last.message?.role === "assistant" ? last.message.usage : undefined;
-	if (!u) return { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
-	const { costBilled, costEstimated } = costSplitOf(u, last.message?.provider, last.message?.model, table);
+	const m = last?.type === "message" ? last.message : undefined;
+	const u = m && (m.role === "assistant" || m.role === "toolResult") ? m.usage : undefined;
+	if (!hasUsage(u)) return zeros;
+	const { provider, model } = attributionOf(m!, u);
+	const { costBilled, costEstimated } = costSplitOf(u, provider, model, table);
 	return { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, costBilled, costEstimated };
 };
 
@@ -724,21 +748,23 @@ export function getUsage(
 		costEstimated = usageScanNums.costEstimated + last.costEstimated - usageScanLast.costEstimated;
 	} else {
 		for (const e of branch) {
-			if (e && typeof e === "object" && "type" in e && e.type === "message") {
-				const m = (e as { message?: unknown }).message;
-				if (m && typeof m === "object" && "role" in m && m.role === "assistant" && "usage" in m) {
-					const msg = m as AssistantMessage;
-					const u = msg.usage;
-					if (u) {
-						inp += u.input || 0;
-						out += u.output || 0;
-						read += u.cacheRead || 0;
-						const split = costSplitOf(u, msg.provider, msg.model, priceTable);
-						costBilled += split.costBilled;
-						costEstimated += split.costEstimated;
-					}
-				}
-			}
+			if (!e || typeof e !== "object" || !("type" in e) || e.type !== "message") continue;
+			const m = (e as { message?: unknown }).message as
+				| { role?: string; provider?: string; model?: string; toolName?: string; usage?: MessageUsage }
+				| undefined;
+			// Assistant messages carry their own call's usage; a tool result carries the child
+			// (subagent / nested tool) spend — pi puts that nowhere else, so summing both roles
+			// counts every token once, never twice.
+			if (!m || (m.role !== "assistant" && m.role !== "toolResult")) continue;
+			const u = m.usage;
+			if (!hasUsage(u)) continue;
+			inp += u.input || 0;
+			out += u.output || 0;
+			read += u.cacheRead || 0;
+			const { provider, model } = attributionOf(m, u);
+			const split = costSplitOf(u, provider, model, priceTable);
+			costBilled += split.costBilled;
+			costEstimated += split.costEstimated;
 		}
 		usageScanNums = { inp, out, read, costBilled, costEstimated };
 		usageScanLast = last;
@@ -1473,6 +1499,37 @@ if (isMain(import.meta.url)) {
 	const costCtx = { sessionManager: { getBranch: () => costBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
 	assert(!getUsage(costCtx, id, id, false).includes("$0.42"), "cost cell is off unless the switch is on");
 	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's billed cost when on");
+
+	// Child spend from a tool result: one assistant message + one tool result carrying usage —
+	// the sums are the sum of both, once each — and a tool result mutated in place (a finished
+	// child call updates its usage, branch length unchanged) still applies the delta on the
+	// cached sums, no rescan.
+	const childBranch: Array<{
+		type: string;
+		message: { role: string; toolName?: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+	}> = [
+		{ type: "message", message: { role: "assistant", usage: { input: 100, output: 50, cacheRead: 10 } } },
+		{
+			type: "message",
+			message: { role: "toolResult", toolName: "subagent", usage: { input: 400, output: 60, cacheRead: 20, cost: { total: 0.05, totalFromProvider: true } } },
+		},
+	];
+	const childCtx = { sessionManager: { getBranch: () => childBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const child1 = getUsage(childCtx, id, id, true);
+	assert(child1.includes("↑500") && child1.includes("↓110"), "a tool result's usage is summed with the assistant message's, once each: " + child1);
+	assert(child1.includes("$0.05"), "the tool result's billed cost is summed too: " + child1);
+	childBranch[1]!.message.usage = { input: 700, output: 60, cacheRead: 20, cost: { total: 0.05, totalFromProvider: true } }; // child finished, same branch length
+	const scanAtBefore = usageScanAt;
+	const child2 = getUsage(childCtx, id, id, true);
+	assert(child2.includes("↑800") && !child2.includes("↑500"), "a tool result mutated in place: the delta is applied without a rescan (length unchanged): " + child2);
+	assert(usageScanAt === scanAtBefore, "the tool-result tick took the in-place delta path, not a rescan");
+	childBranch[1]!.message.usage = undefined; // a tool result without usage adds nothing
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const child3 = getUsage(childCtx, id, id, true);
+	assert(child3.includes("↑100") && child3.includes("↓50") && !child3.includes("$0.05"), "a tool result without usage adds nothing: " + child3);
 
 	// Billed vs estimated in getUsage: a costless message is recomputed from models.json
 	// (cache writes included) and shown next to the billed total, not folded into it.
