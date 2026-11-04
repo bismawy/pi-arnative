@@ -633,6 +633,27 @@ export function piCacheHit(): string | null {
 	return total > 0 ? "pi " + ((usageTotals.read / total) * 100).toFixed(1) + "%" : null;
 }
 
+// The cache cell's COLOUR comes from a recent window, not the session-wide rate above: the
+// last CACHE_WINDOW_MSGS assistant messages, with the session's first two always skipped
+// (turn 1 is a cold cache, so colouring it would cry wolf on every session). The `pi …%`
+// text stays session-wide; only the colour is windowed.
+export const CACHE_WINDOW_MSGS = 10;
+/** Windowed (input, cacheRead) sums of the last scan — read by the render for the colour. */
+let usageWindow = { inp: 0, read: 0 };
+
+export type CacheHitBand = "soft" | "warning" | "error";
+/** Colour band of a windowed cache-hit rate: ≥70% keeps the current soft tier, 40–70% is
+ *  amber (the theme's `warning` slot), below 40% is red (`error`). No rate yet (fewer than
+ *  3 assistant messages, so an empty window) stays soft. */
+export function cacheHitBand(winInp: number, winRead: number): CacheHitBand {
+	const total = winInp + winRead;
+	if (total <= 0) return "soft";
+	const rate = winRead / total;
+	if (rate >= 0.7) return "soft";
+	if (rate >= 0.4) return "warning";
+	return "error";
+}
+
 let usageScanAt = 0;
 let usageScanLen = -1;
 interface UsageTotals {
@@ -644,6 +665,8 @@ interface UsageTotals {
 	/** Everything else: catalog totals, plus a price-table reconstruction for messages that
 	 *  carried no cost at all. Never blended into `costBilled`. */
 	costEstimated: number;
+	/** Only set on the branch-last snapshot (`lastUsageOf`): that entry is an assistant message. */
+	assistant?: boolean;
 }
 
 let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
@@ -651,6 +674,11 @@ let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costE
 // mutates that entry in place (branch length unchanged), so the delta is applied on top of
 // the cached sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
 let usageScanLast: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
+// Windowed sums at scan time, plus the window contribution of the branch's last entry
+// (`null` when that entry is not an assistant message inside the window): the in-place
+// delta of a stream tick lands in the window exactly when the last entry is one.
+let usageScanWin = { inp: 0, read: 0 };
+let usageScanWinLast: { inp: number; read: number } | null = null;
 
 type MessageUsage = {
 	input?: number;
@@ -703,22 +731,48 @@ const lastUsageOf = (branch: readonly unknown[], table: PriceTable): UsageTotals
 		  }
 		| undefined;
 	const m = last?.type === "message" ? last.message : undefined;
-	const u = m && (m.role === "assistant" || m.role === "toolResult") ? m.usage : undefined;
-	if (!hasUsage(u)) return zeros;
+	const role = m?.role;
+	const assistant = role === "assistant";
+	const u = role === "assistant" || role === "toolResult" ? m!.usage : undefined;
+	if (!hasUsage(u)) {
+		zeros.assistant = assistant;
+		return zeros;
+	}
 	const { provider, model } = attributionOf(m!, u);
 	const { costBilled, costEstimated } = costSplitOf(u, provider, model, table);
-	return { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, costBilled, costEstimated };
+	return { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, costBilled, costEstimated, assistant };
 };
 
-/** The session cost cell. Billed and estimated never blend: `$0.42` when only the provider
- *  billed, `~$0.42` when only an estimate exists, `$0.30 + ~$0.12` when the branch has both,
- *  and no cell at all when there is no cost — the same promise `/usage` makes. */
-export function costCell(costBilled: number, costEstimated: number, acc: (t: string) => string, soft: (t: string) => string): string {
+/** No burn rate below five minutes of active time: dividing a two-minute clock prints nonsense. */
+export const RATE_MIN_ACTIVE_MS = 5 * 60_000;
+/** Terminals narrower than this drop the rate — the cost alone still fits. */
+export const RATE_MIN_WIDTH = 80;
+
+/** The session cost cell, with the burn rate appended to it (one cell, not two): `$0.42 · $1.80/h`.
+ *  Billed and estimated never blend: `$0.42` when only the provider billed, `~$0.42` when only
+ *  an estimate exists, `$0.30 + ~$0.12` when the branch has both, and no cell at all when there
+ *  is no cost — the same promise `/usage` makes. The rate is cost per ACTIVE hour — the clock
+ *  counts active time (idle pauses excluded), not wall-clock — so it is labelled `$/h`; it
+ *  carries the `~` whenever estimated cost feeds it, like the estimated part of the cell, and
+ *  is hidden below RATE_MIN_ACTIVE_MS of active time and below RATE_MIN_WIDTH columns. */
+export function costCell(
+	costBilled: number,
+	costEstimated: number,
+	acc: (t: string) => string,
+	soft: (t: string) => string,
+	width: number = RATE_MIN_WIDTH,
+): string {
 	if (!(costBilled > 0) && !(costEstimated > 0)) return "";
 	const parts: string[] = [];
 	if (costBilled > 0) parts.push(formatCost(costBilled));
 	if (costEstimated > 0) parts.push(`~${formatCost(costEstimated)}`);
-	return `${acc("\uf155")} ${soft(parts.join(" + "))}`;
+	let text = parts.join(" + ");
+	const activeMs = clock.total();
+	if (activeMs >= RATE_MIN_ACTIVE_MS && width >= RATE_MIN_WIDTH) {
+		const rate = (costBilled + costEstimated) / (activeMs / 3_600_000);
+		text += ` · ${costEstimated > 0 ? "~" : ""}${formatCost(rate)}/h`;
+	}
+	return `${acc("\uf155")} ${soft(text)}`;
 }
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
@@ -729,6 +783,8 @@ export function getUsage(
 	soft: (t: string) => string,
 	/** Off by default: the cost cell is opt-in (`/arnative` → Footers → `[c]`). */
 	showCost: boolean = activeFooterCost(),
+	/** Terminal width: the burn rate is dropped below RATE_MIN_WIDTH columns. */
+	width: number = RATE_MIN_WIDTH,
 ): string {
 	const branch = ctx.sessionManager.getBranch();
 	// Memoized on models.json's stat, so this is one statSync per frame, not a read.
@@ -739,6 +795,8 @@ export function getUsage(
 	let read = 0;
 	let costBilled = 0;
 	let costEstimated = 0;
+	let winInp = 0;
+	let winRead = 0;
 	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
 		// Cached sums + the streaming delta of the last message (mutated in place).
 		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
@@ -746,7 +804,14 @@ export function getUsage(
 		read = usageScanNums.read + last.read - usageScanLast.read;
 		costBilled = usageScanNums.costBilled + last.costBilled - usageScanLast.costBilled;
 		costEstimated = usageScanNums.costEstimated + last.costEstimated - usageScanLast.costEstimated;
+		// The window covers assistant messages only, so the in-place delta of the last
+		// entry lands in it exactly when that entry is an assistant message in the window.
+		winInp = usageScanWin.inp + (usageScanWinLast ? last.inp - usageScanWinLast.inp : 0);
+		winRead = usageScanWin.read + (usageScanWinLast ? last.read - usageScanWinLast.read : 0);
 	} else {
+		// (input, cacheRead) of the trailing assistant messages, capped so the window below
+		// is the last CACHE_WINDOW_MSGS of them once the first two are skipped.
+		const assist: [number, number][] = [];
 		for (const e of branch) {
 			if (!e || typeof e !== "object" || !("type" in e) || e.type !== "message") continue;
 			const m = (e as { message?: unknown }).message as
@@ -757,6 +822,10 @@ export function getUsage(
 			// counts every token once, never twice.
 			if (!m || (m.role !== "assistant" && m.role !== "toolResult")) continue;
 			const u = m.usage;
+			if (m.role === "assistant") {
+				assist.push([u?.input || 0, u?.cacheRead || 0]);
+				if (assist.length > CACHE_WINDOW_MSGS + 2) assist.shift();
+			}
 			if (!hasUsage(u)) continue;
 			inp += u.input || 0;
 			out += u.output || 0;
@@ -770,8 +839,18 @@ export function getUsage(
 		usageScanLast = last;
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
+		// Windowed cache rate, computed in this same pass: the last CACHE_WINDOW_MSGS
+		// assistant messages, the session's first two skipped (turn 1 is always cold).
+		const win = assist.slice(Math.max(2, assist.length - CACHE_WINDOW_MSGS));
+		for (const [wi, wr] of win) {
+			winInp += wi;
+			winRead += wr;
+		}
+		usageScanWin = { inp: winInp, read: winRead };
+		usageScanWinLast = last.assistant === true && assist.length > 2 ? { inp: last.inp, read: last.read } : null;
 	}
 	usageTotals = { inp, read };
+	usageWindow = { inp: winInp, read: winRead };
 	const parts: string[] = [];
 	if (inp > 0) parts.push(`${acc("↑")}${soft(formatTokens(inp))}`);
 	if (out > 0) parts.push(`${acc("↓")}${soft(formatTokens(out))}`);
@@ -781,7 +860,7 @@ export function getUsage(
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	if (showCost) {
-		const cell = costCell(costBilled, costEstimated, acc, soft);
+		const cell = costCell(costBilled, costEstimated, acc, soft, width);
 		if (cell) parts.push(cell);
 	}
 	return parts.join(" ");
@@ -1143,13 +1222,20 @@ export default function (pi: ExtensionAPI) {
 
 							let usageStr = "";
 							try {
-								usageStr = getUsage(ctx, acc, secondarySoft);
+								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width);
 							} catch {
 								// fallback
 							}
 							const opt = parseOptimizer(rawCache) ?? piCacheHit();
 							const speedStr = latestSpeed !== null && latestSpeed > 0 ? `${acc("\udb81\udcc5")} ${secondarySoft(`${latestSpeed.toFixed(1)} tok/s`)}` : "";
-							const metricCells = [speedStr, opt ? `${acc("\udb80\udf5b")} ${secondarySoft(opt)}` : "", usageStr].filter(Boolean);
+							// The cache cell's colour follows the recent window (the last 10 assistant
+							// messages, the first two skipped): soft ≥70%, amber 40–70% (`warning`
+							// slot, accent when the theme has none), red below 40% (`error`). A passive
+							// colour only — never a notify. The `pi …%` text itself stays as is.
+							const band = cacheHitBand(usageWindow.inp, usageWindow.read);
+							const bandPaint = band === "warning" ? colorOr("warning", acc) : band === "error" ? colorOr("error", acc) : null;
+							const cacheCell = opt ? `${(bandPaint ?? acc)("\udb80\udf5b")} ${(bandPaint ?? secondarySoft)(opt)}` : "";
+							const metricCells = [speedStr, cacheCell, usageStr].filter(Boolean);
 
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
 							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
@@ -1492,6 +1578,60 @@ if (isMain(import.meta.url)) {
 	assert(costCell(0.42, 0, id, id).endsWith("$0.42") && !costCell(0.42, 0, id, id).includes("~"), "billed only: $0.42 without ~");
 	assert(costCell(0, 0.42, id, id).includes("~$0.42") && !costCell(0, 0.42, id, id).includes("+"), "estimated only: ~$0.42");
 	assert(costCell(0.3, 0.12, id, id).includes("$0.30 + ~$0.12"), "both: $0.30 + ~$0.12, never blended");
+
+	// Self-check: the burn rate appended to the cost cell — cost / ACTIVE hours of the clock
+	// (idle pauses excluded, not wall-clock), hidden below 5 active minutes, when the cost
+	// is 0, and below 80 columns. Freeze the clock's live part so total() is exactly `active`.
+	const clockBackup = { active: clock.active, runStarted: clock.runStarted, lastSeen: clock.lastSeen };
+	const freezeClock = (activeMs: number) => {
+		clock.active = activeMs;
+		clock.runStarted = Date.now();
+		clock.lastSeen = clock.runStarted - clock.pauseMs - 1;
+	};
+	freezeClock(14 * 60_000); // $0.42 over 14 active minutes = $1.80/h
+	assert(costCell(0.42, 0, id, id).includes("$0.42 · $1.80/h"), "the rate is cost / active hours: $0.42 over 14 active minutes is $1.80/h: " + costCell(0.42, 0, id, id));
+	assert(!costCell(0.42, 0, id, id).includes("~"), "a billed-only rate carries no ~");
+	assert(costCell(0, 0.42, id, id).includes("~$1.80/h"), "an estimate-based rate is prefixed ~, like the estimated part of the cell");
+	freezeClock(RATE_MIN_ACTIVE_MS - 1);
+	assert(!costCell(0.42, 0, id, id).includes("/h"), "no rate below 5 minutes of active time (a two-minute clock would print nonsense)");
+	freezeClock(RATE_MIN_ACTIVE_MS);
+	assert(costCell(0.42, 0, id, id).includes("/h"), "the rate appears at exactly 5 active minutes");
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH - 1).endsWith("$0.42"), "below 80 columns the rate is dropped, the cost stays");
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH).includes("/h"), "at 80 columns the rate is kept");
+	assert(costCell(0, 0, id, id) === "", "zero cost: no cell at all, so no rate either");
+	clock.active = clockBackup.active;
+	clock.runStarted = clockBackup.runStarted;
+	clock.lastSeen = clockBackup.lastSeen;
+
+	// Self-check: the cache cell's colour bands (the `pi …%` text itself stays session-wide).
+	assert(cacheHitBand(300, 700) === "soft" && cacheHitBand(200, 800) === "soft", "a windowed rate ≥70% keeps the soft tier");
+	assert(cacheHitBand(600, 400) === "warning" && cacheHitBand(550, 450) === "warning", "40–70% is the amber (warning) band");
+	assert(cacheHitBand(700, 300) === "error" && cacheHitBand(601, 399) === "error", "below 40% is the red (error) band");
+	assert(cacheHitBand(0, 0) === "soft", "an empty window (fewer than 3 assistant messages) stays soft");
+	// The windowed rate itself, through the scan pass: the first two assistant messages are
+	// ignored, the window is capped at the last CACHE_WINDOW_MSGS, and a stream tick moves
+	// it through the in-place delta without a rescan.
+	const asstMsg = (inp: number, read: number) => ({ type: "message", message: { role: "assistant", usage: { input: inp, output: 5, cacheRead: read } } });
+	const winBranch = [asstMsg(1000, 0), asstMsg(1000, 0), asstMsg(1000, 1000), asstMsg(1000, 1000)];
+	const winCtx = { sessionManager: { getBranch: () => winBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	usageScanAt = 0;
+	usageScanLen = -1;
+	getUsage(winCtx, id, id, false);
+	assert(usageWindow.inp === 2000 && usageWindow.read === 2000, "the windowed rate ignores the first two assistant messages: " + JSON.stringify(usageWindow));
+	assert(piCacheHit() === "pi 33.3%", "the pi …% text stays session-wide while the colour is windowed: " + piCacheHit());
+	const scanAtWin = usageScanAt;
+	winBranch[3] = asstMsg(1000, 0); // the last message mutates in place (stream tick)
+	getUsage(winCtx, id, id, false);
+	assert(usageWindow.inp === 2000 && usageWindow.read === 1000, "a stream tick moves the window through the delta: " + JSON.stringify(usageWindow));
+	assert(usageScanAt === scanAtWin, "the windowed delta took the cached path, not a rescan");
+	assert(cacheHitBand(usageWindow.inp, usageWindow.read) === "error", "a collapsed recent window is red even though the session rate is still 33.3%");
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const capBranch = [asstMsg(1000, 0), asstMsg(1000, 0), asstMsg(1000, 0), ...Array.from({ length: CACHE_WINDOW_MSGS }, () => asstMsg(600, 400))];
+	const capCtx = { sessionManager: { getBranch: () => capBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	getUsage(capCtx, id, id, false);
+	assert(usageWindow.inp === 6_000 && usageWindow.read === 4_000, "the window is capped at the last " + CACHE_WINDOW_MSGS + " assistant messages: " + JSON.stringify(usageWindow));
+	assert(cacheHitBand(usageWindow.inp, usageWindow.read) === "warning", "a 40% windowed rate is the amber band");
 	const costBranch: Array<{
 		type: string;
 		message: { role: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
