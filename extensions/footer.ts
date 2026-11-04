@@ -17,7 +17,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
-import { formatTokens } from "../lib/usage-store.ts";
+import { estimateCost, formatTokens, loadPriceTable, type PriceTable } from "../lib/usage-store.ts";
 import {
 	FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY,
 	FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY,
@@ -636,35 +636,65 @@ interface UsageTotals {
 	inp: number;
 	out: number;
 	read: number;
-	cost: number;
-	/** At least one message carried a provider-billed total, so the sum is not an estimate. */
-	billed: boolean;
+	/** Sum of `cost.total` over the messages the provider billed (`totalFromProvider`). */
+	costBilled: number;
+	/** Everything else: catalog totals, plus a price-table reconstruction for messages that
+	 *  carried no cost at all. Never blended into `costBilled`. */
+	costEstimated: number;
 }
 
-let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, cost: 0, billed: false };
+let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
 // Usage of the branch's last entry at scan time: a stream tick mutates that message
 // in place (branch length unchanged), so the delta is applied on top of the cached
 // sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
-let usageScanLast: UsageTotals = { inp: 0, out: 0, read: 0, cost: 0, billed: false };
+let usageScanLast: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
 
-const lastUsageOf = (branch: readonly unknown[]): UsageTotals => {
+type MessageUsage = {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	cost?: { total?: number; totalFromProvider?: boolean };
+};
+
+/** Billed vs estimated split of one message's usage: a provider-billed total goes to
+ *  `costBilled`, a catalog total (pi's own estimate) to `costEstimated`, and a message that
+ *  carried no cost at all is recomputed from the price table, cache writes included. */
+const costSplitOf = (
+	u: MessageUsage,
+	provider: string | undefined,
+	model: string | undefined,
+	table: PriceTable,
+): { costBilled: number; costEstimated: number } => {
+	const total = u.cost?.total || 0;
+	if (u.cost?.totalFromProvider === true) return { costBilled: total, costEstimated: 0 };
+	if (total > 0) return { costBilled: 0, costEstimated: total };
+	const est = provider && model ? estimateCost(u.input || 0, u.output || 0, u.cacheRead || 0, u.cacheWrite || 0, model, provider, table) : null;
+	return { costBilled: 0, costEstimated: est ?? 0 };
+};
+
+const lastUsageOf = (branch: readonly unknown[], table: PriceTable): UsageTotals => {
 	const last = branch[branch.length - 1] as
 		| {
 				type?: string;
-				message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+				message?: { role?: string; provider?: string; model?: string; usage?: MessageUsage };
 		  }
 		| undefined;
 	const u = last?.type === "message" && last.message?.role === "assistant" ? last.message.usage : undefined;
-	return u
-		? { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, cost: u.cost?.total || 0, billed: u.cost?.totalFromProvider === true }
-		: { inp: 0, out: 0, read: 0, cost: 0, billed: false };
+	if (!u) return { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
+	const { costBilled, costEstimated } = costSplitOf(u, last.message?.provider, last.message?.model, table);
+	return { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0, costBilled, costEstimated };
 };
 
-/** The session cost cell: `$0.42`, or `~$0.42` when no provider reported a billed total
- *  (pi's `cost.total` is then the catalog estimate) — the same promise `/usage` makes. */
-export function costCell(cost: number, billed: boolean, acc: (t: string) => string, soft: (t: string) => string): string {
-	if (!(cost > 0)) return "";
-	return `${acc("\uf155")} ${soft(`${billed ? "" : "~"}${formatCost(cost)}`)}`;
+/** The session cost cell. Billed and estimated never blend: `$0.42` when only the provider
+ *  billed, `~$0.42` when only an estimate exists, `$0.30 + ~$0.12` when the branch has both,
+ *  and no cell at all when there is no cost — the same promise `/usage` makes. */
+export function costCell(costBilled: number, costEstimated: number, acc: (t: string) => string, soft: (t: string) => string): string {
+	if (!(costBilled > 0) && !(costEstimated > 0)) return "";
+	const parts: string[] = [];
+	if (costBilled > 0) parts.push(formatCost(costBilled));
+	if (costEstimated > 0) parts.push(`~${formatCost(costEstimated)}`);
+	return `${acc("\uf155")} ${soft(parts.join(" + "))}`;
 }
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
@@ -677,36 +707,40 @@ export function getUsage(
 	showCost: boolean = activeFooterCost(),
 ): string {
 	const branch = ctx.sessionManager.getBranch();
-	const last = lastUsageOf(branch);
+	// Memoized on models.json's stat, so this is one statSync per frame, not a read.
+	const priceTable = loadPriceTable();
+	const last = lastUsageOf(branch, priceTable);
 	let inp = 0;
 	let out = 0;
 	let read = 0;
-	let cost = 0;
-	let billed = false;
+	let costBilled = 0;
+	let costEstimated = 0;
 	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
 		// Cached sums + the streaming delta of the last message (mutated in place).
 		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
 		out = usageScanNums.out + last.out - usageScanLast.out;
 		read = usageScanNums.read + last.read - usageScanLast.read;
-		cost = usageScanNums.cost + last.cost - usageScanLast.cost;
-		billed = usageScanNums.billed || last.billed;
+		costBilled = usageScanNums.costBilled + last.costBilled - usageScanLast.costBilled;
+		costEstimated = usageScanNums.costEstimated + last.costEstimated - usageScanLast.costEstimated;
 	} else {
 		for (const e of branch) {
 			if (e && typeof e === "object" && "type" in e && e.type === "message") {
 				const m = (e as { message?: unknown }).message;
 				if (m && typeof m === "object" && "role" in m && m.role === "assistant" && "usage" in m) {
-					const u = (m as AssistantMessage).usage;
+					const msg = m as AssistantMessage;
+					const u = msg.usage;
 					if (u) {
 						inp += u.input || 0;
 						out += u.output || 0;
 						read += u.cacheRead || 0;
-						cost += u.cost?.total || 0;
-						if (u.cost?.totalFromProvider) billed = true;
+						const split = costSplitOf(u, msg.provider, msg.model, priceTable);
+						costBilled += split.costBilled;
+						costEstimated += split.costEstimated;
 					}
 				}
 			}
 		}
-		usageScanNums = { inp, out, read, cost, billed };
+		usageScanNums = { inp, out, read, costBilled, costEstimated };
 		usageScanLast = last;
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
@@ -721,7 +755,7 @@ export function getUsage(
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	if (showCost) {
-		const cell = costCell(cost, billed, acc, soft);
+		const cell = costCell(costBilled, costEstimated, acc, soft);
 		if (cell) parts.push(cell);
 	}
 	return parts.join(" ");
@@ -1427,17 +1461,52 @@ if (isMain(import.meta.url)) {
 	// No pi-cache-stats status (provider without an optimizer adapter): the cache cell
 	// falls back to Pi's own usage, cacheRead / (input + cacheRead) = 10 / 1110.
 	assert(piCacheHit() === "pi 0.9%", "cache fallback reads Pi's built-in usage: " + piCacheHit());
-	// Cost cell: opt-in, and the branch scan sums pi's per-message `cost.total`.
-	assert(costCell(0, true, id, id) === "", "no cost: no cell");
-	assert(costCell(0.42, true, id, id).endsWith("$0.42") && !costCell(0.42, true, id, id).includes("~"), "a billed cost shows without ~");
-	assert(costCell(0.42, false, id, id).includes("~$0.42"), "a catalog estimate is marked with ~");
+	// Cost cell: opt-in, and the branch scan splits billed from estimated cost.
+	assert(costCell(0, 0, id, id) === "", "no cost at all: no cell");
+	assert(costCell(0.42, 0, id, id).endsWith("$0.42") && !costCell(0.42, 0, id, id).includes("~"), "billed only: $0.42 without ~");
+	assert(costCell(0, 0.42, id, id).includes("~$0.42") && !costCell(0, 0.42, id, id).includes("+"), "estimated only: ~$0.42");
+	assert(costCell(0.3, 0.12, id, id).includes("$0.30 + ~$0.12"), "both: $0.30 + ~$0.12, never blended");
 	const costBranch: Array<{
 		type: string;
 		message: { role: string; usage?: { input?: number; output?: number; cacheRead?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
 	}> = [{ type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cacheRead: 0, cost: { total: 0.42, totalFromProvider: true } } } }];
 	const costCtx = { sessionManager: { getBranch: () => costBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
 	assert(!getUsage(costCtx, id, id, false).includes("$0.42"), "cost cell is off unless the switch is on");
-	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's cost.total when on");
+	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's billed cost when on");
+
+	// Billed vs estimated in getUsage: a costless message is recomputed from models.json
+	// (cache writes included) and shown next to the billed total, not folded into it.
+	const costFixture = mkdtempSync(join(tmpdir(), "pi-arnative-cost-"));
+	const prevCostDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = costFixture;
+	writeFileSync(
+		join(costFixture, "models.json"),
+		JSON.stringify({ providers: { google: { models: [{ id: "m", cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 3 } }] } } }),
+	);
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const mixedBranch: Array<{
+		type: string;
+		message: { role: string; provider?: string; model?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number; totalFromProvider?: boolean } } };
+	}> = [
+		{ type: "message", message: { role: "assistant", provider: "google", model: "m", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.3, totalFromProvider: true } } } },
+		// No cost at all: 1M input at $1/M + 500k cache writes at $3/M = ~$2.50.
+		{ type: "message", message: { role: "assistant", provider: "google", model: "m", usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 500_000 } } },
+	];
+	const mixedCtx = { sessionManager: { getBranch: () => mixedBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	const mixedCell = getUsage(mixedCtx, id, id, true);
+	assert(mixedCell.includes("$0.30 + ~$2.50"), "a mixed branch shows the billed and estimated parts apart: " + mixedCell);
+	usageScanAt = 0;
+	usageScanLen = -1;
+	const catalogBranch: typeof mixedBranch = [
+		{ type: "message", message: { role: "assistant", provider: "google", model: "m", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.12 } } } },
+	];
+	const catalogCtx = { sessionManager: { getBranch: () => catalogBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
+	const catalogCell = getUsage(catalogCtx, id, id, true);
+	assert(catalogCell.includes("~$0.12") && !catalogCell.includes("+"), "a catalog total (no totalFromProvider) is an estimate, marked ~: " + catalogCell);
+	if (prevCostDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = prevCostDir;
+	rmSync(costFixture, { recursive: true, force: true });
 
 	// regression: a refresh arriving while one is in flight is re-run with the newest
 	// cwd, not dropped (the footer's git state no longer stays stale until the next trigger).

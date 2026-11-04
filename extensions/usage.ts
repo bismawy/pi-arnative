@@ -34,7 +34,7 @@ export function formatCount(n: number): string {
 // =============================================================================
 
 export interface RowItem {
-	type: "project" | "provider" | "model";
+	type: "project" | "provider" | "model" | "price";
 	/** Set on project rows, and on the provider rows nested under one in Project view. */
 	projectName?: string;
 	providerName: string;
@@ -46,14 +46,19 @@ export interface RowItem {
 	input: number;
 	output: number;
 	cacheRead: number;
+	/** Billed cost only; the estimate stays in `estimatedCost`. */
 	cost: number;
-	/** Cost reconstructed from the price table when `cost` is 0 — shown with a `~`. */
+	/** Catalog totals plus the price-table reconstruction when `cost` is 0 — shown with a `~`. */
 	estimatedCost: number;
 	expanded?: boolean;
+	/** Prices view only: the $/1M rates declared in models.json. */
+	rates?: { in: number; out: number; cacheRead: number; cacheWrite: number };
+	/** Prices view only: a model used in the sessions but absent from the price table. */
+	unpriced?: boolean;
 }
 
-/** The two dashboard views, cycled by `v`: Provider → Model (default) and Project → Provider. */
-type UsageView = "provider" | "project";
+/** The dashboard views, cycled by `v`: Provider → Project → Prices. */
+type UsageView = "provider" | "project" | "prices";
 
 export class UsageModalComponent implements Component {
 	private expandedProviders = new Set<string>();
@@ -95,6 +100,53 @@ export class UsageModalComponent implements Component {
 
 	private buildFlatRows(): RowItem[] {
 		const rows: RowItem[] = [];
+		if (this.view === "prices") {
+			// Every provider+model declared in models.json, with its $/1M rates, cheapest input
+			// first; a model the sessions used but the table does not price gets a row marked
+			// `unpriced` after the priced ones — that is the model whose Cost cell reads `-`.
+			const table = loadPriceTable();
+			for (const [provider, models] of Object.entries(table)) {
+				for (const [model, r] of Object.entries(models)) {
+					rows.push({
+						type: "price",
+						providerName: provider,
+						modelName: model,
+						label: `${provider}/${model}`,
+						sessions: 0,
+						msgs: 0,
+						tokens: 0,
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cost: 0,
+						estimatedCost: 0,
+						rates: { in: r.input ?? 0, out: r.output ?? 0, cacheRead: r.cacheRead ?? 0, cacheWrite: r.cacheWrite ?? 0 },
+					});
+				}
+			}
+			rows.sort((a, b) => a.rates!.in - b.rates!.in);
+			for (const p of this.summary.providers) {
+				for (const m of p.models) {
+					if (hasPrice(p.name, m.name, table)) continue;
+					rows.push({
+						type: "price",
+						providerName: p.name,
+						modelName: m.name,
+						label: `${p.name}/${m.name}`,
+						sessions: m.sessions,
+						msgs: m.msgs,
+						tokens: m.totalTokens,
+						input: m.input,
+						output: m.output,
+						cacheRead: m.cacheRead,
+						cost: m.cost,
+						estimatedCost: m.estimatedCost,
+						unpriced: true,
+					});
+				}
+			}
+			return rows;
+		}
 		if (this.view === "project") {
 			// Same grid and columns as the Provider view, tree Project → Provider.
 			for (const proj of this.summary.projects) {
@@ -190,9 +242,9 @@ export class UsageModalComponent implements Component {
 		return true;
 	}
 
-	/** Cycle the view: Provider → Project → Provider. One key, one grid, one legend. */
+	/** Cycle the view: Provider → Project → Prices → Provider. One key, one grid, one legend. */
 	private cycleView(): void {
-		this.view = this.view === "provider" ? "project" : "provider";
+		this.view = this.view === "provider" ? "project" : this.view === "project" ? "prices" : "provider";
 		if (this.view === "project" && this.expandedProjects.size === 0 && this.summary.projects.length > 0) {
 			this.expandedProjects.add(this.summary.projects[0]!.name);
 		}
@@ -298,14 +350,17 @@ export class UsageModalComponent implements Component {
 		// No leading gutter: the header is content, so it starts on the same left edge as the
 		// box title, the detail line and the Total row. The rows' numeric columns are measured
 		// to land on this grid despite their arrow. The header names the tree's two levels;
-		// the grid under it never moves between views.
+		// the grid under it never moves between views. The Prices view reuses the same four
+		// numeric columns for the $/1M rates.
 		const nameHeader = this.view === "project" ? "Project / Provider" : "Provider / Model";
+		const [hSess, hMsgs, hToks, hCost] =
+			this.view === "prices" ? ["In $/M", "Out $/M", "Read $/M", "Write $/M"] : ["Session", "Messages", "Tokens", "Cost"];
 		const headerText =
 			formatCol(th.fg("dim", nameHeader), colW.name, false) +
-			formatCol(th.fg("dim", "Session"), sessionW) +
-			formatCol(th.fg("dim", "Messages"), messagesW) +
-			formatCol(th.fg("dim", "Tokens"), colW.tokens) +
-			formatCol(th.fg("dim", "Cost"), colW.cost);
+			formatCol(th.fg("dim", hSess), sessionW) +
+			formatCol(th.fg("dim", hMsgs), messagesW) +
+			formatCol(th.fg("dim", hToks), colW.tokens) +
+			formatCol(th.fg("dim", hCost), colW.cost);
 
 		// Body rows only — the frame comes from `renderScreen`, so this dashboard and the
 		// /arnative menus cannot drift. No inner `├─┤` rule (skill arnative-pi rule 7).
@@ -330,14 +385,25 @@ export class UsageModalComponent implements Component {
 
 			const paintName = isSelected ? acc : item.type === "provider" ? soft : plain;
 			const paintVal = isSelected ? acc : dim;
+			const isPrice = item.type === "price";
 
 			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), rowNameW, false);
-			const cSess = formatCol(paintVal(formatCount(item.sessions)), sessionW);
-			const cMsgs = formatCol(paintVal(formatCount(item.msgs)), messagesW);
-			const cToks = formatCol(paintVal(formatTokens(item.tokens)), colW.tokens);
-			// A row with no reported cost but a rate shows `~$x` in place of `-`, so the guess is
+			const cSess = formatCol(paintVal(isPrice ? formatCost(item.rates?.in ?? 0) : formatCount(item.sessions)), sessionW);
+			const cMsgs = formatCol(paintVal(isPrice ? formatCost(item.rates?.out ?? 0) : formatCount(item.msgs)), messagesW);
+			const cToks = formatCol(paintVal(isPrice ? formatCost(item.rates?.cacheRead ?? 0) : formatTokens(item.tokens)), colW.tokens);
+			// A row with no billed cost but a rate shows `~$x` in place of `-`, so the guess is
 			// visible exactly where it is one; the report line still keeps it out of the headline.
-			const costCell = item.cost > 0 ? formatCost(item.cost) : item.estimatedCost > 0 ? `~${formatCost(item.estimatedCost)}` : "-";
+			// The Prices view puts the cache-write rate here, or `unpriced` for a used model the
+			// table does not price.
+			const costCell = isPrice
+				? item.unpriced
+					? "unpriced"
+					: formatCost(item.rates?.cacheWrite ?? 0)
+				: item.cost > 0
+					? formatCost(item.cost)
+					: item.estimatedCost > 0
+						? `~${formatCost(item.estimatedCost)}`
+						: "-";
 			const cCost = formatCol(paintVal(costCell), colW.cost);
 
 			// Gutter: expand arrow on the tree's top level (provider in Provider view, project
@@ -354,36 +420,54 @@ export class UsageModalComponent implements Component {
 		body.push("");
 		body.push(this.selectedDetail(rows[this.selectedIndex], acc, soft));
 
-		// Table-width separator above Total band (skill arnative-pi §6 rule 7).
+		// Table-width separator above the Total band (skill arnative-pi §6 rule 7).
 		const tableW = colW.name + sessionW + messagesW + colW.tokens + colW.cost;
 		body.push(th.fg("dim", "─".repeat(Math.max(0, tableW))));
 
-		// Total row
-		const t = this.summary.totals;
-		const totalName = formatCol(soft(bold("Total")), colW.name, false);
-		const totalSess = formatCol(soft(bold(formatCount(t.sessions))), sessionW);
-		const totalMsgs = formatCol(soft(bold(formatCount(t.msgs))), messagesW);
-		const totalToks = formatCol(soft(bold(formatTokens(t.totalTokens))), colW.tokens);
-		const totalCost = formatCol(soft(bold(formatCost(t.cost))), colW.cost);
+		if (this.view === "prices") {
+			// No Total band for rates: a count of what the table prices, and of the used models
+			// it does not, is the honest summary of this view.
+			const unpriced = rows.filter((r) => r.unpriced).length;
+			body.push(dim(`${rows.length - unpriced} priced · ${unpriced} unpriced (models.json)`));
+		} else {
+			// Total row. Its cost column is the billed total only.
+			const t = this.summary.totals;
+			const totalName = formatCol(soft(bold("Total")), colW.name, false);
+			const totalSess = formatCol(soft(bold(formatCount(t.sessions))), sessionW);
+			const totalMsgs = formatCol(soft(bold(formatCount(t.msgs))), messagesW);
+			const totalToks = formatCol(soft(bold(formatTokens(t.totalTokens))), colW.tokens);
+			const totalCost = formatCol(soft(bold(formatCost(t.cost))), colW.cost);
 
-		// Same left edge as the header: one table, three bands, one column grid.
-		body.push(totalName + totalSess + totalMsgs + totalToks + totalCost);
+			// Same left edge as the header: one table, three bands, one column grid.
+			body.push(totalName + totalSess + totalMsgs + totalToks + totalCost);
 
-		// Day buckets, when the cache holds them: one dim line under the Total band.
-		if (t.today && t.last7d && t.last30d) {
-			body.push(dim(`today ${formatCost(t.today.cost)} · 7d ${formatCost(t.last7d.cost)} · 30d ${formatCost(t.last30d.cost)}`));
+			// Day buckets, when the cache holds them: one dim line under the Total band.
+			if (t.today && t.last7d && t.last30d) {
+				body.push(dim(`today ${formatCost(t.today.cost)} · 7d ${formatCost(t.last7d.cost)} · 30d ${formatCost(t.last30d.cost)}`));
+			}
+
+			// Billed vs estimated, never blended: the Total band above carries the billed cost
+			// only, and this line names both sources when an estimate exists.
+			const est = t.estimatedCost;
+			if (est > 0) {
+				const parts = [t.cost > 0 ? `${formatCost(t.cost)} billed` : "", `~${formatCost(est)} estimated (models.json)`];
+				body.push(th.fg("muted", parts.filter(Boolean).join(" + ")));
+			}
 		}
-
-		// Unreported cost estimate displayed separately from verified cost total.
-		const est = t.estimatedCost;
-		if (est > 0) body.push(th.fg("muted", `~${formatCost(est)} estimated (models.json)`));
 
 		return renderScreen(
 			th,
 			width,
 			{
 				title: screenTitle("Usage"),
-				description: width >= 70 ? "Token, message & cache usage across all local Pi sessions." : "Usage across all local sessions.",
+				description:
+					this.view === "prices"
+						? width >= 70
+							? "Rates per 1M tokens from models.json; `unpriced` marks a used model with no rate."
+							: "Rates per 1M tokens (models.json)."
+						: width >= 70
+							? "Token, message & cache usage across all local Pi sessions."
+							: "Usage across all local sessions.",
 				legend: legendUsage(width),
 			},
 			body,
@@ -399,6 +483,20 @@ export class UsageModalComponent implements Component {
 	): string {
 		if (!row) return soft("No usage recorded yet.");
 		const icon = `${accent("\uf4bc")} `;
+		if (row.type === "price") {
+			const title = `${row.providerName} · ${row.modelName}`;
+			const parts = row.unpriced
+				? ["unpriced", `↑${formatTokens(row.input)}`, `↓${formatTokens(row.output)}`]
+				: [
+						`in ${formatCost(row.rates!.in)}`,
+						`out ${formatCost(row.rates!.out)}`,
+						`cache read ${formatCost(row.rates!.cacheRead)}`,
+						`cache write ${formatCost(row.rates!.cacheWrite)}`,
+					];
+			if (row.unpriced && row.estimatedCost > 0) parts.push(`~${formatCost(row.estimatedCost)} est.`);
+			const divider = soft(" · ");
+			return `${icon}${soft(capitalize(title))}${divider}${soft(parts.join(" · "))}`;
+		}
 		const title =
 			row.type === "model" ? `${row.providerName} · ${row.modelName}` : row.type === "project" ? row.projectName! : row.providerName;
 		const parts = [
@@ -455,7 +553,8 @@ if (isMain(import.meta.url)) {
 	const fixture = mkdtempSync(join(tmpdir(), "arnative-usage-"));
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	mkdirSync(join(fixture, "sessions", "proj"), { recursive: true });
-	const asst = (model: string, input: number) => JSON.stringify({ message: { role: "assistant", provider: "google", model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0.02 } } } });
+	const asst = (model: string, input: number) =>
+		JSON.stringify({ message: { role: "assistant", provider: "google", model, usage: { input, output: 5, cacheRead: 1, cacheWrite: 2, cost: { total: 0.02, totalFromProvider: true } } } });
 	writeFileSync(
 		join(fixture, "sessions", "proj", "a.jsonl"),
 		[JSON.stringify({ message: { role: "user", content: "hi" } }), asst("gemini-3.8-flash", 100), asst("gemini-3.8-flash", 50), asst("other-model", 7)].join(String.fromCharCode(10)) + String.fromCharCode(10),
@@ -576,7 +675,7 @@ if (isMain(import.meta.url)) {
 	// exists for; `asst` above reports 0.02 per message and would be priced by the provider.
 	mkdirSync(join(fixture, "sessions", "ui"), { recursive: true });
 	const freeAsstOf = (provider: string, model: string, input: number) =>
-		JSON.stringify({ message: { role: "assistant", provider, model, usage: { input, output: 5, cacheRead: 1, cost: { total: 0 } } } });
+		JSON.stringify({ message: { role: "assistant", provider, model, usage: { input, output: 5, cacheRead: 1, cacheWrite: 3, cost: { total: 0 } } } });
 	const freeAsst = (model: string, input: number) => freeAsstOf("alpha", model, input);
 	writeFileSync(
 		join(fixture, "sessions", "ui", "rows.jsonl"),
@@ -601,9 +700,9 @@ if (isMain(import.meta.url)) {
 	// Cost estimation: unpriced pairs use rates declared automatically in models.json.
 	assert(loadPriceTable() !== null && Object.keys(loadPriceTable()).length === 0, "no models.json rates means an empty table");
 	assert(!hasPrice("alpha", "gemini-3.8-flash"), "a pair absent from models.json has no price");
-	assert(estimateCost(1000, 100, 0, "gemini-3.8-flash", "alpha") === null, "an unknown pair estimates nothing");
+	assert(estimateCost(1000, 100, 0, 0, "gemini-3.8-flash", "alpha") === null, "an unknown pair estimates nothing");
 	assert(collectUsageSummary(true).totals.estimatedCost === 0, "nothing is estimated without rates");
-	assert(estimateCost(1000, 100, 0, "other-model", "alpha") === null, "a second unpriced pair estimates nothing either");
+	assert(estimateCost(1000, 100, 0, 0, "other-model", "alpha") === null, "a second unpriced pair estimates nothing either");
 
 	writeFileSync(
 		join(fixture, "models.json"),
@@ -614,21 +713,34 @@ if (isMain(import.meta.url)) {
 			},
 		}),
 	);
+	const table0 = loadPriceTable();
 	assert(hasPrice("alpha", "gemini-3.8-flash"), "a priced provider+model is found in the table");
 	assert(!hasPrice("enclave", "gemini-3.8-flash"), "another provider with no entry is not priced");
-	assert(estimateCost(1_000_000, 0, 0, "gemini-3.8-flash", "alpha") === 1, "1M input tokens at alpha's $1/M costs $1");
+	assert(estimateCost(1_000_000, 0, 0, 0, "gemini-3.8-flash", "alpha") === 1, "1M input tokens at alpha's $1/M costs $1");
 	assert(
-		estimateCost(1_000_000, 0, 0, "gemini-3.8-flash", "beta") === 10,
+		estimateCost(1_000_000, 0, 0, 0, "gemini-3.8-flash", "beta") === 10,
 		"the SAME model at beta costs 10x (rates are per provider, not per model)",
 	);
-	assert(estimateCost(0, 1_000_000, 0, "gemini-3.8-flash", "alpha") === 2, "1M output tokens at $2/M costs $2");
-	assert(Math.abs(estimateCost(0, 0, 1_000_000, "gemini-3.8-flash", "alpha")! - 0.1) < 1e-9, "cache reads use their own rate");
-	assert(estimateCost(1_000_000, 0, 0, "vendor/gemini-3.8-flash", "alpha") === 1, "a vendor/my-model id matches the model rate");
+	assert(estimateCost(0, 1_000_000, 0, 0, "gemini-3.8-flash", "alpha") === 2, "1M output tokens at $2/M costs $2");
+	assert(Math.abs(estimateCost(0, 0, 1_000_000, 0, "gemini-3.8-flash", "alpha")! - 0.1) < 1e-9, "cache reads use their own rate");
+	assert(estimateCost(1_000_000, 0, 0, 0, "vendor/gemini-3.8-flash", "alpha") === 1, "a vendor/my-model id matches the model rate");
 	const withPrices = collectUsageSummary(true);
 	assert(withPrices.totals.estimatedCost > 0, "models.json rates produce an estimate");
 	assert(withPrices.totals.reportedCost === 0, "the reported total stays at the provider's own number");
 	assert(withPrices.totals.cost === withPrices.totals.reportedCost, "the headline cost never absorbs the estimate");
-	assert(estimateCost(1_000_000, 0, 0, "other-model", "alpha") === null, "a pair with no rate stays unpriced even when others are priced");
+	assert(estimateCost(1_000_000, 0, 0, 0, "other-model", "alpha") === null, "a pair with no rate stays unpriced even when others are priced");
+	assert(loadPriceTable() === loadPriceTable(), "an unchanged models.json is read once (memo identity)");
+	await new Promise((r) => setTimeout(r, 5)); // mtime granularity: a rewrite must change the memo key
+	writeFileSync(
+		join(fixture, "models.json"),
+		JSON.stringify({
+			providers: {
+				alpha: { models: [{ id: "gemini-3.8-flash", cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.5 } }] },
+				beta: { models: [{ id: "gemini-3.8-flash", cost: { input: 10, output: 20 } }] },
+			},
+		}),
+	);
+	assert(loadPriceTable() !== table0 && estimateCost(0, 0, 0, 1_000_000, "gemini-3.8-flash", "alpha") === 0.5, "cache writes are priced, and a changed models.json is re-read");
 
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[38;2;100;100;100m${t}\x1b[39m`,
@@ -657,6 +769,23 @@ if (isMain(import.meta.url)) {
 	// Compact layout: the four noisy columns (↑In/↓Out/Cache) are gone from the table; the
 	// selected row states them in the detail line instead.
 	const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+	// Prices view (`v` cycles Provider → Project → Prices): every models.json pair with its
+	// $/1M rates on the same column grid, sorted by input rate, and a used model the table does
+	// not price marked `unpriced` — that is the model whose Cost cell reads `-`.
+	const priceModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high");
+	priceModal.handleInput("v");
+	priceModal.handleInput("v");
+	const priceLines = priceModal.render(120);
+	const priceBody = priceLines.map(plain).join("\n");
+	assert(priceBody.includes("In $/M") && priceBody.includes("Write $/M"), "the Prices view header names the rate columns");
+	assert(priceBody.includes("alpha/gemini-3.8-flash") && priceBody.includes("beta/gemini-3.8-flash"), "the Prices view lists every models.json pair");
+	assert(priceBody.includes("$1.00") && priceBody.includes("$10.00"), "input rates render as $/1M");
+	assert(priceBody.indexOf("alpha/gemini-3.8-flash") < priceBody.indexOf("beta/gemini-3.8-flash"), "priced rows are sorted by input rate");
+	assert(priceBody.includes("unpriced") && priceBody.includes("alpha/other-model"), "a used model absent from models.json is marked unpriced");
+	assert(priceBody.includes("2 priced · 3 unpriced (models.json)"), "the Prices view counts priced and unpriced rows");
+	priceModal.handleInput("v");
+	assert(priceModal.render(120).some((l) => plain(l).includes("Provider / Model")), "`v` cycles back to the Provider view");
+
 	const body = lines.map(plain).join("\n");
 	assert(body.includes("Tokens"), "compact table keeps the Tokens column");
 	assert(body.includes("Cost"), "compact table keeps the Cost column");
@@ -852,14 +981,14 @@ if (isMain(import.meta.url)) {
 		join(fixture, "models.json"),
 		JSON.stringify({
 			providers: {
-				alpha: { models: [{ id: "gemini-3.8-flash", cost: { input: 0.28, output: 0.42, cacheRead: 0.028 } }] },
+				alpha: { models: [{ id: "gemini-3.8-flash", cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0.3 } }] },
 				beta: { models: [{ id: "gemini-3.8-flash" }] },
 			},
 		}),
 	);
 	const fromModels = collectUsageSummary(true);
 	const alpha = fromModels.providers.find((p) => p.name === "alpha")!;
-	const expected = (100 / 1e6) * 0.28 + (5 / 1e6) * 0.42 + (1 / 1e6) * 0.028;
+	const expected = (100 / 1e6) * 0.28 + (5 / 1e6) * 0.42 + (1 / 1e6) * 0.028 + (3 / 1e6) * 0.3;
 	assert(Math.abs(alpha.estimatedCost - expected) < 1e-12, `models.json cost prices the provider, got ${alpha.estimatedCost}`);
 	assert(
 		Math.abs(alpha.models.reduce((n, m) => n + m.estimatedCost, 0) - alpha.estimatedCost) < 1e-9,

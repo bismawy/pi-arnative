@@ -1,14 +1,15 @@
 /**
- * The v6 usage cache: day buckets, the session cwd and the project grouping in
- * `lib/usage-store.ts`. Pointed at a fixture agent dir, so the real history (and cache)
- * never decide pass/fail. Run with `npm test` (`node --test`).
+ * The v7 usage cache: day buckets, the session cwd, the project grouping and the
+ * cacheWrite/billed rows in `lib/usage-store.ts`, plus the billed-vs-estimated split.
+ * Pointed at a fixture agent dir, so the real history (and cache) never decide
+ * pass/fail. Run with `npm test` (`node --test`).
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { collectUsageSummary, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
+import { collectUsageSummary, loadPriceTable, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
 
 const NL = String.fromCharCode(10);
 
@@ -109,5 +110,48 @@ test("a pre-v6 (v5 compact) cache item is re-parsed once and re-saved as v6", ()
 		assert.ok(disk[join("a", "a.jsonl")]!.d !== undefined, "the re-parsed item is saved with day buckets");
 		assert.equal(disk[join("a", "a.jsonl")]!.w, "/repo/alpha");
 		assert.equal(msgsOf(disk[join("a", "a.jsonl")]!.d!), 1);
+	});
+});
+
+test("billed cost and estimates stay apart, cache writes counted and priced", () => {
+	withFixture((dir) => {
+		mkdirSync(join(dir, "sessions", "a"), { recursive: true });
+		const ts = Date.now();
+		const line = (model: string, usage: object) =>
+			JSON.stringify({ message: { role: "assistant", provider: "google", model, timestamp: ts, usage } });
+		// Billed by the provider, catalog-estimated by pi, and costless (price-table only).
+		const billed = line("m1", { input: 100, output: 5, cacheRead: 1, cacheWrite: 7, cost: { total: 0.42, totalFromProvider: true } });
+		const catalog = line("m2", { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 500_000, cost: { total: 0.12 } });
+		const costless = line("m3", { input: 2_000_000, output: 0, cacheRead: 0, cacheWrite: 1_000_000 });
+		writeFileSync(join(dir, "sessions", "a", "a.jsonl"), [billed, catalog, costless].join(NL) + NL);
+		writeFileSync(
+			join(dir, "models.json"),
+			JSON.stringify({ providers: { google: { models: [{ id: "m3", cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 3 } }] } } }),
+		);
+
+		const summary = collectUsageSummary(true);
+		const google = summary.providers.find((p) => p.name === "google")!;
+		// `cost` is the billed part only; the catalog total and the estimate are not in it.
+		assert.equal(summary.totals.cost, 0.42);
+		assert.equal(summary.totals.reportedCost, 0.42);
+		const m1 = google.models.find((m) => m.name === "m1")!;
+		const m2 = google.models.find((m) => m.name === "m2")!;
+		const m3 = google.models.find((m) => m.name === "m3")!;
+		assert.equal(m1.cost, 0.42);
+		assert.equal(m1.estimatedCost, 0);
+		assert.equal(m2.cost, 0);
+		assert.ok(Math.abs(m2.estimatedCost - 0.12) < 1e-9, "a catalog total (no totalFromProvider) is an estimate");
+		// m3 carried no cost at all: 2M input at $1/M + 1M cache writes at $3/M = $5.
+		assert.ok(Math.abs(m3.estimatedCost - 5) < 1e-9, "a costless row is recomputed from the price table, cache writes included");
+		assert.ok(Math.abs(summary.totals.estimatedCost - 5.12) < 1e-9, "the estimate total is the catalog total plus the reconstruction");
+
+		// The cache rows are v7: cacheWrite and the billed split are stored with the rest.
+		const row = cacheOf(dir)[join("a", "a.jsonl")]!.r["google\u0000m1"]!;
+		assert.equal(row.length, 7);
+		assert.equal(row[4], 7, "cacheWrite is stored");
+		assert.ok(Math.abs(row[6]! - 0.42) < 1e-9, "the billed split of the cost is stored");
+
+		// The price table is memoized on the unchanged models.json.
+		assert.ok(loadPriceTable() === loadPriceTable(), "an unchanged models.json is read once");
 	});
 });

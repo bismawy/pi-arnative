@@ -20,7 +20,10 @@ interface UsageEntry {
 	input: number;
 	output: number;
 	cacheRead: number;
+	cacheWrite: number;
 	cost: number;
+	/** True when `cost` is the provider-billed total (`totalFromProvider`); false when it is a catalog estimate. */
+	billed: boolean;
 	/** Message timestamp (ms), kept so entries can be bucketed per day. 0 when absent. */
 	ts: number;
 }
@@ -56,17 +59,23 @@ interface Rollup {
 	input: number;
 	output: number;
 	cacheRead: number;
+	cacheWrite: number;
+	/** Sum of `cost.total`, billed plus catalog estimates, exactly as pi reported them. */
 	cost: number;
+	/** The billed subset of `cost`; `cost - billed` is the catalog-estimate part. */
+	billed: number;
 }
 
-const emptyRollup = (): Rollup => ({ sessions: 0, msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
+const emptyRollup = (): Rollup => ({ sessions: 0, msgs: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, billed: 0 });
 
 function addToRollup(r: Rollup, e: UsageEntry): void {
 	r.msgs++;
 	r.input += e.input;
 	r.output += e.output;
 	r.cacheRead += e.cacheRead;
+	r.cacheWrite += e.cacheWrite;
 	r.cost += e.cost;
+	r.billed += e.billed ? e.cost : 0;
 }
 
 /** UTC day bucket key (`YYYY-MM-DD`) of a timestamp. UTC on purpose: local time would make the
@@ -108,8 +117,9 @@ interface UsageModelStats {
 	output: number;
 	cacheRead: number;
 	totalTokens: number;
+	/** Billed cost only (`totalFromProvider`); catalog estimates live in `estimatedCost`. */
 	cost: number;
-	/** Cost reconstructed from the price table, only when `cost` is 0. Never folded into `cost`. */
+	/** Catalog totals plus the price-table reconstruction for rows that carried no cost at all. Never folded into `cost`. */
 	estimatedCost: number;
 }
 
@@ -122,7 +132,7 @@ interface UsageProviderStats {
 	cacheRead: number;
 	totalTokens: number;
 	cost: number;
-	/** Sum of the models' `estimatedCost`, for the same rows this provider could not price. */
+	/** Sum of the models' `estimatedCost`, for the same rows this provider could not bill. */
 	estimatedCost: number;
 	models: UsageModelStats[];
 }
@@ -144,6 +154,7 @@ export interface UsageProjectStats {
 
 /** One day-window total, summed from the day buckets. */
 export interface UsageDayWindow {
+	/** Billed cost only, like the summary's `cost`. */
 	cost: number;
 	input: number;
 	output: number;
@@ -161,33 +172,49 @@ export interface UsageSummary {
 		output: number;
 		cacheRead: number;
 		totalTokens: number;
+		/** Billed cost only (`totalFromProvider`); never includes the estimate. */
 		cost: number;
-		/** Provider-reported cost only (never includes the estimate). */
+		/** Same billed total under its old name. */
 		reportedCost: number;
-		/** Cost reconstructed from `models.json` rates. Shown with a `~`, never folded into `cost`. */
+		/** Catalog totals plus cost reconstructed from `models.json` rates. Shown with a `~`, never folded into `cost`. */
 		estimatedCost: number;
-		/** Day-bucket windows, present only when the scan saw day buckets (a v6 cache). */
+		/** Day-bucket windows, present only when the scan saw day buckets (a v7 cache). */
 		today?: UsageDayWindow;
 		last7d?: UsageDayWindow;
 		last30d?: UsageDayWindow;
 	};
 }
 
-export type ModelPrices = Record<string, { input?: number; output?: number; cacheRead?: number }>;
+export type ModelPrices = Record<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }>;
 export type PriceTable = Record<string, ModelPrices>;
 
 const modelsFilePath = (): string => join(getAgentDir(), "models.json");
 
-type ModelsJsonCost = { input?: number; output?: number; cacheRead?: number };
+type ModelsJsonCost = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+
+/** Memo of the last price-table read, keyed by the models.json path + mtimeMs + size: one
+ *  `statSync` per call instead of a `readFileSync` on every footer frame. Cleared by
+ *  `resetUsageCache()` so the self-checks see a cold read after changing the fixture. */
+let priceMemo: { key: string; table: PriceTable } | null = null;
 
 /**
  * Rates declared automatically in pi's `models.json` (`providers.<name>.models[].cost`).
- * Keyed by provider to reconstruct estimates for historical or 0-cost rows.
+ * Keyed by provider to reconstruct estimates for historical or 0-cost rows. Memoized on the
+ * file's stat, so an unchanged file is parsed once, not once per caller.
  */
 export function loadPriceTable(): PriceTable {
+	const path = modelsFilePath();
+	let key: string;
+	try {
+		const st = statSync(path);
+		key = `${path}\u0000${st.mtimeMs}\u0000${st.size}`;
+	} catch {
+		key = `${path}\u0000absent`;
+	}
+	if (priceMemo && priceMemo.key === key) return priceMemo.table;
 	const table: PriceTable = {};
 	try {
-		const raw = JSON.parse(readFileSync(modelsFilePath(), "utf8")) as {
+		const raw = JSON.parse(readFileSync(path, "utf8")) as {
 			providers?: Record<string, { models?: { id?: string; cost?: ModelsJsonCost }[] }>;
 		};
 		for (const [provider, cfg] of Object.entries(raw.providers ?? {})) {
@@ -195,27 +222,40 @@ export function loadPriceTable(): PriceTable {
 			for (const m of cfg?.models ?? []) {
 				const c = m?.cost;
 				if (!m?.id || !c || typeof c.input !== "number" || typeof c.output !== "number") continue;
-				models[m.id] = { input: c.input, output: c.output, cacheRead: typeof c.cacheRead === "number" ? c.cacheRead : 0 };
+				models[m.id] = {
+					input: c.input,
+					output: c.output,
+					cacheRead: typeof c.cacheRead === "number" ? c.cacheRead : 0,
+					cacheWrite: typeof c.cacheWrite === "number" ? c.cacheWrite : 0,
+				};
 			}
 			if (Object.keys(models).length > 0) table[provider] = models;
 		}
 	} catch {
 		// Malformed or absent models.json means no declared rates.
 	}
+	priceMemo = { key, table };
 	return table;
 }
 
-/** True when this provider+model has a usable input+output price (cacheRead is optional). */
+/** True when this provider+model has a usable input+output price (cacheRead/cacheWrite are optional). */
 export function hasPrice(provider: string, modelId: string, table: PriceTable = loadPriceTable()): boolean {
 	return findPrice(provider, modelId, table) !== null;
 }
 
 /** Rates for one provider+model. The provider's own entry wins over the `*` fallback. */
-function findPrice(provider: string, modelId: string, table: PriceTable): { input: number; output: number; cacheRead: number } | null {
+function findPrice(
+	provider: string,
+	modelId: string,
+	table: PriceTable,
+): { input: number; output: number; cacheRead: number; cacheWrite: number } | null {
 	return rateFor(table[provider], modelId) ?? rateFor(table["*"], modelId);
 }
 
-function rateFor(entries: ModelPrices | undefined, modelId: string): { input: number; output: number; cacheRead: number } | null {
+function rateFor(
+	entries: ModelPrices | undefined,
+	modelId: string,
+): { input: number; output: number; cacheRead: number; cacheWrite: number } | null {
 	if (!entries || typeof entries !== "object") return null;
 	const lower = modelId.toLowerCase();
 	const keys = Object.keys(entries).filter((k) => !k.startsWith("_"));
@@ -225,7 +265,12 @@ function rateFor(entries: ModelPrices | undefined, modelId: string): { input: nu
 	if (!key) return null;
 	const p = entries[key]!;
 	if (typeof p.input !== "number" || typeof p.output !== "number") return null;
-	return { input: p.input, output: p.output, cacheRead: typeof p.cacheRead === "number" ? p.cacheRead : 0 };
+	return {
+		input: p.input,
+		output: p.output,
+		cacheRead: typeof p.cacheRead === "number" ? p.cacheRead : 0,
+		cacheWrite: typeof p.cacheWrite === "number" ? p.cacheWrite : 0,
+	};
 }
 
 /** Cost of one provider+model's token counts from the price table, or null when unpriced. */
@@ -233,13 +278,14 @@ export function estimateCost(
 	input: number,
 	output: number,
 	cacheRead: number,
+	cacheWrite: number,
 	modelId: string,
 	provider: string,
 	table: PriceTable = loadPriceTable(),
 ): number | null {
 	const p = findPrice(provider, modelId, table);
 	if (!p) return null;
-	return (input / 1e6) * p.input + (output / 1e6) * p.output + (cacheRead / 1e6) * p.cacheRead;
+	return (input / 1e6) * p.input + (output / 1e6) * p.output + (cacheRead / 1e6) * p.cacheRead + (cacheWrite / 1e6) * p.cacheWrite;
 }
 
 /** Scaled value with 1 decimal ("2.5k"); a value that rounds up to the next unit is promoted (999,999 -> "1M", not "1000k"). */
@@ -266,43 +312,67 @@ const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.
 /** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
  *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
 const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
-const CACHE_VERSION = 6; // v6: day buckets + cwd (v5 compact rows, v4 full rollup)
+const CACHE_VERSION = 7; // v7: cacheWrite + the billed split in the rows (v6 day buckets + cwd, v5 compact rows, v4 full rollup)
 
-/** The v6 disk shape: one-char keys, model rows in `r`, day rows in `d` (keyed
+/** The v7 disk shape: one-char keys, model rows in `r`, day rows in `d` (keyed
  *  `YYYY-MM-DD\0provider\0model`), the session cwd in `w` — provider-level and per-day
  *  rollups are derived on load, so every number is stored once. Keys on disk are
- *  paths relative to the sessions dir (the absolute path dominated the old size). */
+ *  paths relative to the sessions dir (the absolute path dominated the old size).
+ *  A row is `[msgs, input, output, cacheRead, cacheWrite, cost, billed]`; the 5-number
+ *  rows of v5/v6 are decoded with cacheWrite 0 and the whole cost counted as billed. */
 type DiskItem = {
 	m: number;
 	s: number;
 	c?: number;
-	r: Record<string, [number, number, number, number, number]>;
-	d?: Record<string, [number, number, number, number, number]>;
+	r: Record<string, [number, number, number, number, number, number, number]>;
+	d?: Record<string, [number, number, number, number, number, number, number]>;
 	w?: string;
 };
 
-/** Decode one disk item (v6 compact, v5 compact or v4 full) into the in-memory shape. */
+/** Decode one disk row: a 7-number v7 row verbatim, a pre-v7 5-number row with cacheWrite 0
+ *  and its cost counted as billed (that was the headline meaning before the split). */
+const rowOf = (a: unknown): [number, number, number, number, number, number, number] | null => {
+	if (!Array.isArray(a) || a.length < 5) return null;
+	return a.length >= 7
+		? [a[0]!, a[1]!, a[2]!, a[3]!, a[4]!, a[5]!, a[6]!]
+		: [a[0]!, a[1]!, a[2]!, a[3]!, 0, a[4]!, a[4]!];
+};
+
+/** Decode one disk item (v7 compact, v6/v5 compact or v4 full) into the in-memory shape. */
 function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	if (!raw || typeof raw !== "object") return null;
 	if ("rollup" in raw) {
 		const v4 = raw as FileCacheItem;
-		// A v4 rollup has no day buckets: default them so the v6 code paths always see the field.
-		return v4.rollup ? { ...v4, v: CACHE_VERSION, rollup: { days: {}, ...v4.rollup } } : null;
+		if (!v4.rollup) return null;
+		// A v4 rollup predates cache writes and the billed split: its cost counts as billed,
+		// so the migrated headline number is unchanged.
+		for (const r of Object.values(v4.rollup.providers)) {
+			if (typeof r.cacheWrite !== "number") r.cacheWrite = 0;
+			if (typeof r.billed !== "number") r.billed = r.cost;
+		}
+		// A v4 rollup has no day buckets: default them so the v7 code paths always see the field.
+		return { ...v4, v: CACHE_VERSION, rollup: { days: {}, ...v4.rollup } };
 	}
 	const d = raw as Partial<DiskItem>;
 	if (typeof d.m !== "number" || typeof d.s !== "number" || !d.r) return null;
 	const rollup: FileRollup = { providers: {}, days: {} };
+	// v7 rows are 7 numbers; a shorter row means a pre-v7 entry, stamped below 7 so the scan
+	// re-parses its file once and re-saves it with cache writes and the billed split.
+	const wide = Object.values(d.r).some((a) => Array.isArray(a) && a.length >= 7);
 	for (const [pm, a] of Object.entries(d.r)) {
-		if (!Array.isArray(a) || a.length < 5) continue;
-		const [msgs, input, output, cacheRead, cost] = a as [number, number, number, number, number];
-		Object.assign((rollup.providers[pm] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cost });
+		const row = rowOf(a);
+		if (!row) continue;
+		const [msgs, input, output, cacheRead, cacheWrite, cost, billed] = row;
+		Object.assign((rollup.providers[pm] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cacheWrite, cost, billed });
 		const p = (rollup.providers[pm.split("\u0000")[0]!] ??= emptyRollup());
 		p.sessions = 1;
 		p.msgs += msgs;
 		p.input += input;
 		p.output += output;
 		p.cacheRead += cacheRead;
+		p.cacheWrite += cacheWrite;
 		p.cost += cost;
+		p.billed += billed;
 	}
 	// v6 adds the day buckets (`d`) and the cwd (`w`). A compact item without `d` is a pre-v6
 	// entry: it decodes the same way, but is stamped v5 so the scan re-parses its file once
@@ -310,30 +380,31 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	const hasDays = d.d !== undefined;
 	if (hasDays) {
 		for (const [dk, a] of Object.entries(d.d!)) {
-			if (!Array.isArray(a) || a.length < 5) continue;
-			const [msgs, input, output, cacheRead, cost] = a as [number, number, number, number, number];
-			Object.assign((rollup.days[dk] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cost });
+			const row = rowOf(a);
+			if (!row) continue;
+			const [msgs, input, output, cacheRead, cacheWrite, cost, billed] = row;
+			Object.assign((rollup.days[dk] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cacheWrite, cost, billed });
 		}
 	}
 	return {
 		mtimeMs: d.m,
 		size: d.s,
-		v: hasDays ? CACHE_VERSION : 5,
+		v: hasDays ? (wide ? CACHE_VERSION : 6) : 5,
 		cwd: typeof d.w === "string" ? d.w : undefined,
 		consumed: typeof d.c === "number" ? d.c : d.s,
 		rollup,
 	};
 }
 
-/** Encode an in-memory item as v6: model rows in `r`, day rows in `d`, the cwd in `w`. */
+/** Encode an in-memory item as v7: model rows in `r`, day rows in `d`, the cwd in `w`. */
 function encodeDiskItem(item: FileCacheItem): DiskItem {
 	const r: DiskItem["r"] = {};
 	const d: DiskItem["d"] = {};
 	for (const [pm, roll] of Object.entries(item.rollup.providers)) {
-		if (pm.includes("\u0000")) r[pm] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cost];
+		if (pm.includes("\u0000")) r[pm] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cacheWrite, roll.cost, roll.billed];
 	}
 	for (const [dk, roll] of Object.entries(item.rollup.days)) {
-		d[dk] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cost];
+		d[dk] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cacheWrite, roll.cost, roll.billed];
 	}
 	const out: DiskItem = { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r, d };
 	if (item.cwd !== undefined) out.w = item.cwd;
@@ -438,7 +509,9 @@ function entryOfLine(line: string): UsageEntry | null {
 			input: Number(u.input) || 0,
 			output: Number(u.output) || 0,
 			cacheRead: Number(u.cacheRead) || 0,
+			cacheWrite: Number(u.cacheWrite) || 0,
 			cost: Number(u.cost?.total) || 0,
+			billed: u.cost?.totalFromProvider === true,
 			ts: Number(m.timestamp) || 0,
 		};
 	} catch {
@@ -535,6 +608,7 @@ let lastScanMs = 0;
  *  against itself and can never fail. */
 export function resetUsageCache(): void {
 	diskMemo = null;
+	priceMemo = null;
 	cachedSummary = null;
 	lastScanMs = 0;
 }
@@ -549,8 +623,22 @@ type ProviderMap = Map<
 		input: number;
 		output: number;
 		cacheRead: number;
+		cacheWrite: number;
 		cost: number;
-		models: Map<string, { sessions: Set<string>; msgs: number; input: number; output: number; cacheRead: number; cost: number }>;
+		billed: number;
+		models: Map<
+			string,
+			{
+				sessions: Set<string>;
+				msgs: number;
+				input: number;
+				output: number;
+				cacheRead: number;
+				cacheWrite: number;
+				cost: number;
+				billed: number;
+			}
+		>;
 	}
 >;
 
@@ -560,7 +648,7 @@ function foldFileIntoProviderMap(map: ProviderMap, file: string, rollup: FileRol
 		const sep = key.indexOf("\u0000");
 		const pname = sep === -1 ? key : key.slice(0, sep);
 		if (!map.has(pname)) {
-			map.set(pname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0, models: new Map() });
+			map.set(pname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, billed: 0, models: new Map() });
 		}
 		const p = map.get(pname)!;
 		p.sessions.add(file);
@@ -571,13 +659,15 @@ function foldFileIntoProviderMap(map: ProviderMap, file: string, rollup: FileRol
 			p.input += r.input;
 			p.output += r.output;
 			p.cacheRead += r.cacheRead;
+			p.cacheWrite += r.cacheWrite;
 			p.cost += r.cost;
+			p.billed += r.billed;
 			continue;
 		}
 
 		const mname = key.slice(sep + 1);
 		if (!p.models.has(mname)) {
-			p.models.set(mname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
+			p.models.set(mname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, billed: 0 });
 		}
 		const m = p.models.get(mname)!;
 		m.sessions.add(file);
@@ -585,7 +675,9 @@ function foldFileIntoProviderMap(map: ProviderMap, file: string, rollup: FileRol
 		m.input += r.input;
 		m.output += r.output;
 		m.cacheRead += r.cacheRead;
+		m.cacheWrite += r.cacheWrite;
 		m.cost += r.cost;
+		m.billed += r.billed;
 	}
 }
 
@@ -597,7 +689,16 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 
 	for (const [pName, pData] of map.entries()) {
 		const models: UsageModelStats[] = [];
+		let providerEstimate = 0;
 		for (const [mName, mData] of pData.models.entries()) {
+			// Billed and estimated never blend: `cost` keeps only the provider-billed part, while
+			// the catalog-estimate remainder — or, for a row that carried no cost at all, a
+			// price-table reconstruction with cache writes — lands in `estimatedCost`.
+			const estimatedCost =
+				mData.cost > 0
+					? mData.cost - mData.billed
+					: (estimateCost(mData.input, mData.output, mData.cacheRead, mData.cacheWrite, mName, pName, priceTable) ?? 0);
+			providerEstimate += estimatedCost;
 			models.push({
 				name: mName,
 				sessions: mData.sessions.size,
@@ -606,7 +707,8 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 				output: mData.output,
 				cacheRead: mData.cacheRead,
 				totalTokens: mData.input + mData.output,
-				cost: mData.cost,
+				cost: mData.billed,
+				estimatedCost,
 			});
 		}
 		models.sort((a, b) => b.totalTokens - a.totalTokens);
@@ -619,24 +721,13 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 			output: pData.output,
 			cacheRead: pData.cacheRead,
 			totalTokens: pData.input + pData.output,
-			cost: pData.cost,
+			cost: pData.billed,
+			estimatedCost: providerEstimate,
 			models,
 		});
 	}
 
 	providers.sort((a, b) => b.totalTokens - a.totalTokens);
-
-	// Estimate unpriced pairs from price table. Kept separate in estimatedCost.
-	for (const p of providers) {
-		let providerEstimate = 0;
-		for (const m of p.models) {
-			const est = m.cost > 0 ? null : estimateCost(m.input, m.output, m.cacheRead, m.name, p.name, priceTable);
-			m.estimatedCost = est ?? 0;
-			providerEstimate += m.estimatedCost;
-		}
-		p.estimatedCost = providerEstimate;
-	}
-
 	return providers;
 }
 
@@ -715,7 +806,9 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			t.input += r.input;
 			t.output += r.output;
 			t.cacheRead += r.cacheRead;
+			t.cacheWrite += r.cacheWrite;
 			t.cost += r.cost;
+			t.billed += r.billed;
 		}
 	}
 
@@ -796,7 +889,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		for (let i = 0; i < n; i++) {
 			const r = dayMap.get(dayKey(now - i * 86_400_000));
 			if (!r) continue;
-			cost += r.cost;
+			cost += r.billed;
 			input += r.input;
 			output += r.output;
 			cacheRead += r.cacheRead;
@@ -815,7 +908,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		reportedCost: totalCost,
 		estimatedCost,
 	};
-	// The windows exist only when the scan saw day buckets (a cache that is all v6).
+	// The windows exist only when the scan saw day buckets (a cache that is all v7).
 	if (dayMap.size > 0) {
 		totals.today = windowOf(1);
 		totals.last7d = windowOf(7);
@@ -873,7 +966,15 @@ if (isMain(import.meta.url)) {
 	const fixture = mkdtempSync(join(tmpdir(), "arnative-store-"));
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	const asst = (model: string, input: number, ts: number, cost = 0.02) =>
-		JSON.stringify({ message: { role: "assistant", provider: "google", model, timestamp: ts, usage: { input, output: 5, cacheRead: 1, cost: { total: cost } } } });
+		JSON.stringify({
+			message: {
+				role: "assistant",
+				provider: "google",
+				model,
+				timestamp: ts,
+				usage: { input, output: 5, cacheRead: 1, cacheWrite: 2, cost: { total: cost, totalFromProvider: true } },
+			},
+		});
 	const header = (cwd: string) => JSON.stringify({ type: "session", cwd });
 	const tsToday = Date.now();
 	const tsYesterday = Date.now() - 86_400_000;
@@ -912,8 +1013,11 @@ if (isMain(import.meta.url)) {
 	const disk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { r: Record<string, number[]>; d?: Record<string, number[]>; w?: string }>;
 	const relA = join("proj-a", "a.jsonl");
 	const msgsOf = (rows: Record<string, number[]>) => Object.values(rows).reduce((n, a) => n + a[0]!, 0);
-	assert(disk[relA]!.w === "/repo/alpha", "v6 stores the session cwd in w");
+	assert(disk[relA]!.w === "/repo/alpha", "v7 stores the session cwd in w");
 	assert(disk[relA]!.d !== undefined && msgsOf(disk[relA]!.d!) === msgsOf(disk[relA]!.r), "day buckets sum to the file total on disk");
+	const rowA = disk[relA]!.r["google\u0000m1"]!;
+	assert(rowA.length === 7 && rowA[4] === 4, "v7 rows carry cacheWrite (two entries x 2)");
+	assert(Math.abs(rowA[6]! - 0.04) < 1e-9, "v7 rows carry the billed split of the cost");
 	assert(
 		Object.keys(disk[relA]!.d!).every((k) => k.startsWith(`${today}\u0000`) || k.startsWith(`${yesterday}\u0000`)) && disk[relA]!.d![`${today}\u0000google\u0000m1`] !== undefined,
 		"day keys are the UTC day + provider + model",
@@ -930,8 +1034,8 @@ if (isMain(import.meta.url)) {
 	const grownDisk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { w?: string }>;
 	assert(grownDisk[relA]!.w === "/repo/alpha", "the cwd survives a tail fold on disk too");
 
-	// A pre-v6 (v5 compact, no `d`) cache item is re-parsed once from its file — not trusted —
-	// and re-saved as v6 with its days and cwd, yielding the file's own totals.
+	// A pre-v7 (v5 compact, no `d`) cache item is re-parsed once from its file — not trusted —
+	// and re-saved as v7 with its days, cwd, cache writes and billed split, yielding the file's own totals.
 	const fileC = join(fixture, "sessions", "proj-b", "c.jsonl");
 	writeFileSync(fileC, asst("m2", 11, tsToday) + NL);
 	const cStat = statSync(fileC);
@@ -944,7 +1048,47 @@ if (isMain(import.meta.url)) {
 	assert(reparsed.totals.msgs === 5 && reparsed.totals.input === 1168, "a v5 cache item is re-parsed from the file (the stale 99 is not counted)");
 	const afterDisk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { d?: Record<string, number[]>; w?: string }>;
 	const relC = join("proj-b", "c.jsonl");
-	assert(afterDisk[relC]!.d !== undefined && msgsOf(afterDisk[relC]!.d!) === 1, "the re-parsed item is re-saved as v6 with day buckets");
+	assert(afterDisk[relC]!.d !== undefined && msgsOf(afterDisk[relC]!.d!) === 1, "the re-parsed item is re-saved as v7 with day buckets");
+
+	// A v6 item (day buckets but 5-number rows) is also re-parsed once: its rows carry neither
+	// cacheWrite nor the billed split, so it is stamped 6 and not trusted.
+	const fileD = join(fixture, "sessions", "proj-b", "d.jsonl");
+	writeFileSync(fileD, asst("m2", 13, tsToday) + NL);
+	const dStat = statSync(fileD);
+	writeFileSync(
+		cachePath,
+		JSON.stringify({
+			[join("proj-b", "d.jsonl")]: {
+				m: dStat.mtimeMs,
+				s: dStat.size,
+				c: dStat.size,
+				r: { "google\u0000m2": [99, 999, 1, 1, 9] },
+				d: { [`${today}\u0000google\u0000m2`]: [99, 999, 1, 1, 9] },
+			},
+		}),
+	);
+	resetUsageCache();
+	const reparsed6 = collectUsageSummary(true);
+	assert(reparsed6.totals.msgs === 6 && reparsed6.totals.input === 1181, "a v6 cache item is re-parsed from its file (the stale 99 is not counted)");
+
+	// Price table: cacheWrite is priced like the other three, and an unchanged models.json is
+	// read once — two loadPriceTable() calls return the same memo object.
+	writeFileSync(
+		join(fixture, "models.json"),
+		JSON.stringify({ providers: { google: { models: [{ id: "m1", cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 3 } }] } } }),
+	);
+	const table1 = loadPriceTable();
+	assert(table1 === loadPriceTable(), "two loadPriceTable() calls with an unchanged file read it once (memo identity)");
+	assert(estimateCost(1_000_000, 0, 0, 0, "m1", "google") === 1, "input keeps its own rate");
+	assert(estimateCost(0, 0, 0, 1_000_000, "m1", "google") === 3, "cache writes use their own rate");
+	assert(Math.abs(estimateCost(0, 0, 1_000_000, 1_000_000, "m1", "google")! - 3.1) < 1e-9, "cache read and cache write add up");
+	await new Promise((r) => setTimeout(r, 5)); // mtime granularity: a rewrite must change the memo key
+	writeFileSync(
+		join(fixture, "models.json"),
+		JSON.stringify({ providers: { google: { models: [{ id: "m1", cost: { input: 10, output: 2, cacheRead: 0.1, cacheWrite: 3 } }] } } }),
+	);
+	const table2 = loadPriceTable();
+	assert(table2 !== table1 && estimateCost(1_000_000, 0, 0, 0, "m1", "google") === 10, "a changed models.json is re-read");
 
 	rmSync(fixture, { recursive: true, force: true });
 	console.log("usage-store.ts self-check OK");
