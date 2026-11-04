@@ -80,7 +80,7 @@ export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Selec
 export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
 /** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
 export function legendUsage(width: number): string {
-	const full = legend([MOVE.label, "Move"], ["Click", "Open/close"], [BACK.label, "Back"], [QUIT.label, "Exit"]);
+	const full = legend([MOVE.label, "Move"], ["Click", "Open/close"], ["v", "View"], [BACK.label, "Back"], [QUIT.label, "Exit"]);
 	return width >= visibleWidth(full) ? full : legend([QUIT.label, "Exit"]);
 }
 
@@ -131,6 +131,8 @@ if (isMain(import.meta.url)) {
 	assert(!CANCEL.matches("\x1b[D"), "[Esc] is not the back key");
 	assert(legendUsage(120).includes(`[${BACK_KEY_LABEL}] Back`), "a wide usage legend advertises back");
 	assert(legendUsage(120).includes("[Click] Open/close"), "a wide usage legend advertises the mouse");
+	assert(legendUsage(120).includes("[v] View"), "a wide usage legend advertises the view key the dashboard handles");
 	assert(legendUsage(20) === "[q/Esc] Exit", "a narrow usage legend degrades to the one key that still fits");
+	assert(!legendUsage(20).includes("[v]"), "the narrow usage legend drops the view key with the rest");
 	console.log("shortcuts.ts self-check OK");
 }

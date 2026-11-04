@@ -34,7 +34,9 @@ export function formatCount(n: number): string {
 // =============================================================================
 
 export interface RowItem {
-	type: "provider" | "model";
+	type: "project" | "provider" | "model";
+	/** Set on project rows, and on the provider rows nested under one in Project view. */
+	projectName?: string;
 	providerName: string;
 	modelName?: string;
 	label: string;
@@ -50,8 +52,13 @@ export interface RowItem {
 	expanded?: boolean;
 }
 
+/** The two dashboard views, cycled by `v`: Provider → Model (default) and Project → Provider. */
+type UsageView = "provider" | "project";
+
 export class UsageModalComponent implements Component {
 	private expandedProviders = new Set<string>();
+	private expandedProjects = new Set<string>();
+	private view: UsageView = "provider";
 	private selectedIndex = 0;
 	private summary: UsageSummary;
 
@@ -88,6 +95,46 @@ export class UsageModalComponent implements Component {
 
 	private buildFlatRows(): RowItem[] {
 		const rows: RowItem[] = [];
+		if (this.view === "project") {
+			// Same grid and columns as the Provider view, tree Project → Provider.
+			for (const proj of this.summary.projects) {
+				const isExpanded = this.expandedProjects.has(proj.name);
+				rows.push({
+					type: "project",
+					projectName: proj.name,
+					providerName: proj.name,
+					label: proj.name,
+					sessions: proj.sessions,
+					msgs: proj.msgs,
+					tokens: proj.totalTokens,
+					input: proj.input,
+					output: proj.output,
+					cacheRead: proj.cacheRead,
+					cost: proj.cost,
+					estimatedCost: proj.estimatedCost,
+					expanded: isExpanded,
+				});
+				if (isExpanded) {
+					for (const p of proj.providers) {
+						rows.push({
+							type: "provider",
+							projectName: proj.name,
+							providerName: p.name,
+							label: capitalize(p.name),
+							sessions: p.sessions,
+							msgs: p.msgs,
+							tokens: p.totalTokens,
+							input: p.input,
+							output: p.output,
+							cacheRead: p.cacheRead,
+							cost: p.cost,
+							estimatedCost: p.estimatedCost,
+						});
+					}
+				}
+			}
+			return rows;
+		}
 		for (const p of this.summary.providers) {
 			const isExpanded = this.expandedProviders.has(p.name);
 			rows.push({
@@ -130,11 +177,25 @@ export class UsageModalComponent implements Component {
 		return rows;
 	}
 
-	private toggleProvider(row: RowItem | undefined): boolean {
-		if (!row || row.type !== "provider") return false;
+	private toggleRow(row: RowItem | undefined): boolean {
+		if (!row) return false;
+		if (row.type === "project") {
+			if (this.expandedProjects.has(row.projectName!)) this.expandedProjects.delete(row.projectName!);
+			else this.expandedProjects.add(row.projectName!);
+			return true;
+		}
+		if (row.type !== "provider") return false;
 		if (this.expandedProviders.has(row.providerName)) this.expandedProviders.delete(row.providerName);
 		else this.expandedProviders.add(row.providerName);
 		return true;
+	}
+
+	/** Cycle the view: Provider → Project → Provider. One key, one grid, one legend. */
+	private cycleView(): void {
+		this.view = this.view === "provider" ? "project" : "provider";
+		if (this.view === "project" && this.expandedProjects.size === 0 && this.summary.projects.length > 0) {
+			this.expandedProjects.add(this.summary.projects[0]!.name);
+		}
 	}
 
 	handleInput(keyData: string): void {
@@ -164,7 +225,12 @@ export class UsageModalComponent implements Component {
 			return;
 		}
 		if (matchesKey(keyData, "enter") || matchesKey(keyData, "space")) {
-			if (this.toggleProvider(rows[this.selectedIndex])) this.requestRender();
+			if (this.toggleRow(rows[this.selectedIndex])) this.requestRender();
+			return;
+		}
+		if (matchesKey(keyData, "v")) {
+			this.cycleView();
+			this.requestRender();
 		}
 	}
 
@@ -182,7 +248,7 @@ export class UsageModalComponent implements Component {
 		}
 		if (event.type === "click") {
 			this.selectedIndex = hit.index;
-			this.toggleProvider(this.buildFlatRows()[hit.index]);
+			this.toggleRow(this.buildFlatRows()[hit.index]);
 			return { handled: true, render: true };
 		}
 		// Press: claim the row so the terminal tracks it for the follow-up click.
@@ -231,9 +297,11 @@ export class UsageModalComponent implements Component {
 		const messagesW = narrow ? 0 : colW.messages;
 		// No leading gutter: the header is content, so it starts on the same left edge as the
 		// box title, the detail line and the Total row. The rows' numeric columns are measured
-		// to land on this grid despite their arrow.
+		// to land on this grid despite their arrow. The header names the tree's two levels;
+		// the grid under it never moves between views.
+		const nameHeader = this.view === "project" ? "Project / Provider" : "Provider / Model";
 		const headerText =
-			formatCol(th.fg("dim", "Provider / Model"), colW.name, false) +
+			formatCol(th.fg("dim", nameHeader), colW.name, false) +
 			formatCol(th.fg("dim", "Session"), sessionW) +
 			formatCol(th.fg("dim", "Messages"), messagesW) +
 			formatCol(th.fg("dim", "Tokens"), colW.tokens) +
@@ -272,9 +340,11 @@ export class UsageModalComponent implements Component {
 			const costCell = item.cost > 0 ? formatCost(item.cost) : item.estimatedCost > 0 ? `~${formatCost(item.estimatedCost)}` : "-";
 			const cCost = formatCol(paintVal(costCell), colW.cost);
 
-			// Gutter: expand arrow for provider or blank indent for model.
+			// Gutter: expand arrow on the tree's top level (provider in Provider view, project
+			// in Project view), blank indent for the rows beneath it.
+			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
 			const gutterText =
-				item.type === "provider" ? (item.expanded ? soft("▾") : dim("▸")) : " ";
+				item.type === groupType ? (item.expanded ? soft("▾") : dim("▸")) : " ";
 			const line = gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
@@ -298,6 +368,11 @@ export class UsageModalComponent implements Component {
 
 		// Same left edge as the header: one table, three bands, one column grid.
 		body.push(totalName + totalSess + totalMsgs + totalToks + totalCost);
+
+		// Day buckets, when the cache holds them: one dim line under the Total band.
+		if (t.today && t.last7d && t.last30d) {
+			body.push(dim(`today ${formatCost(t.today.cost)} · 7d ${formatCost(t.last7d.cost)} · 30d ${formatCost(t.last30d.cost)}`));
+		}
 
 		// Unreported cost estimate displayed separately from verified cost total.
 		const est = t.estimatedCost;
@@ -324,7 +399,8 @@ export class UsageModalComponent implements Component {
 	): string {
 		if (!row) return soft("No usage recorded yet.");
 		const icon = `${accent("\uf4bc")} `;
-		const title = row.type === "provider" ? row.providerName : `${row.providerName} · ${row.modelName}`;
+		const title =
+			row.type === "model" ? `${row.providerName} · ${row.modelName}` : row.type === "project" ? row.projectName! : row.providerName;
 		const parts = [
 			`↑${formatTokens(row.input)}`,
 			`↓${formatTokens(row.output)}`,
@@ -811,6 +887,7 @@ if (isMain(import.meta.url)) {
 			},
 		],
 		totals: { sessions: 2, msgs: 3, input: 3_200_000, output: 1_126_000, cacheRead: 2_000_000, totalTokens: 4_326_000, cost: 0.65, reportedCost: 0.65, estimatedCost: 0.546 },
+		projects: [],
 	};
 	(estModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set(["alpha"]);
 	const estLines = estModal.render(90);
@@ -831,6 +908,65 @@ if (isMain(import.meta.url)) {
 			`cost is never clipped at width ${w}`,
 		);
 	}
+
+	// The day-bucket line under the Total band appears only when the summary carries buckets.
+	assert(!estBody.includes("today $"), "no day-bucket line when the cache holds no buckets");
+	assert(
+		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => plain(l).includes("[v] View")),
+		"the rendered legend advertises the view key",
+	);
+
+	// View cycle (`v`): Provider → Project → Provider. The Project view keeps the one column
+	// grid, its project rows sum to the Total row, and the day line sits under the Total band.
+	const viewModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high");
+	const win = { cost: 0.07, input: 1300, output: 35, cacheRead: 6 };
+	(viewModal as unknown as { summary: unknown }).summary = {
+		providers: [
+			{
+				name: "alpha", sessions: 2, msgs: 3, input: 1200, output: 30, cacheRead: 5, totalTokens: 1230, cost: 0.05, estimatedCost: 0,
+				models: [{ name: "m1", sessions: 2, msgs: 3, input: 1200, output: 30, cacheRead: 5, totalTokens: 1230, cost: 0.05, estimatedCost: 0 }],
+			},
+			{
+				name: "beta", sessions: 1, msgs: 1, input: 100, output: 5, cacheRead: 1, totalTokens: 105, cost: 0.02, estimatedCost: 0,
+				models: [{ name: "m2", sessions: 1, msgs: 1, input: 100, output: 5, cacheRead: 1, totalTokens: 105, cost: 0.02, estimatedCost: 0 }],
+			},
+		],
+		projects: [
+			{
+				name: "/repo/alpha", sessions: 2, msgs: 3, input: 1200, output: 30, cacheRead: 5, totalTokens: 1230, cost: 0.05, estimatedCost: 0,
+				providers: [{ name: "alpha", sessions: 2, msgs: 3, input: 1200, output: 30, cacheRead: 5, totalTokens: 1230, cost: 0.05, estimatedCost: 0, models: [] }],
+			},
+			{
+				name: "unknown", sessions: 1, msgs: 1, input: 100, output: 5, cacheRead: 1, totalTokens: 105, cost: 0.02, estimatedCost: 0,
+				providers: [{ name: "beta", sessions: 1, msgs: 1, input: 100, output: 5, cacheRead: 1, totalTokens: 105, cost: 0.02, estimatedCost: 0, models: [] }],
+			},
+		],
+		totals: { sessions: 3, msgs: 4, input: 1300, output: 35, cacheRead: 6, totalTokens: 1335, cost: 0.07, reportedCost: 0.07, estimatedCost: 0, today: win, last7d: win, last30d: win },
+	};
+	(viewModal as unknown as { expandedProjects: Set<string> }).expandedProjects = new Set(["/repo/alpha"]);
+	const provHeader = plain(viewModal.render(100).find((l) => l.includes("Provider / Model"))!);
+	viewModal.handleInput("v");
+	const projLines = viewModal.render(100);
+	const projBody = projLines.map(plain).join("\n");
+	const projHeader = plain(projLines.find((l) => l.includes("Project / Provider"))!);
+	assert(projBody.includes("Project / Provider"), "`v` switches the header to the Project view");
+	for (const col of ["Session", "Messages", "Tokens", "Cost"]) {
+		assert(provHeader.indexOf(col) === projHeader.indexOf(col), `the Project view keeps the ${col} column on the same cell`);
+	}
+	// The last right-aligned cell of a row is its Cost column.
+	const costCell = (l: string) => plain(l).replace(/\u2502$/, "").trimEnd().slice(-10).trim();
+	const num = (cell: string) => (cell.startsWith("$") ? parseFloat(cell.slice(1)) : 0);
+	const projRows = projLines.filter((l) => /^\u2502 [\u25be\u25b8]/.test(plain(l)));
+	const totalCell = costCell(projLines.find((l) => plain(l).includes("Total"))!);
+	assert(projRows.length === 2, "the Project view renders one row per project");
+	assert(
+		Math.abs(projRows.reduce((n, l) => n + num(costCell(l)), 0) - num(totalCell)) < 1e-9,
+		`the project rows sum to the Total row, got ${projRows.map(costCell)} vs ${totalCell}`,
+	);
+	assert(projBody.includes("today $0.07 · 7d $0.07 · 30d $0.07"), "the day-bucket line renders under the Total band");
+	assert(projLines.findIndex((l) => plain(l).includes("today $0.07")) > projLines.findIndex((l) => plain(l).includes("Total")), "the day line sits under the Total row");
+	viewModal.handleInput("v");
+	assert(viewModal.render(100).some((l) => plain(l).includes("Provider / Model")), "`v` cycles back to the Provider view");
 
 	console.log("usage.ts self-check OK");
 }

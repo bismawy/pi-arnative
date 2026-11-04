@@ -5,10 +5,14 @@
  *   memory once (parsing 4MB per header frame cost ~50ms and lagged long chats).
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
+ * - Rollups also keep per-day buckets (UTC) and the session cwd, so /usage can answer
+ *   "today" and "per project" from the cache without a full re-scan.
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { assert, isMain } from "./check.ts";
 
 interface UsageEntry {
 	provider: string;
@@ -17,12 +21,17 @@ interface UsageEntry {
 	output: number;
 	cacheRead: number;
 	cost: number;
+	/** Message timestamp (ms), kept so entries can be bucketed per day. 0 when absent. */
+	ts: number;
 }
 
 interface FileCacheItem {
 	mtimeMs: number;
 	size: number;
 	v?: number;
+	/** The session's cwd, from the first line of the file. Absent on a tail-only parse, where
+	 *  the value already stored in the cache item is kept (the head is not re-read). */
+	cwd?: string;
 	/** Byte offset of the last complete line parsed. Session files are append-only, so a
 	 *  grown file only needs its tail read — re-parsing the whole 1MB+ active session on the
 	 *  5s render path cost ~15ms and grew with chat length. */
@@ -33,9 +42,12 @@ interface FileCacheItem {
 	rollup: FileRollup;
 }
 
-/** Usage totals for one session file, per provider and per provider+model. */
+/** Usage totals for one session file, per provider and per provider+model, plus per-day rows. */
 interface FileRollup {
 	providers: Record<string, Rollup>;
+	/** Day buckets keyed `YYYY-MM-DD\0provider\0model` (UTC day — see dayKey), so the disk `d`
+	 *  map reuses the provider rows' compact array and a day's totals are the sum of its rows. */
+	days: Record<string, Rollup>;
 }
 
 interface Rollup {
@@ -57,7 +69,13 @@ function addToRollup(r: Rollup, e: UsageEntry): void {
 	r.cost += e.cost;
 }
 
-/** Fold entries into an existing file rollup, updating provider and provider+model keys together. */
+/** UTC day bucket key (`YYYY-MM-DD`) of a timestamp. UTC on purpose: local time would make the
+ *  on-disk cache depend on the timezone of the machine that wrote it, so a restore elsewhere
+ *  would re-bucket every entry. */
+const dayKey = (ts: number): string => new Date(ts > 0 ? ts : 0).toISOString().slice(0, 10);
+
+/** Fold entries into an existing file rollup, updating provider, provider+model and day keys
+ *  together in one pass over the entries. */
 function foldInto(rollup: FileRollup, entries: UsageEntry[]): void {
 	if (entries.length === 0) return;
 	for (const e of entries) {
@@ -66,14 +84,18 @@ function foldInto(rollup: FileRollup, entries: UsageEntry[]): void {
 		addToRollup(rollup.providers[e.provider]!, e);
 		(rollup.providers[key] ??= emptyRollup());
 		addToRollup(rollup.providers[key]!, e);
+		const day = `${dayKey(e.ts)}\u0000${key}`;
+		(rollup.days[day] ??= emptyRollup());
+		addToRollup(rollup.days[day]!, e);
 	}
 	// `sessions` counts the file, not the messages, so it is 1 once the file has any use.
 	for (const key of Object.keys(rollup.providers)) rollup.providers[key]!.sessions = 1;
+	for (const key of Object.keys(rollup.days)) rollup.days[key]!.sessions = 1;
 }
 
 /** The rollup of a freshly parsed file (a foldInto that starts from nothing). */
 function rollupOfFile(entries: UsageEntry[]): FileRollup {
-	const rollup: FileRollup = { providers: {} };
+	const rollup: FileRollup = { providers: {}, days: {} };
 	foldInto(rollup, entries);
 	return rollup;
 }
@@ -105,8 +127,33 @@ interface UsageProviderStats {
 	models: UsageModelStats[];
 }
 
+/** Per-project (cwd) stats: the same fields as a provider row, with the providers seen in that
+ *  project as its children, so `/usage` can tree Project → Provider. */
+export interface UsageProjectStats {
+	name: string;
+	sessions: number;
+	msgs: number;
+	input: number;
+	output: number;
+	cacheRead: number;
+	totalTokens: number;
+	cost: number;
+	estimatedCost: number;
+	providers: UsageProviderStats[];
+}
+
+/** One day-window total, summed from the day buckets. */
+export interface UsageDayWindow {
+	cost: number;
+	input: number;
+	output: number;
+	cacheRead: number;
+}
+
 export interface UsageSummary {
 	providers: UsageProviderStats[];
+	/** Per-project rollup; `"unknown"` for files whose header carried no cwd. */
+	projects: UsageProjectStats[];
 	totals: {
 		sessions: number;
 		msgs: number;
@@ -119,6 +166,10 @@ export interface UsageSummary {
 		reportedCost: number;
 		/** Cost reconstructed from `models.json` rates. Shown with a `~`, never folded into `cost`. */
 		estimatedCost: number;
+		/** Day-bucket windows, present only when the scan saw day buckets (a v6 cache). */
+		today?: UsageDayWindow;
+		last7d?: UsageDayWindow;
+		last30d?: UsageDayWindow;
 	};
 }
 
@@ -215,23 +266,32 @@ const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.
 /** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
  *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
 const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
-const CACHE_VERSION = 4; // v4: per-file rollup (was raw entries in v3)
+const CACHE_VERSION = 6; // v6: day buckets + cwd (v5 compact rows, v4 full rollup)
 
-/** The v5 disk shape: one-char keys, and only provider\0model rows — provider-level
+/** The v6 disk shape: one-char keys, model rows in `r`, day rows in `d` (keyed
+ *  `YYYY-MM-DD\0provider\0model`), the session cwd in `w` — provider-level and per-day
  *  rollups are derived on load, so every number is stored once. Keys on disk are
  *  paths relative to the sessions dir (the absolute path dominated the old size). */
-type DiskItem = { m: number; s: number; c?: number; r: Record<string, [number, number, number, number, number]> };
+type DiskItem = {
+	m: number;
+	s: number;
+	c?: number;
+	r: Record<string, [number, number, number, number, number]>;
+	d?: Record<string, [number, number, number, number, number]>;
+	w?: string;
+};
 
-/** Decode one disk item (v5 compact or v4 full) into the in-memory shape. */
+/** Decode one disk item (v6 compact, v5 compact or v4 full) into the in-memory shape. */
 function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	if (!raw || typeof raw !== "object") return null;
 	if ("rollup" in raw) {
 		const v4 = raw as FileCacheItem;
-		return v4.rollup ? { ...v4, v: CACHE_VERSION } : null;
+		// A v4 rollup has no day buckets: default them so the v6 code paths always see the field.
+		return v4.rollup ? { ...v4, v: CACHE_VERSION, rollup: { days: {}, ...v4.rollup } } : null;
 	}
 	const d = raw as Partial<DiskItem>;
 	if (typeof d.m !== "number" || typeof d.s !== "number" || !d.r) return null;
-	const rollup: FileRollup = { providers: {} };
+	const rollup: FileRollup = { providers: {}, days: {} };
 	for (const [pm, a] of Object.entries(d.r)) {
 		if (!Array.isArray(a) || a.length < 5) continue;
 		const [msgs, input, output, cacheRead, cost] = a as [number, number, number, number, number];
@@ -244,16 +304,40 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 		p.cacheRead += cacheRead;
 		p.cost += cost;
 	}
-	return { mtimeMs: d.m, size: d.s, v: CACHE_VERSION, consumed: typeof d.c === "number" ? d.c : d.s, rollup };
+	// v6 adds the day buckets (`d`) and the cwd (`w`). A compact item without `d` is a pre-v6
+	// entry: it decodes the same way, but is stamped v5 so the scan re-parses its file once
+	// and re-saves it with its days (that one re-parse is what a version bump costs).
+	const hasDays = d.d !== undefined;
+	if (hasDays) {
+		for (const [dk, a] of Object.entries(d.d!)) {
+			if (!Array.isArray(a) || a.length < 5) continue;
+			const [msgs, input, output, cacheRead, cost] = a as [number, number, number, number, number];
+			Object.assign((rollup.days[dk] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cost });
+		}
+	}
+	return {
+		mtimeMs: d.m,
+		size: d.s,
+		v: hasDays ? CACHE_VERSION : 5,
+		cwd: typeof d.w === "string" ? d.w : undefined,
+		consumed: typeof d.c === "number" ? d.c : d.s,
+		rollup,
+	};
 }
 
-/** Encode an in-memory item as v5: model rows only (see DiskItem). */
+/** Encode an in-memory item as v6: model rows in `r`, day rows in `d`, the cwd in `w`. */
 function encodeDiskItem(item: FileCacheItem): DiskItem {
 	const r: DiskItem["r"] = {};
+	const d: DiskItem["d"] = {};
 	for (const [pm, roll] of Object.entries(item.rollup.providers)) {
 		if (pm.includes("\u0000")) r[pm] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cost];
 	}
-	return { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r };
+	for (const [dk, roll] of Object.entries(item.rollup.days)) {
+		d[dk] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cost];
+	}
+	const out: DiskItem = { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r, d };
+	if (item.cwd !== undefined) out.w = item.cwd;
+	return out;
 }
 
 // Disk cache is memoized; save writes memory + disk together.
@@ -355,31 +439,51 @@ function entryOfLine(line: string): UsageEntry | null {
 			output: Number(u.output) || 0,
 			cacheRead: Number(u.cacheRead) || 0,
 			cost: Number(u.cost?.total) || 0,
+			ts: Number(m.timestamp) || 0,
 		};
 	} catch {
 		return null;
 	}
 }
 
+/** The cwd of a session-header line (`{"type":"session",...,"cwd":...}`), the first line of a
+ *  session file. Undefined for any other line, so a tail parse reports none and the caller
+ *  keeps the value already stored in the cache item. */
+function sessionCwdOf(line: string): string | undefined {
+	if (!line.includes('"type"')) return undefined;
+	try {
+		const o = JSON.parse(line) as { type?: unknown; cwd?: unknown };
+		return o?.type === "session" && typeof o.cwd === "string" ? o.cwd : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Parse newline-terminated lines from a buffer. The returned offset is byte-granular, so it can
  * be fed back to `readSync`; a trailing segment without a newline counts only when it parses, so
- * a write caught mid-flight is left for the next scan rather than dropped.
+ * a write caught mid-flight is left for the next scan rather than dropped. `cwd` is set only
+ * when the buffer starts with the session header, i.e. on a whole-file parse.
  */
-function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number } {
+function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number; cwd?: string } {
 	const entries: UsageEntry[] = [];
 	let start = 0;
 	let consumed = 0;
+	let cwd: string | undefined;
 	for (;;) {
 		const nl = buf.indexOf(10, start);
 		if (nl === -1) break;
-		const entry = entryOfLine(buf.toString("utf8", start, nl));
+		const line = buf.toString("utf8", start, nl);
+		// Only the buffer's first line can be the session header; a tail never contains it.
+		if (start === 0) cwd = sessionCwdOf(line) ?? cwd;
+		const entry = entryOfLine(line);
 		if (entry) entries.push(entry);
 		start = nl + 1;
 		consumed = start;
 	}
 	if (start < buf.length) {
 		const tail = buf.toString("utf8", start);
+		if (start === 0) cwd = sessionCwdOf(tail) ?? cwd;
 		const entry = entryOfLine(tail);
 		if (entry) {
 			entries.push(entry);
@@ -390,7 +494,7 @@ function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number } {
 		}
 		// Anything else is a half-written record; leave it for the next scan.
 	}
-	return { entries, consumed };
+	return { entries, consumed, cwd };
 }
 
 /** True when the text parses as JSON. Used to tell a whole record from a half-written one. */
@@ -435,132 +539,63 @@ export function resetUsageCache(): void {
 	lastScanMs = 0;
 }
 
-export function collectUsageSummary(forceScan = false): UsageSummary {
-	const now = Date.now();
-	if (!forceScan && cachedSummary && now - lastScanMs < 5000) {
-		return cachedSummary;
+/** A provider map as folded per file: provider → its models. Shared by the global provider
+ *  list and each project's breakdown, so both count exactly the same rows. */
+type ProviderMap = Map<
+	string,
+	{
+		sessions: Set<string>;
+		msgs: number;
+		input: number;
+		output: number;
+		cacheRead: number;
+		cost: number;
+		models: Map<string, { sessions: Set<string>; msgs: number; input: number; output: number; cacheRead: number; cost: number }>;
 	}
+>;
 
-	const sessionsDir = join(getAgentDir(), "sessions");
-	const files = scanSessionFiles(sessionsDir);
-	const diskCache = loadDiskCache();
-	let cacheDirty = false;
-
-	const providerMap = new Map<
-		string,
-		{
-			sessions: Set<string>;
-			msgs: number;
-			input: number;
-			output: number;
-			cacheRead: number;
-			cost: number;
-			models: Map<string, { sessions: Set<string>; msgs: number; input: number; output: number; cacheRead: number; cost: number }>;
+/** Fold one file's rollup rows into a provider map. */
+function foldFileIntoProviderMap(map: ProviderMap, file: string, rollup: FileRollup): void {
+	for (const [key, r] of Object.entries(rollup.providers)) {
+		const sep = key.indexOf("\u0000");
+		const pname = sep === -1 ? key : key.slice(0, sep);
+		if (!map.has(pname)) {
+			map.set(pname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0, models: new Map() });
 		}
-	>();
+		const p = map.get(pname)!;
+		p.sessions.add(file);
 
-	for (const file of files) {
-		let stat;
-		try {
-			stat = statSync(file);
-		} catch {
+		if (sep === -1) {
+			// Provider-level key: the message totals belong here only.
+			p.msgs += r.msgs;
+			p.input += r.input;
+			p.output += r.output;
+			p.cacheRead += r.cacheRead;
+			p.cost += r.cost;
 			continue;
 		}
 
-		let cached = diskCache.get(file);
-		if (!(cached && cached.v === CACHE_VERSION && cached.rollup)) cached = undefined;
-
-		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-			// Unchanged since the last scan: its rollup already holds everything.
-		} else if (cached && (cached.consumed ?? 0) > 0 && stat.size > (cached.consumed ?? 0)) {
-			// Grew, and a prefix was already parsed: read only the appended tail and fold it into
-			// the existing rollup. (A shrunk file, or one whose size is below the offset,
-			// re-parses whole — see the final branch.)
-			const tail = readTail(file, cached.consumed!);
-			const parsed = tail ? parseBuffer(tail) : null;
-			if (parsed) {
-				foldInto(cached.rollup, parsed.entries);
-				cached.consumed = cached.consumed! + parsed.consumed;
-				cached.mtimeMs = stat.mtimeMs;
-				cached.size = stat.size;
-			} else {
-				// Unreadable: fall back to whole-file.
-				const full = parseBuffer(readFileSync(file));
-				cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
-				diskCache.set(file, cached);
-			}
-			cacheDirty = true;
-		} else {
-			const full = parseBuffer(readFileSync(file));
-			cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
-			diskCache.set(file, cached);
-			cacheDirty = true;
+		const mname = key.slice(sep + 1);
+		if (!p.models.has(mname)) {
+			p.models.set(mname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
 		}
-
-		for (const [key, r] of Object.entries(cached.rollup.providers)) {
-			const sep = key.indexOf("\u0000");
-			const pname = sep === -1 ? key : key.slice(0, sep);
-			if (!providerMap.has(pname)) {
-				providerMap.set(pname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0, models: new Map() });
-			}
-			const p = providerMap.get(pname)!;
-			p.sessions.add(file);
-
-			if (sep === -1) {
-				// Provider-level key: the message totals belong here only.
-				p.msgs += r.msgs;
-				p.input += r.input;
-				p.output += r.output;
-				p.cacheRead += r.cacheRead;
-				p.cost += r.cost;
-				continue;
-			}
-
-			const mname = key.slice(sep + 1);
-			if (!p.models.has(mname)) {
-				p.models.set(mname, { sessions: new Set(), msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
-			}
-			const m = p.models.get(mname)!;
-			m.sessions.add(file);
-			m.msgs += r.msgs;
-			m.input += r.input;
-			m.output += r.output;
-			m.cacheRead += r.cacheRead;
-			m.cost += r.cost;
-		}
+		const m = p.models.get(mname)!;
+		m.sessions.add(file);
+		m.msgs += r.msgs;
+		m.input += r.input;
+		m.output += r.output;
+		m.cacheRead += r.cacheRead;
+		m.cost += r.cost;
 	}
+}
 
-	// Session files deleted on disk must leave the cache, or the file grows forever.
-	const known = new Set(files);
-	for (const k of diskCache.keys()) {
-		if (!known.has(k)) {
-			diskCache.delete(k);
-			cacheDirty = true;
-		}
-	}
-
-	if (cacheDirty) {
-		saveDiskCache(diskCache);
-	}
-
-	// Fold per-provider results into totals
-	let totalMsgs = 0;
-	let totalInp = 0;
-	let totalOut = 0;
-	let totalCache = 0;
-	let totalCost = 0;
-
-	const allSessions = new Set<string>();
+/** Build the sorted provider rows (models sorted, estimates filled) from a folded provider
+ *  map — used for the global list and for each project's providers, so both read the same
+ *  numbers the same way. */
+function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProviderStats[] {
 	const providers: UsageProviderStats[] = [];
 
-	for (const [pName, pData] of providerMap.entries()) {
-		for (const s of pData.sessions) allSessions.add(s);
-		totalMsgs += pData.msgs;
-		totalInp += pData.input;
-		totalOut += pData.output;
-		totalCache += pData.cacheRead;
-		totalCost += pData.cost;
-
+	for (const [pName, pData] of map.entries()) {
 		const models: UsageModelStats[] = [];
 		for (const [mName, mData] of pData.models.entries()) {
 			models.push({
@@ -592,8 +627,6 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	providers.sort((a, b) => b.totalTokens - a.totalTokens);
 
 	// Estimate unpriced pairs from price table. Kept separate in estimatedCost.
-	const priceTable = loadPriceTable();
-	let estimatedCost = 0;
 	for (const p of providers) {
 		let providerEstimate = 0;
 		for (const m of p.models) {
@@ -602,23 +635,194 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			providerEstimate += m.estimatedCost;
 		}
 		p.estimatedCost = providerEstimate;
-		estimatedCost += providerEstimate;
 	}
 
-	cachedSummary = {
-		providers,
-		totals: {
-			sessions: allSessions.size,
-			msgs: totalMsgs,
-			input: totalInp,
-			output: totalOut,
-			cacheRead: totalCache,
-			totalTokens: totalInp + totalOut,
-			cost: totalCost,
-			reportedCost: totalCost,
-			estimatedCost,
-		},
+	return providers;
+}
+
+export function collectUsageSummary(forceScan = false): UsageSummary {
+	const now = Date.now();
+	if (!forceScan && cachedSummary && now - lastScanMs < 5000) {
+		return cachedSummary;
+	}
+
+	const sessionsDir = join(getAgentDir(), "sessions");
+	const files = scanSessionFiles(sessionsDir);
+	const diskCache = loadDiskCache();
+	let cacheDirty = false;
+
+	const priceTable = loadPriceTable();
+	const providerMap: ProviderMap = new Map();
+	/** Per-project aggregation: a file's project is its cwd, so each file folds into exactly
+	 *  one entry, whose providers keep their own model rows for the Project view. */
+	const projectMap = new Map<string, { sessions: Set<string>; providers: ProviderMap }>();
+	/** Day buckets across all files, keyed by the UTC day (the `day\0provider\0model` prefix). */
+	const dayMap = new Map<string, Rollup>();
+
+	for (const file of files) {
+		let stat;
+		try {
+			stat = statSync(file);
+		} catch {
+			continue;
+		}
+
+		let cached = diskCache.get(file);
+		if (!(cached && cached.v === CACHE_VERSION && cached.rollup)) cached = undefined;
+
+		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+			// Unchanged since the last scan: its rollup already holds everything.
+		} else if (cached && (cached.consumed ?? 0) > 0 && stat.size > (cached.consumed ?? 0)) {
+			// Grew, and a prefix was already parsed: read only the appended tail and fold it into
+			// the existing rollup. (A shrunk file, or one whose size is below the offset,
+			// re-parses whole — see the final branch.) The cwd stays the one already stored:
+			// the tail does not contain the session header, so the head is not re-read.
+			const tail = readTail(file, cached.consumed!);
+			const parsed = tail ? parseBuffer(tail) : null;
+			if (parsed) {
+				foldInto(cached.rollup, parsed.entries);
+				cached.consumed = cached.consumed! + parsed.consumed;
+				cached.mtimeMs = stat.mtimeMs;
+				cached.size = stat.size;
+			} else {
+				// Unreadable: fall back to whole-file.
+				const full = parseBuffer(readFileSync(file));
+				cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, cwd: full.cwd ?? cached.cwd, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+				diskCache.set(file, cached);
+			}
+			cacheDirty = true;
+		} else {
+			// Whole-file parse: the session header (first line) carries the cwd.
+			const full = parseBuffer(readFileSync(file));
+			cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, cwd: full.cwd ?? cached?.cwd, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+			diskCache.set(file, cached);
+			cacheDirty = true;
+		}
+
+		// A file with no cwd in its cache item lands in "unknown" rather than being re-read.
+		const projectName = cached.cwd ?? "unknown";
+		let project = projectMap.get(projectName);
+		if (!project) projectMap.set(projectName, (project = { sessions: new Set(), providers: new Map() }));
+		project.sessions.add(file);
+		foldFileIntoProviderMap(providerMap, file, cached.rollup);
+		foldFileIntoProviderMap(project.providers, file, cached.rollup);
+		for (const [dk, r] of Object.entries(cached.rollup.days)) {
+			// Day keys start with the fixed-width `YYYY-MM-DD`.
+			const day = dk.slice(0, 10);
+			let t = dayMap.get(day);
+			if (!t) dayMap.set(day, (t = emptyRollup()));
+			t.msgs += r.msgs;
+			t.input += r.input;
+			t.output += r.output;
+			t.cacheRead += r.cacheRead;
+			t.cost += r.cost;
+		}
+	}
+
+	// Session files deleted on disk must leave the cache, or the file grows forever.
+	const known = new Set(files);
+	for (const k of diskCache.keys()) {
+		if (!known.has(k)) {
+			diskCache.delete(k);
+			cacheDirty = true;
+		}
+	}
+
+	if (cacheDirty) {
+		saveDiskCache(diskCache);
+	}
+
+	const providers = providerStatsOf(providerMap, priceTable);
+
+	// Fold per-provider results into totals
+	let totalMsgs = 0;
+	let totalInp = 0;
+	let totalOut = 0;
+	let totalCache = 0;
+	let totalCost = 0;
+	let estimatedCost = 0;
+
+	const allSessions = new Set<string>();
+	for (const pData of providerMap.values()) {
+		for (const s of pData.sessions) allSessions.add(s);
+	}
+	for (const p of providers) {
+		totalMsgs += p.msgs;
+		totalInp += p.input;
+		totalOut += p.output;
+		totalCache += p.cacheRead;
+		totalCost += p.cost;
+		estimatedCost += p.estimatedCost;
+	}
+
+	const projects: UsageProjectStats[] = [];
+	for (const [name, pData] of projectMap.entries()) {
+		const pStats = providerStatsOf(pData.providers, priceTable);
+		let msgs = 0;
+		let input = 0;
+		let output = 0;
+		let cacheRead = 0;
+		let cost = 0;
+		let est = 0;
+		for (const ps of pStats) {
+			msgs += ps.msgs;
+			input += ps.input;
+			output += ps.output;
+			cacheRead += ps.cacheRead;
+			cost += ps.cost;
+			est += ps.estimatedCost;
+		}
+		projects.push({
+			name,
+			sessions: pData.sessions.size,
+			msgs,
+			input,
+			output,
+			cacheRead,
+			totalTokens: input + output,
+			cost,
+			estimatedCost: est,
+			providers: pStats,
+		});
+	}
+	projects.sort((a, b) => b.totalTokens - a.totalTokens);
+
+	/** Sum of the day buckets over the last `n` UTC days, today included. */
+	const windowOf = (n: number): UsageDayWindow => {
+		let cost = 0;
+		let input = 0;
+		let output = 0;
+		let cacheRead = 0;
+		for (let i = 0; i < n; i++) {
+			const r = dayMap.get(dayKey(now - i * 86_400_000));
+			if (!r) continue;
+			cost += r.cost;
+			input += r.input;
+			output += r.output;
+			cacheRead += r.cacheRead;
+		}
+		return { cost, input, output, cacheRead };
 	};
+
+	const totals: UsageSummary["totals"] = {
+		sessions: allSessions.size,
+		msgs: totalMsgs,
+		input: totalInp,
+		output: totalOut,
+		cacheRead: totalCache,
+		totalTokens: totalInp + totalOut,
+		cost: totalCost,
+		reportedCost: totalCost,
+		estimatedCost,
+	};
+	// The windows exist only when the scan saw day buckets (a cache that is all v6).
+	if (dayMap.size > 0) {
+		totals.today = windowOf(1);
+		totals.last7d = windowOf(7);
+		totals.last30d = windowOf(30);
+	}
+
+	cachedSummary = { providers, projects, totals };
 	lastScanMs = now;
 	return cachedSummary;
 }
@@ -661,4 +865,87 @@ export function getModelAllTimeUsage(modelId?: string): { input: number; output:
 	}
 
 	return { input: inp, output: out, cacheRead: read };
+}
+
+// Self-check: `node lib/usage-store.ts`
+if (isMain(import.meta.url)) {
+	const NL = String.fromCharCode(10);
+	const fixture = mkdtempSync(join(tmpdir(), "arnative-store-"));
+	process.env.PI_CODING_AGENT_DIR = fixture;
+	const asst = (model: string, input: number, ts: number, cost = 0.02) =>
+		JSON.stringify({ message: { role: "assistant", provider: "google", model, timestamp: ts, usage: { input, output: 5, cacheRead: 1, cost: { total: cost } } } });
+	const header = (cwd: string) => JSON.stringify({ type: "session", cwd });
+	const tsToday = Date.now();
+	const tsYesterday = Date.now() - 86_400_000;
+	const today = new Date(tsToday).toISOString().slice(0, 10);
+	const yesterday = new Date(tsYesterday).toISOString().slice(0, 10);
+
+	mkdirSync(join(fixture, "sessions", "proj-a"), { recursive: true });
+	mkdirSync(join(fixture, "sessions", "proj-b"), { recursive: true });
+	// proj-a carries a session header (cwd); proj-b has none, so it must land in "unknown".
+	const fileA = join(fixture, "sessions", "proj-a", "a.jsonl");
+	writeFileSync(fileA, [header("/repo/alpha"), asst("m1", 100, tsToday), asst("m1", 50, tsYesterday)].join(NL) + NL);
+	writeFileSync(join(fixture, "sessions", "proj-b", "b.jsonl"), asst("m2", 7, tsToday) + NL);
+
+	const summary = collectUsageSummary(true);
+	assert(summary.projects.length === 2, "one project per cwd plus unknown");
+	const alpha = summary.projects.find((p) => p.name === "/repo/alpha")!;
+	const unknown = summary.projects.find((p) => p.name === "unknown")!;
+	assert(alpha.msgs === 2 && alpha.input === 150 && Math.abs(alpha.cost - 0.04) < 1e-9, "a project row carries its files' totals");
+	assert(unknown.msgs === 1 && unknown.input === 7, "a file with no cwd lands in unknown");
+	assert(alpha.providers.length === 1 && alpha.providers[0]!.name === "google" && alpha.providers[0]!.models[0]!.name === "m1", "a project trees into its providers and models");
+	const sumOf = (f: (p: (typeof summary.projects)[number]) => number) => summary.projects.reduce((n, p) => n + f(p), 0);
+	assert(
+		sumOf((p) => p.msgs) === summary.totals.msgs &&
+			sumOf((p) => p.input) === summary.totals.input &&
+			sumOf((p) => p.output) === summary.totals.output &&
+			Math.abs(sumOf((p) => p.cost) - summary.totals.cost) < 1e-9,
+		"projects totals equal totals",
+	);
+
+	// Day buckets: windows come from them, and on disk they sum to the file total.
+	assert(summary.totals.today !== undefined && summary.totals.last7d !== undefined && summary.totals.last30d !== undefined, "day buckets produce the today/7d/30d windows");
+	assert(summary.totals.today.input === 107 && Math.abs(summary.totals.today.cost - 0.04) < 1e-9, "today sums only today's bucket");
+	assert(summary.totals.last7d.input === 157 && Math.abs(summary.totals.last7d.cost - 0.06) < 1e-9, "last7d includes yesterday");
+	assert(summary.totals.last30d.input === 157, "last30d includes yesterday too");
+	const cachePath = join(fixture, "arnative", "usage-cache.json");
+	const disk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { r: Record<string, number[]>; d?: Record<string, number[]>; w?: string }>;
+	const relA = join("proj-a", "a.jsonl");
+	const msgsOf = (rows: Record<string, number[]>) => Object.values(rows).reduce((n, a) => n + a[0]!, 0);
+	assert(disk[relA]!.w === "/repo/alpha", "v6 stores the session cwd in w");
+	assert(disk[relA]!.d !== undefined && msgsOf(disk[relA]!.d!) === msgsOf(disk[relA]!.r), "day buckets sum to the file total on disk");
+	assert(
+		Object.keys(disk[relA]!.d!).every((k) => k.startsWith(`${today}\u0000`) || k.startsWith(`${yesterday}\u0000`)) && disk[relA]!.d![`${today}\u0000google\u0000m1`] !== undefined,
+		"day keys are the UTC day + provider + model",
+	);
+	assert(disk[join("proj-b", "b.jsonl")]!.w === undefined, "a file with no cwd stores none (it reads as unknown)");
+
+	// A grown file tail-folds: the cwd stays the cached one (the head is not re-read) and the
+	// new entry lands in its day bucket.
+	writeFileSync(fileA, asst("m1", 1000, tsToday) + NL, { flag: "a" });
+	const grown = collectUsageSummary(true);
+	assert(grown.totals.msgs === 4, "an appended record is folded from the tail");
+	assert(grown.projects.find((p) => p.name === "/repo/alpha")!.input === 1150, "the tail fold keeps the cached cwd (the project is unchanged)");
+	assert(grown.totals.today!.input === 1107, "the appended entry lands in today's bucket");
+	const grownDisk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { w?: string }>;
+	assert(grownDisk[relA]!.w === "/repo/alpha", "the cwd survives a tail fold on disk too");
+
+	// A pre-v6 (v5 compact, no `d`) cache item is re-parsed once from its file — not trusted —
+	// and re-saved as v6 with its days and cwd, yielding the file's own totals.
+	const fileC = join(fixture, "sessions", "proj-b", "c.jsonl");
+	writeFileSync(fileC, asst("m2", 11, tsToday) + NL);
+	const cStat = statSync(fileC);
+	writeFileSync(
+		cachePath,
+		JSON.stringify({ [join("proj-b", "c.jsonl")]: { m: cStat.mtimeMs, s: cStat.size, c: cStat.size, r: { "google\u0000m2": [99, 999, 1, 1, 9] } } }),
+	);
+	resetUsageCache();
+	const reparsed = collectUsageSummary(true);
+	assert(reparsed.totals.msgs === 5 && reparsed.totals.input === 1168, "a v5 cache item is re-parsed from the file (the stale 99 is not counted)");
+	const afterDisk = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, { d?: Record<string, number[]>; w?: string }>;
+	const relC = join("proj-b", "c.jsonl");
+	assert(afterDisk[relC]!.d !== undefined && msgsOf(afterDisk[relC]!.d!) === 1, "the re-parsed item is re-saved as v6 with day buckets");
+
+	rmSync(fixture, { recursive: true, force: true });
+	console.log("usage-store.ts self-check OK");
 }
