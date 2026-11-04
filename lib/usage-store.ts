@@ -4,7 +4,8 @@
  * - mtime+size keyed cache in ~/.pi/agent/arnative/usage-cache.json, read into
  *   memory once (parsing 4MB per header frame cost ~50ms and lagged long chats).
  * - No double counting: the active session is already in its own file, so it is
- *   NOT re-added from sessionManager (that inflated the ↑↓ totals). Child spend
+ *   NOT re-added from sessionManager (that inflated the ↑↓ totals), and a subagent's
+ *   spend is read from the child's own session file, never from the parent's tool result. Child spend
  *   (subagent / nested tool calls) rides on the tool result only, never on an
  *   assistant message, so summing both roles counts it once.
  * - Rollups also keep per-day buckets (UTC) and the session cwd, so /usage can answer
@@ -317,7 +318,7 @@ const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.
 /** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
  *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
 const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
-const CACHE_VERSION = 8; // v8: cacheWrite + the billed split in the rows (v7: day buckets + cwd, v6: the compact rows, v5: model rows only, v4: full rollup)
+const CACHE_VERSION = 9; // v9: no tool-result rows (v8: cacheWrite + the billed split, v7: day buckets + cwd, v6: the compact rows, v5: model rows only, v4: full rollup)
 
 /** Where pi-subagents keeps a run's transcript, inside the session's own project dir. */
 const SUBAGENT_ARTIFACTS_DIR = "subagent-artifacts";
@@ -334,8 +335,8 @@ export const TOOL_PROVIDER = "tool";
  *  paths relative to the sessions dir (the absolute path dominated the old size).
  *  A row is `[msgs, input, output, cacheRead, cacheWrite, cost, billed]`; the 5-number
  *  rows of v5/v6 are decoded with cacheWrite 0 and the whole cost counted as billed.
- *  `t` marks an item written by v8, i.e. one whose rollups already include tool-result
- *  spend — a v7 item has no `t` and is re-parsed once. */
+ *  `t` marks an item written by the current version — anything else is re-parsed once, which
+ *  is how a cache written by a build that also stored tool-result rows loses them. */
 type DiskItem = {
 	m: number;
 	s: number;
@@ -1191,6 +1192,22 @@ if (isMain(import.meta.url)) {
 	assert(reparsed7.totals.msgs === 2 && reparsed7.totals.input === 140, "a v7 cache item is re-parsed from its file (the stale 99 is not counted)");
 	const after7 = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, { t?: number }>;
 	assert(after7[join("p", "t.jsonl")]!.t === CACHE_VERSION, "the re-parsed item is re-saved as the current version");
+
+	// A cache written by the build that also stored tool-result rows is stamped `t: 8`: it must
+	// be re-parsed, or the child spend it holds is counted a second time next to the child's file.
+	const staleDisk = JSON.parse(readFileSync(join(toolFixture, "arnative", "usage-cache.json"), "utf8")) as Record<string, unknown>;
+	staleDisk[join("p", "t.jsonl")] = {
+		m: tStat.mtimeMs,
+		s: tStat.size,
+		c: tStat.size,
+		t: 8,
+		r: { [`${TOOL_PROVIDER}\u0000subagent`]: [1, 40, 6, 2, 1, 0.01, 0.01], "google\u0000m1": [1, 100, 5, 1, 0, 0.02, 0.02] },
+	};
+	writeFileSync(join(toolFixture, "arnative", "usage-cache.json"), JSON.stringify(staleDisk));
+	resetUsageCache();
+	const afterStale = collectUsageSummary(true);
+	assert(afterStale.providers.every((p) => p.name !== TOOL_PROVIDER), "a `t: 8` item's tool rows are dropped: the item is re-parsed");
+	assert(afterStale.totals.input === 140, "the re-parsed item keeps the parent and the child, once each");
 
 	// An empty session (no assistant message) writes `r: {}`: that is a current item, not a
 	// pre-v7 one — `some` over an empty map is false, and treating it as old would re-read that

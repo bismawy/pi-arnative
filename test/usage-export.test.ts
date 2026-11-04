@@ -18,13 +18,20 @@ const mkSummary = (providers: UsageSummary["providers"], totals: Partial<UsageSu
 	totals: { sessions: 0, msgs: 0, input: 0, output: 0, cacheRead: 0, totalTokens: 0, cost: 0, reportedCost: 0, estimatedCost: 0, ...totals },
 });
 
-/** Every sample line of an exposition must parse as `name{labels} value` with a numeric value. */
+/** Every sample line of an exposition must parse as `name{labels} value` with a numeric value.
+ *  `assert.match` returns undefined, so it cannot be used as a filter predicate: filter on the
+ *  shape and assert inside the loop. */
 const sampleLines = (text: string): string[] =>
 	text
 		.trimEnd()
 		.split(NL)
-		.filter((l) => !l.startsWith("#"))
-		.filter((l) => assert.match(l, /^[a-z_0-9]+(\{[^}]*\})? \S+$/) as unknown as boolean);
+		.filter((l) => !l.startsWith("#"));
+
+const assertSample = (line: string): void => {
+	assert.match(line, /^[a-z_0-9]+(\{[^}]*\})? \S+$/, `not a sample line: ${line}`);
+	const value = line.slice(line.lastIndexOf(" ") + 1);
+	assert.ok(Number.isFinite(Number(value)), `sample value is not numeric: ${line}`);
+};
 
 test("every sample line parses as name{labels} value, with HELP and TYPE per family", () => {
 	const summary = mkSummary(
@@ -36,10 +43,11 @@ test("every sample line parses as name{labels} value, with HELP and TYPE per fam
 				input: 1000,
 				output: 500,
 				cacheRead: 200,
+				cacheWrite: 0,
 				totalTokens: 1500,
 				cost: 0.5,
 				estimatedCost: 0.25,
-				models: [{ name: "gemini-3.8-flash", sessions: 2, msgs: 3, input: 1000, output: 500, cacheRead: 200, totalTokens: 1500, cost: 0.5, estimatedCost: 0.25 }],
+				models: [{ name: "gemini-3.8-flash", sessions: 2, msgs: 3, input: 1000, output: 500, cacheRead: 200, cacheWrite: 0, totalTokens: 1500, cost: 0.5, estimatedCost: 0.25 }],
 			},
 		],
 		{ sessions: 2, cost: 0.5, estimatedCost: 0.25, today: { cost: 0.5, input: 1000, output: 500, cacheRead: 200 }, last30d: { cost: 0.5, input: 1000, output: 500, cacheRead: 200 } },
@@ -47,11 +55,12 @@ test("every sample line parses as name{labels} value, with HELP and TYPE per fam
 	const text = renderProm(summary, 1_700_000_000_000);
 	const lines = text.trimEnd().split(NL);
 	for (const line of sampleLines(text)) {
+		assertSample(line);
 		const m = /^([a-z_0-9]+)(\{[^}]*\})? (\S+)$/.exec(line)!;
 		assert.ok(Number.isFinite(Number(m[3])), `numeric value: ${line}`);
 	}
 	// One HELP + TYPE per metric name, each ahead of its samples.
-	for (const name of ["arnative_cost_billed_total", "arnative_cost_estimated_total", "arnative_cost_today", "arnative_cost_30d", "arnative_tokens_total", "arnative_sessions_total", "arnative_usage_last_scan_timestamp_seconds"]) {
+	for (const name of ["arnative_cost_billed_total", "arnative_cost_estimated_total", "arnative_cost_today", "arnative_cost_30d", "arnative_tokens_total", "arnative_sessions_total", "arnative_usage_last_change_timestamp_seconds"]) {
 		const helpAt = lines.findIndex((l) => l.startsWith(`# HELP ${name} `));
 		const typeAt = lines.findIndex((l) => l === `# TYPE ${name} gauge`);
 		const firstSample = lines.findIndex((l) => l.startsWith(`${name} `) || l.startsWith(`${name}{`));
@@ -68,7 +77,7 @@ test("billed and estimated cost never share a metric, and the day buckets render
 	assert.ok(!text.includes("arnative_cost_total"), "no metric mixes the two");
 	assert.ok(text.includes("arnative_cost_today 0.1\n") && text.includes("arnative_cost_30d 0.4\n"), "today/30d buckets: " + text);
 	assert.ok(text.includes("arnative_sessions_total 3\n"), "sessions: " + text);
-	assert.ok(text.includes("arnative_usage_last_scan_timestamp_seconds 1700000000\n"), "scan timestamp in seconds: " + text);
+	assert.ok(text.includes("arnative_usage_last_change_timestamp_seconds 1700000000\n"), "scan timestamp in seconds: " + text);
 });
 
 test("token rows carry provider, model and kind labels, escaped per the exposition format", () => {
@@ -81,10 +90,11 @@ test("token rows carry provider, model and kind labels, escaped per the expositi
 				input: 10,
 				output: 5,
 				cacheRead: 2,
+				cacheWrite: 4,
 				totalTokens: 15,
 				cost: 0,
 				estimatedCost: 0,
-				models: [{ name: "m\n1", sessions: 1, msgs: 1, input: 10, output: 5, cacheRead: 2, totalTokens: 15, cost: 0, estimatedCost: 0 }],
+				models: [{ name: "m\n1", sessions: 1, msgs: 1, input: 10, output: 5, cacheRead: 2, cacheWrite: 4, totalTokens: 15, cost: 0, estimatedCost: 0 }],
 			},
 		],
 		{},
@@ -94,9 +104,12 @@ test("token rows carry provider, model and kind labels, escaped per the expositi
 		text.includes('arnative_tokens_total{provider="pro\\"v\\\\x",model="m\\n1",kind="input"} 10\n'),
 		`backslash, quote and newline are escaped (no raw newline inside a label): ${JSON.stringify(text)}`,
 	);
-	assert.ok(text.includes('kind="output"} 5\n') && text.includes('kind="cache_read"} 2\n'), "all three kinds render: " + text);
+	assert.ok(
+		text.includes('kind="output"} 5\n') && text.includes('kind="cache_read"} 2\n') && text.includes('kind="cache_write"} 4\n'),
+		"all four kinds render, cache_write included: " + text,
+	);
 	// A raw newline in a label value would split the line and break the parse.
-	for (const line of sampleLines(text)) assert.match(line, /^[a-z_0-9]+(\{[^}]*\})? \S+$/);
+	for (const line of sampleLines(text)) assertSample(line);
 });
 
 test("an empty summary renders valid text with zeros", () => {

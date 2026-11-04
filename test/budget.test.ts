@@ -43,8 +43,8 @@ test("estimate-only spend never reaches over (rule 4)", () => {
 test("the reason names the cap, the percent and the spend, and says what happens", () => {
 	const over = budgetState({ today: 6, month: 0 }, { day: 5 }, true);
 	assert.equal(over.level, "over");
-	assert.equal(over.reason, "day cap $5.00 at 120% ($6.00 spent) — turn blocked");
-	assert.equal(budgetState({ today: 6, month: 0 }, { day: 5 }, false).reason, "day cap $5.00 at 120% ($6.00 spent) — enforcement off");
+	assert.equal(over.reason, "day cap $5.00 at 120% ($6.00 billed) — turn blocked");
+	assert.equal(budgetState({ today: 6, month: 0 }, { day: 5 }, false).reason, "day cap $5.00 at 120% ($6.00 billed) — enforcement off");
 	const warn = budgetState({ today: 4, month: 0 }, { day: 5 }, true);
 	assert.equal(warn.level, "warn");
 	assert.equal(warn.reason, "day cap $5.00 at 80% ($4.00 spent)");

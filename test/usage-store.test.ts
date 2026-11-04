@@ -216,6 +216,6 @@ test("a v7 cache item (no `t`) is re-parsed once and re-saved as v8", () => {
 		assert.equal(reparsed.totals.msgs, cold.totals.msgs);
 		assert.equal(reparsed.totals.input, 100, "the stale 99 is not counted");
 		const disk = cacheOf(dir)[join("a", "a.jsonl")]!;
-		assert.equal(disk.t, 8, "the re-parsed item is re-saved as the current version");
+		assert.equal(disk.t, 9, "the re-parsed item is re-saved as the current version");
 	});
 });

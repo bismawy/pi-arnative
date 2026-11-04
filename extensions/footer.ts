@@ -1234,7 +1234,8 @@ export default function (pi: ExtensionAPI) {
 							try {
 								// The cost cell's colour follows the budget band — amber at ≥80% of a
 								// cap, red at ≥100% — read from the memoized usage summary, so the
-								// render path never scans. Nothing is read at all while the cell is off.
+								// render path scans at most once per 5s memo expiry, never per frame.
+								// Nothing is read at all while the cell is off.
 								const band = activeFooterCost() ? budgetLevelNow() : "ok";
 								const bandPaint = band === "warn" ? colorOr("warning", acc) : band === "over" ? colorOr("error", acc) : undefined;
 								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width, bandPaint);

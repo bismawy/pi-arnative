@@ -8,11 +8,13 @@
  * Warn-only by default: `budgetEnforce` ships `"off"`. Over a cap with enforce off the gate
  * notifies once per session and lets the turn through; with enforce on it notifies and returns
  * `handled`. The spend comes from the usage cache's day buckets (`totals.today` / `last30d`,
- * billed cost only) through the 5s memoized summary. Three fail-open rules: an
+ * billed plus its catalog-estimated part); the footer band reads it through the 5s memo, the
+ * gate forces its own scan so it never decides on a total up to 5s old. Three fail-open rules: an
  * `event.source === "extension"` input is never swallowed, an unknown spend (no day buckets)
  * never blocks, and the whole handler is wrapped in a try/catch that returns `continue` — a
  * throwing `input` handler is worse than no budget. Estimate-only spend (no provider-billed
- * total) is capped at `warn` in {@link budgetState}: a cap on an unpriced model would enforce $0.
+ * total) can reach `warn` but never `over` in {@link budgetState}: a cap on an unpriced model
+ * would enforce $0.
  *
  * The settings live in `config.json` (`budgetDay` / `budgetMonth` amount strings, `""` = unset,
  * `budgetEnforce` `"on"`/`"off"`) and are edited from `/arnative` → **Budget** ({@link openBudget}).
@@ -124,16 +126,20 @@ export function budgetState(spend: BudgetSpend, caps: { day?: number; month?: nu
 		if (cap === undefined || !(cap > 0)) return;
 		const total = billed + estimated;
 		if (!(total > 0)) return;
-		// `floor`, not `round`: 99.6 % of a cap must not read as "at 100 %".
-		const pct = Math.floor((total / cap) * 100);
+		// `floor`, not `round`: 99.6 % of a cap must not read as "at 100 %". Multiply before
+		// dividing: `(115 / 100) * 100` is 114.99999999999999, `(115 * 100) / 100` is 115.
+		const pct = Math.floor((total * 100) / cap);
 		if (billed >= cap) {
 			if (level !== "over") {
 				level = "over";
-				reason = `${label} cap ${formatCost(cap)} at ${pct}% (${formatCost(total)} spent)`;
+				// The block is decided on billed spend, so the reason states billed spend too.
+				reason = `${label} cap ${formatCost(cap)} at ${Math.floor((billed * 100) / cap)}% (${formatCost(billed)} billed)`;
 			}
 		} else if (total / cap >= WARN_PCT && level === "ok") {
 			level = "warn";
-			const note = estimated > 0 && billed < cap ? " — estimate only, never blocked" : "";
+			// The note is only true when the estimate is what pushed the window into warn: billed
+			// spend below the warning threshold on its own. Otherwise the next billed dollar blocks.
+			const note = estimated > 0 && billed / cap < WARN_PCT ? " — estimate only, never blocked" : "";
 			reason = `${label} cap ${formatCost(cap)} at ${pct}% (${formatCost(total)} spent)${note}`;
 		}
 	};
@@ -158,8 +164,9 @@ export function spendNow(force = false): BudgetSpend | null {
 	};
 }
 
-/** The budget level right now — read by the footer render, so it rides the same 5s memo and
- *  never scans in the render path. Any error reads as `ok` (never a false alarm). */
+/** The budget level right now — read by the footer render, so it rides the same 5s memo: at
+ *  most one scan per 5s on the render path, never one per frame. Any error reads as `ok`
+ *  (never a false alarm). */
 export function budgetLevelNow(): BudgetLevel {
 	try {
 		const caps = { day: activeBudgetDay(), month: activeBudgetMonth() };
@@ -190,7 +197,12 @@ function budgetRowNote(label: string): string | undefined {
 	if (label === "Enforce") return activeBudgetEnforce() ? ENFORCE_ON_NOTE : ENFORCE_OFF_NOTE;
 	if (label === "Spent") {
 		const s = spendNow();
-		return s ? `today ${formatCost(s.today)} · 30d ${formatCost(s.month)}` : "unknown";
+		if (!s) return "unknown";
+		// An estimate-only provider reports no billed cost: showing `$0.00` alone would read as
+		// "nothing spent" while the footer cell is amber.
+		const est = (s.estimatedToday ?? 0) + (s.estimatedMonth ?? 0);
+		const tail = est > 0 ? ` (+${formatCost(est)} est)` : "";
+		return `today ${formatCost(s.today)} · 30d ${formatCost(s.month)}${tail}`;
 	}
 	return undefined;
 }
@@ -313,13 +325,17 @@ if (isMain(import.meta.url)) {
 	assert(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, true).level === "warn", "estimate-only spend is capped at warn, never over");
 	assert(budgetState({ today: 0, month: 0, estimatedToday: 120 }, { day: 100 }, false).level === "warn", "estimate-only spend is warn with enforce off too");
 	assert(budgetState({ today: 120, month: 0, estimatedToday: 30 }, { day: 100 }, true).level === "over", "a billed crossing is over even with estimates in the mix");
+	// Billed 90 of a 100 cap already warns on its own: the estimate did not push it there, so the
+	// reason must not claim the over-cap is estimate-only.
+	const mixed = budgetState({ today: 90, month: 0, estimatedToday: 40 }, { day: 100 }, true);
+	assert(mixed.level === "warn" && !(mixed.reason ?? "").includes("never blocked"), "a mixed warn does not claim estimate-only: " + mixed.reason);
 	// Pinned reason strings.
 	assert(
-		budgetState({ today: 6, month: 0 }, { day: 5 }, true).reason === "day cap $5.00 at 120% ($6.00 spent) — turn blocked",
+		budgetState({ today: 6, month: 0 }, { day: 5 }, true).reason === "day cap $5.00 at 120% ($6.00 billed) — turn blocked",
 		"over + enforce reason pinned: " + budgetState({ today: 6, month: 0 }, { day: 5 }, true).reason,
 	);
 	assert(
-		budgetState({ today: 6, month: 0 }, { day: 5 }, false).reason === "day cap $5.00 at 120% ($6.00 spent) — enforcement off",
+		budgetState({ today: 6, month: 0 }, { day: 5 }, false).reason === "day cap $5.00 at 120% ($6.00 billed) — enforcement off",
 		"over + enforce off reason pinned",
 	);
 	assert(budgetState({ today: 4, month: 0 }, { day: 5 }, true).reason === "day cap $5.00 at 80% ($4.00 spent)", "warn reason pinned");
@@ -372,13 +388,13 @@ if (isMain(import.meta.url)) {
 	setBudgetEnforce(false);
 	assert((await input("interactive", ctxOf())).action === "continue", "over + enforce off lets the turn through");
 	assert(notes.length === 1 && notes[0]!.level === "warning", "over + enforce off notifies once, as a warning");
-	assert(notes[0]!.msg === "day cap $5.00 at 120% ($6.00 spent) — enforcement off", "the notify carries the pinned reason: " + notes[0]!.msg);
+	assert(notes[0]!.msg === "day cap $5.00 at 120% ($6.00 billed) — enforcement off", "the notify carries the pinned reason: " + notes[0]!.msg);
 	assert((await input("interactive", ctxOf())).action === "continue" && notes.length === 1, "the second over-input does not notify again (once per session)");
 	assert((await input("extension", ctxOf())).action === "continue" && notes.length === 1, "an extension-injected input is never swallowed and never notifies");
 	await handlers.session_start!({}, undefined);
 	setBudgetEnforce(true);
 	assert((await input("interactive", ctxOf())).action === "handled", "over + enforce on blocks the next turn");
-	assert(notes.length === 2 && notes[1]!.level === "error" && notes[1]!.msg === "day cap $5.00 at 120% ($6.00 spent) — turn blocked", "over + enforce on notifies an error with the pinned reason");
+	assert(notes.length === 2 && notes[1]!.level === "error" && notes[1]!.msg === "day cap $5.00 at 120% ($6.00 billed) — turn blocked", "over + enforce on notifies an error with the pinned reason");
 	assert(
 		(await input("interactive", { get ui(): unknown { throw new Error("boom"); } })).action === "continue",
 		"a throwing handler path fails open: continue, never block",

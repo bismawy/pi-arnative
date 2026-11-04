@@ -37,7 +37,7 @@ const escapeLabel = (v: string): string => v.replace(/\\/g, "\\\\").replace(/"/g
 /**
  * Render the exposition text for one summary. Pure and deterministic: the same summary and
  * `now` always produce byte-identical output. `now` is the scan time in ms (the caller decides
- * what "last scan" means), rendered as seconds in `arnative_usage_last_scan_timestamp_seconds`.
+ * what "last scan" means), rendered as seconds in `arnative_usage_last_change_timestamp_seconds`.
  */
 export function renderProm(summary: UsageSummary, now: number): string {
 	const lines: string[] = [];
@@ -68,7 +68,7 @@ export function renderProm(summary: UsageSummary, now: number): string {
 		}
 	}
 	gauge("arnative_sessions_total", "Distinct Pi session files scanned.", t.sessions);
-	gauge("arnative_usage_last_scan_timestamp_seconds", "Unix time of the last usage scan whose data changed.", now / 1000);
+	gauge("arnative_usage_last_change_timestamp_seconds", "Unix time this process last saw the usage data change (not the last scrape).", now / 1000);
 	return `${lines.join("\n")}\n`;
 }
 
@@ -106,7 +106,9 @@ export function exportProm(now: number, path: string = promFilePath()): boolean 
 		if (process.env[EXPORT_ENV] === "0") return false;
 		if (now - lastExportMs < EXPORT_THROTTLE_MS) return false;
 		// Force the scan: the memo can be up to 5s old, and the turn that just ended is exactly
-		// the one this export is for. The throttle above keeps this to one scan per minute.
+		// the one this export is for. The stamp moves here, not after the write, so a skipped
+		// write (unchanged text, unwritable folder) cannot force a scan on every later turn.
+		lastExportMs = now;
 		const summary = collectUsageSummary(true);
 		// The scan timestamp only moves when the data does, so an idle session renders
 		// byte-identical text and the diff below skips the write.
@@ -118,7 +120,6 @@ export function exportProm(now: number, path: string = promFilePath()): boolean 
 		const text = renderProm(summary, lastScanAt);
 		if (text === lastExportText) return false;
 		writePromFile(text, path);
-		lastExportMs = now;
 		lastExportText = text;
 		return true;
 	} catch {
@@ -170,9 +171,9 @@ if (isMain(import.meta.url)) {
 				"# HELP arnative_sessions_total Distinct Pi session files scanned.",
 				"# TYPE arnative_sessions_total gauge",
 				"arnative_sessions_total 0",
-				"# HELP arnative_usage_last_scan_timestamp_seconds Unix time of the last usage scan whose data changed.",
-				"# TYPE arnative_usage_last_scan_timestamp_seconds gauge",
-				"arnative_usage_last_scan_timestamp_seconds 1700000000",
+				"# HELP arnative_usage_last_change_timestamp_seconds Unix time this process last saw the usage data change (not the last scrape).",
+				"# TYPE arnative_usage_last_change_timestamp_seconds gauge",
+				"arnative_usage_last_change_timestamp_seconds 1700000000",
 			].join(NL) + NL,
 		"an empty summary renders the pinned exposition, zeros included: " + JSON.stringify(empty),
 	);
@@ -245,7 +246,7 @@ if (isMain(import.meta.url)) {
 	const first = readFileSync(path, "utf8");
 	assert(first.includes("arnative_cost_billed_total 0.5\n"), "the file carries the billed cost: " + first);
 	assert(first.includes('arnative_tokens_total{provider="google",model="m1",kind="input"} 100\n'), "the file carries the token rows: " + first);
-	assert(first.includes("arnative_usage_last_scan_timestamp_seconds 1700000000\n"), "the scan timestamp is the export time in seconds: " + first);
+	assert(first.includes("arnative_usage_last_change_timestamp_seconds 1700000000\n"), "the scan timestamp is the export time in seconds: " + first);
 	assert(exportProm(T0 + 2_000, path) === false, "throttled: no second write within 60s");
 	assert(readFileSync(path, "utf8") === first, "the throttled attempt did not touch the file");
 	assert(exportProm(T0 + 61_000, path) === false, "past the throttle but unchanged data: the diff skips the write");
@@ -256,7 +257,7 @@ if (isMain(import.meta.url)) {
 	assert(exportProm(T0 + 122_000, path) === true, "changed data past the throttle writes again");
 	const second = readFileSync(path, "utf8");
 	assert(
-		second.includes("arnative_cost_billed_total 0.75\n") && second.includes('kind="input"} 150\n') && second.includes("arnative_usage_last_scan_timestamp_seconds 1700000122\n"),
+		second.includes("arnative_cost_billed_total 0.75\n") && second.includes('kind="input"} 150\n') && second.includes("arnative_usage_last_change_timestamp_seconds 1700000122\n"),
 		"the new spend, tokens and scan time land: " + second,
 	);
 
