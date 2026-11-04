@@ -12,6 +12,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { recordProfile } from "../extensions/arnative.ts";
 import { activeAutoCompact } from "../extensions/autocompact.ts";
+import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth } from "../extensions/budget.ts";
 import { activeFooterCost, activeFooterPreset } from "../extensions/footer.ts";
 import { activeHeaderPreset } from "../extensions/section-headers.ts";
 import { activeSpinnerGradient, activeSpinnerPreset } from "../extensions/animations.ts";
@@ -43,8 +44,8 @@ test("the file keeps one key order", () => {
 		recordProfile();
 		assert.deepEqual(
 			Object.keys(configOf(dir)),
-			["headerPreset", "footerPreset", "footerCost", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"],
-			"header first, then the rest of the menu, layoutVersion before the newer keys",
+			["headerPreset", "footerPreset", "footerCost", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"],
+			"header first, then the rest of the menu, the budget keys after footerCost, layoutVersion before the newer keys",
 		);
 	});
 });
@@ -62,6 +63,9 @@ test("the profile in use is recorded, defaults included", () => {
 		assert.equal(stored.spinnerGradient, activeSpinnerGradient() ? "on" : "off", "spinner gradient recorded");
 		assert.equal(stored.autoCompact, activeAutoCompact(), "auto-compact recorded");
 		assert.equal(stored.modelHeal, activeModelHeal(), "model heal recorded");
+		assert.equal(stored.budgetDay, activeBudgetDay() === undefined ? "" : String(activeBudgetDay()), "day cap recorded (" + JSON.stringify(stored.budgetDay) + ")");
+		assert.equal(stored.budgetMonth, activeBudgetMonth() === undefined ? "" : String(activeBudgetMonth()), "month cap recorded");
+		assert.equal(stored.budgetEnforce, activeBudgetEnforce() ? "on" : "off", "budget enforcement recorded, off by default");
 		assert.equal(stored.layoutVersion, "1", "the layout stamp rides along");
 		// The default header is the case that used to be missing: it must be present even though
 		// the picker never wrote it.

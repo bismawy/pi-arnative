@@ -19,6 +19,10 @@ export const HEADER_PRESET_KEY = "headerPreset";
 export const FOOTER_PRESET_KEY = "footerPreset";
 /** Footer cost cell: `"on"`/`"off"`, absent reads as off. */
 export const FOOTER_COST_KEY = "footerCost";
+/** Budget guardrail — day/month caps are amount strings (`"5"`, `""` = unset), enforce is `"on"`/`"off"`. */
+export const BUDGET_DAY_KEY = "budgetDay";
+export const BUDGET_MONTH_KEY = "budgetMonth";
+export const BUDGET_ENFORCE_KEY = "budgetEnforce";
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
 // Everything pi-arnative writes lives in one folder (agent dir/arnative); the config moved
@@ -74,10 +78,19 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 	return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
 }
 
+/** The stored value for `key` as a finite number in `[min, max]`, or undefined when absent, empty,
+ *  unparsable or out of range. Amounts are stored as strings (`"5"`, `""` = unset) because
+ *  `loadChoice` only accepts strings from an allowed set, so numbers get their own reader. */
+export function loadNumber(key: string, range: { min: number; max: number }): number | undefined {
+	const raw = readConfig()[key];
+	const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+	return Number.isFinite(n) && n >= range.min && n <= range.max ? n : undefined;
+}
+
 /** Reading order of `config.json`: the presets in the order the settings menu shows them,
  *  then `layoutVersion`, then anything else (a key from another module or a newer version).
  *  Times a user edits the file by hand or reads it back. */
-const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
+const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
 
 /** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
 function ordered(record: Record<string, unknown>): Record<string, unknown> {
@@ -228,6 +241,29 @@ if (isMain(import.meta.url)) {
 	ensureChoices({ headerPreset: "b" });
 	assert(readFileSync(join(profile, "arnative", "config.json"), "utf8") === "{not json", "the startup record leaves an unreadable config alone");
 	rmSync(profile, { recursive: true, force: true });
+
+	// loadNumber: amounts are stored as strings ("" = unset); anything that is not a finite
+	// number in range reads as unset, so a hand-edited or corrupt value cannot become a cap.
+	const nums = mkdtempSync(join(tmpdir(), "arnative-preset-num-"));
+	process.env.PI_CODING_AGENT_DIR = nums;
+	resetPresetCache();
+	const range = { min: 0.01, max: 1_000_000 };
+	saveChoice(BUDGET_DAY_KEY, "5");
+	assert(loadNumber(BUDGET_DAY_KEY, range) === 5, "a stored amount parses");
+	saveChoice(BUDGET_DAY_KEY, "7.50");
+	assert(loadNumber(BUDGET_DAY_KEY, range) === 7.5, "a decimal amount parses");
+	saveChoice(BUDGET_DAY_KEY, "abc");
+	assert(loadNumber(BUDGET_DAY_KEY, range) === undefined, "a non-numeric amount reads as unset");
+	saveChoice(BUDGET_DAY_KEY, "0");
+	assert(loadNumber(BUDGET_DAY_KEY, range) === undefined, "below the range reads as unset");
+	saveChoice(BUDGET_DAY_KEY, "2000000");
+	assert(loadNumber(BUDGET_DAY_KEY, range) === undefined, "above the range reads as unset");
+	saveChoice(BUDGET_DAY_KEY, "");
+	assert(loadNumber(BUDGET_DAY_KEY, range) === undefined, "an empty amount reads as unset");
+	writeFileSync(join(nums, "arnative", "config.json"), JSON.stringify({ [BUDGET_DAY_KEY]: 7 }), "utf8");
+	resetPresetCache();
+	assert(loadNumber(BUDGET_DAY_KEY, range) === 7, "a hand-edited numeric value is accepted");
+	rmSync(nums, { recursive: true, force: true });
 
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	resetPresetCache();

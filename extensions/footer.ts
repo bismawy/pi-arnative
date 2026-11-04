@@ -26,6 +26,7 @@ import {
 	saveChoice,
 } from "../lib/preset-store.ts";
 import { formatCost } from "./usage.ts";
+import { budgetLevelNow } from "./budget.ts";
 import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../lib/spinner.ts";
 
@@ -754,13 +755,17 @@ export const RATE_MIN_WIDTH = 80;
  *  is no cost — the same promise `/usage` makes. The rate is cost per ACTIVE hour — the clock
  *  counts active time (idle pauses excluded), not wall-clock — so it is labelled `$/h`; it
  *  carries the `~` whenever estimated cost feeds it, like the estimated part of the cell, and
- *  is hidden below RATE_MIN_ACTIVE_MS of active time and below RATE_MIN_WIDTH columns. */
+ *  is hidden below RATE_MIN_ACTIVE_MS of active time and below RATE_MIN_WIDTH columns.
+ *  `bandPaint` paints the whole cell (icon and text) when a budget cap is near or over —
+ *  amber at `warn`, red at `over` (see `budgetLevelNow`); without it the icon keeps `acc` and
+ *  the text `soft`. */
 export function costCell(
 	costBilled: number,
 	costEstimated: number,
 	acc: (t: string) => string,
 	soft: (t: string) => string,
 	width: number = RATE_MIN_WIDTH,
+	bandPaint?: (t: string) => string,
 ): string {
 	if (!(costBilled > 0) && !(costEstimated > 0)) return "";
 	const parts: string[] = [];
@@ -772,7 +777,7 @@ export function costCell(
 		const rate = (costBilled + costEstimated) / (activeMs / 3_600_000);
 		text += ` · ${costEstimated > 0 ? "~" : ""}${formatCost(rate)}/h`;
 	}
-	return `${acc("\uf155")} ${soft(text)}`;
+	return `${(bandPaint ?? acc)("\uf155")} ${(bandPaint ?? soft)(text)}`;
 }
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
@@ -785,6 +790,8 @@ export function getUsage(
 	showCost: boolean = activeFooterCost(),
 	/** Terminal width: the burn rate is dropped below RATE_MIN_WIDTH columns. */
 	width: number = RATE_MIN_WIDTH,
+	/** Budget band painter for the cost cell (amber at `warn`, red at `over`); absent keeps acc/soft. */
+	bandPaint?: (t: string) => string,
 ): string {
 	const branch = ctx.sessionManager.getBranch();
 	// Memoized on models.json's stat, so this is one statSync per frame, not a read.
@@ -860,7 +867,7 @@ export function getUsage(
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	if (showCost) {
-		const cell = costCell(costBilled, costEstimated, acc, soft, width);
+		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
 		if (cell) parts.push(cell);
 	}
 	return parts.join(" ");
@@ -1222,7 +1229,12 @@ export default function (pi: ExtensionAPI) {
 
 							let usageStr = "";
 							try {
-								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width);
+								// The cost cell's colour follows the budget band — amber at ≥80% of a
+								// cap, red at ≥100% — read from the memoized usage summary, so the
+								// render path never scans.
+								const band = budgetLevelNow();
+								const bandPaint = band === "warn" ? colorOr("warning", acc) : band === "over" ? colorOr("error", acc) : undefined;
+								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width, bandPaint);
 							} catch {
 								// fallback
 							}
@@ -1578,6 +1590,12 @@ if (isMain(import.meta.url)) {
 	assert(costCell(0.42, 0, id, id).endsWith("$0.42") && !costCell(0.42, 0, id, id).includes("~"), "billed only: $0.42 without ~");
 	assert(costCell(0, 0.42, id, id).includes("~$0.42") && !costCell(0, 0.42, id, id).includes("+"), "estimated only: ~$0.42");
 	assert(costCell(0.3, 0.12, id, id).includes("$0.30 + ~$0.12"), "both: $0.30 + ~$0.12, never blended");
+	// The budget band paints the cost cell — amber at `warn`, red at `over`; no band keeps acc/soft.
+	const warnPaint = (t: string) => `<warn>${t}</warn>`;
+	const overPaint = (t: string) => `<error>${t}</error>`;
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH, warnPaint) === `<warn>\uf155</warn> <warn>$0.42</warn>`, "the warn band paints icon and text: " + costCell(0.42, 0, id, id, RATE_MIN_WIDTH, warnPaint));
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH, overPaint) === `<error>\uf155</error> <error>$0.42</error>`, "the over band paints icon and text: " + costCell(0.42, 0, id, id, RATE_MIN_WIDTH, overPaint));
+	assert(costCell(0.42, 0, id, id, RATE_MIN_WIDTH) === "\uf155 $0.42", "no band: acc icon, soft text, as before");
 
 	// Self-check: the burn rate appended to the cost cell — cost / ACTIVE hours of the clock
 	// (idle pauses excluded, not wall-clock), hidden below 5 active minutes, when the cost
@@ -1639,6 +1657,8 @@ if (isMain(import.meta.url)) {
 	const costCtx = { sessionManager: { getBranch: () => costBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
 	assert(!getUsage(costCtx, id, id, false).includes("$0.42"), "cost cell is off unless the switch is on");
 	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's billed cost when on");
+	assert(getUsage(costCtx, id, id, true, RATE_MIN_WIDTH, warnPaint).includes("<warn>$0.42</warn>"), "the warn band reaches the cost cell through getUsage");
+	assert(getUsage(costCtx, id, id, true, RATE_MIN_WIDTH, overPaint).includes("<error>$0.42</error>"), "the over band reaches the cost cell through getUsage");
 
 	// Child spend from a tool result: one assistant message + one tool result carrying usage —
 	// the sums are the sum of both, once each — and a tool result mutated in place (a finished
