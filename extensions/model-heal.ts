@@ -18,6 +18,9 @@ import { assert, isMain } from "../lib/check.ts";
 import { REJECTION_RE } from "../lib/compat.ts";
 import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../lib/model-heal.ts";
 
+// Nerd Font md-shield-sync (U+F06DE), written as a code point so the source stays ASCII.
+const HEAL_ICON = String.fromCodePoint(0xf06de);
+
 interface RegistryLike {
 	getAll?: () => unknown[];
 	refresh?: (options?: { allowNetwork?: boolean }) => Promise<unknown>;
@@ -88,7 +91,7 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		let ui: ExtensionContext["ui"] | undefined;
 		try {
 			ui = ctx.ui;
-			ui?.setWidget?.("model-heal", lines.map((line) => "model-heal: " + line));
+			ui?.setWidget?.("model-heal", lines.map((line) => HEAL_ICON + " model-heal: " + line));
 		} catch {
 			return;
 		}
@@ -111,7 +114,8 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		} catch {
 			refreshed = false;
 		}
-		notify(ctx, [label + " (" + result.detail.length + " change(s))" + (refreshed ? "" : " - run /reload to load it")]);
+		const count = result.detail.length;
+		notify(ctx, [label + " (" + count + (count === 1 ? " change)" : " changes)") + (refreshed ? "" : " - run /reload to load it")]);
 	}
 
 	const enabled = (need: "Flags" | "Full"): boolean => healAllowed(need, activeModelHeal(), autoCompatInstalled());

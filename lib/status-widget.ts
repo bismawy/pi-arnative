@@ -21,6 +21,15 @@ export const STATUS_ICON = "\ueb1b";
 /** pi's own cap on a string-array widget (`InteractiveMode.MAX_WIDGET_LINES`). */
 export const MAX_STATUS_ROWS = 10;
 
+// A row that opens with its own Nerd Font glyph (a private-use code point) and a space keeps
+// that glyph as its mark in place of STATUS_ICON, such as model-heal's U+F06DE.
+function ownMark(row: string): boolean {
+	const cp = row.codePointAt(0);
+	if (cp === undefined) return false;
+	const pua = (cp >= 0xe000 && cp <= 0xf8ff) || (cp >= 0xf0000 && cp <= 0xffffd);
+	return pua && row[cp > 0xffff ? 2 : 1] === " ";
+}
+
 type FgTheme = { fg?(color: string, text: string): string } | null;
 
 /** `dim(text)`, or the plain text when the theme is absent or rejects the token. */
@@ -38,6 +47,7 @@ export function statusRows(th: FgTheme, rows: string[], width = Number.POSITIVE_
 	const lines = rows
 		.slice(0, MAX_STATUS_ROWS)
 		.map((row, i) => {
+			if (i === 0 && ownMark(row)) return row.includes("\x1b") ? dim(th, " ") + row : dim(th, " " + row);
 			const prefix = i === 0 ? ` ${STATUS_ICON} ` : "   ";
 			return row.includes("\x1b") ? dim(th, prefix) + row : dim(th, prefix + row);
 		});
@@ -52,6 +62,10 @@ if (isMain(import.meta.url)) {
 		"one space before the mark, one after, one dim span for the whole row",
 	);
 	assert(JSON.stringify(statusRows(null, ["plain"])) === JSON.stringify([" \ueb1b plain"]), "no theme renders the plain line");
+	assert(
+		JSON.stringify(statusRows(null, ["\u{f06de} model-heal: x", "y"])) === JSON.stringify([" \u{f06de} model-heal: x", "   y"]),
+		"a row that opens with its own glyph keeps it as the mark",
+	);
 	assert(
 		JSON.stringify(statusRows({ fg: () => { throw new Error("unknown token"); } }, ["safe"])) === JSON.stringify([" \ueb1b safe"]),
 		"a theme that rejects the token does not crash the render",

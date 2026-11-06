@@ -74,6 +74,8 @@ interface ListPickerHooks {
 	/** Description re-read on every render, so the line under the title can follow screen
 	 *  state (the model list shows the API flavor `a` switched to). */
 	description?: () => string;
+	// Slash opens a search field that filters rows by label; Esc clears it.
+	search?: boolean;
 }
 
 /** Box copy, so one picker serves every menu ("Themes - Arnative⠙", "Headers - Arnative⠙", …).
@@ -97,6 +99,8 @@ export class ListPicker implements Component {
 	private readonly edge: (s: string) => string;
 	/** Rows shown before the list scrolls (a relay catalog can be far longer than the screen). */
 	private readonly maxRows: number | undefined;
+	private query = "";
+	private searching = false;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -134,23 +138,61 @@ export class ListPicker implements Component {
 
 	/** Selected row, for callers that need the choice after `done()` resolves. */
 	get index(): number {
-		return this.selected;
+		return this.shown[this.selected] ?? -1;
+	}
+
+	// Rows the search query matches, as indexes into rows.
+	private get shown(): number[] {
+		const q = this.query.toLowerCase();
+		return this.rows.flatMap((r, i) => (q === "" || r.label.toLowerCase().includes(q) ? [i] : []));
+	}
+
+	private setQuery(query: string): void {
+		this.query = query;
+		this.selected = 0;
+		this.hooks.requestRender();
+	}
+
+	// True when the key belongs to the search field. Slash opens it; while it is open every
+	// key edits the query except Enter (keep the filter), Esc (clear it) and the arrows.
+	private searchKey(keyData: string): boolean {
+		if (!this.hooks.search) return false;
+		if (!this.searching) {
+			if (keyData !== "/") return false;
+			this.searching = true;
+			this.hooks.requestRender();
+			return true;
+		}
+		const code = keyData.length === 1 ? keyData.charCodeAt(0) : -1;
+		if (matchesKey(keyData, "escape")) {
+			this.searching = false;
+			this.setQuery("");
+		} else if (matchesKey(keyData, "enter")) {
+			this.searching = false;
+			this.hooks.requestRender();
+		} else if (matchesKey(keyData, "up")) this.move(-1);
+		else if (matchesKey(keyData, "down")) this.move(1);
+		else if (code === 8 || code === 127 || matchesKey(keyData, "backspace")) this.setQuery(this.query.slice(0, -1));
+		else if (code >= 32) this.setQuery(this.query + keyData);
+		return true;
 	}
 
 	private move(delta: number): void {
-		const next = Math.min(this.rows.length - 1, Math.max(0, this.selected + delta));
-		if (next === this.selected) return;
+		const shown = this.shown;
+		const next = Math.min(shown.length - 1, Math.max(0, this.selected + delta));
+		if (next === this.selected || next < 0) return;
 		this.selected = next;
 		if (!this.livePreview) {
 			this.hooks.requestRender();
 			return;
 		}
-		this.applied = this.rows[next]!.label;
+		this.applied = this.rows[shown[next]!]!.label;
 		this.hooks.preview(this.applied);
 		this.hooks.requestRender();
 	}
 
 	handleInput(keyData: string): void {
+		if (this.searchKey(keyData)) return;
 		if (matchesBack(keyData)) {
 			// Leave for the parent without touching the preview: `back` owns the revert of an
 			// uncommitted preview, because "cancel" here means "close", not "undo".
@@ -162,6 +204,10 @@ export class ListPicker implements Component {
 			// No parent (the root menu): ← behaves like Esc — close, reverting a live preview.
 			if (this.applied !== this.opened) this.hooks.revert();
 			(this.hooks.cancel ?? this.hooks.done)();
+			return;
+		}
+		if (this.query && matchesKey(keyData, "escape")) {
+			this.setQuery("");
 			return;
 		}
 		if (keyData === "Q" || matchesKey(keyData, "q") || matchesKey(keyData, "escape")) {
@@ -194,11 +240,12 @@ export class ListPicker implements Component {
 		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
 		const body: string[] = [];
 		// A long list scrolls a window centered on the cursor, so the box keeps one height.
-		const max = this.maxRows ?? this.rows.length;
-		const windowStart = this.rows.length <= max ? 0 : Math.min(Math.max(0, this.selected - Math.floor(max / 2)), this.rows.length - max);
-		const windowEnd = Math.min(this.rows.length, windowStart + max);
+		const shown = this.shown;
+		const max = this.maxRows ?? shown.length;
+		const windowStart = shown.length <= max ? 0 : Math.min(Math.max(0, this.selected - Math.floor(max / 2)), shown.length - max);
+		const windowEnd = Math.min(shown.length, windowStart + max);
 		for (let i = windowStart; i < windowEnd; i++) {
-			const item = this.rows[i]!;
+			const item = this.rows[shown[i]!]!;
 			const isSelected = i === this.selected;
 			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
 			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
@@ -220,14 +267,19 @@ export class ListPicker implements Component {
 		}
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
 		if (windowStart > 0) body.unshift(truncateToWidth(th.fg("dim", `↑ ${windowStart} more`), width - 4, ""));
-		if (windowEnd < this.rows.length) body.push(truncateToWidth(th.fg("dim", `↓ ${this.rows.length - windowEnd} more`), width - 4, ""));
+		if (windowEnd < shown.length) body.push(truncateToWidth(th.fg("dim", `↓ ${shown.length - windowEnd} more`), width - 4, ""));
 		return renderScreen(
 			th,
 			width,
 			{
 				...this.text,
 				legend: this.hooks.legend ? this.hooks.legend() : this.text.legend,
-				description: this.hooks.description ? this.hooks.description() : this.text.description,
+				description:
+					this.searching || this.query
+						? "/ " + this.query + (this.searching ? "▏" : "") + " · " + shown.length + " of " + this.rows.length
+						: this.hooks.description
+							? this.hooks.description()
+							: this.text.description,
 			},
 			body,
 			edge,
