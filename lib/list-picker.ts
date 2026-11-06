@@ -100,7 +100,6 @@ export class ListPicker implements Component {
 	private readonly edge: (s: string) => string;
 	/** Rows shown before the list scrolls (a relay catalog can be far longer than the screen). */
 	private readonly maxRows: number | undefined;
-	private searching = false;
 	private readonly field: Input | undefined;
 
 	constructor(
@@ -127,6 +126,7 @@ export class ListPicker implements Component {
 		this.edge = thinkingColorOf(theme, thinkingLevel);
 		this.maxRows = maxRows;
 		this.field = hooks.search ? new Input({ placeholder: "type to filter " + hooks.search + "…", placeholderStyle: (t) => theme.fg("muted", t) }) : undefined;
+		if (this.field) this.field.focused = true;
 		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
@@ -159,31 +159,25 @@ export class ListPicker implements Component {
 		this.hooks.requestRender();
 	}
 
-	// True when the key belongs to the search field. Slash opens it; while it is open every
-	// key edits the query except Enter (keep the filter), Esc (clear it) and the arrows.
+	// True when the key belongs to the search field, which is always focused (like the
+	// vision-watcher picker): text and backspace edit the query. Space and the digits stay
+	// commands while the query is empty, so a toggle needs no mode switch; once a query is
+	// typed they are text, so "gpt 5" stays typeable. Esc clears a query before it closes.
 	private searchKey(keyData: string): boolean {
 		const field = this.field;
 		if (!field) return false;
-		if (!this.searching) {
-			if (keyData !== "/") return false;
-			this.searching = true;
-			field.focused = true;
-			this.hooks.requestRender();
+		if (matchesKey(keyData, "escape")) {
+			if (!this.query) return false;
+			this.setQuery("");
 			return true;
 		}
-		if (matchesKey(keyData, "escape") || matchesKey(keyData, "enter")) {
-			this.searching = false;
-			field.focused = false;
-			if (matchesKey(keyData, "escape")) this.setQuery("");
-			else this.hooks.requestRender();
-		} else if (matchesKey(keyData, "up")) this.move(-1);
-		else if (matchesKey(keyData, "down")) this.move(1);
-		else {
-			const before = this.query;
-			field.handleInput(keyData);
-			if (this.query !== before) this.selected = 0;
-			this.hooks.requestRender();
-		}
+		if (!this.query && (matchesKey(keyData, "space") || /^[0-9]$/.test(keyData))) return false;
+		const editing = keyData === "\x7f" || keyData === "\b" || (keyData.length > 0 && !/[\x00-\x1f]/.test(keyData));
+		if (!editing) return false;
+		const before = this.query;
+		field.handleInput(keyData);
+		if (this.query !== before) this.selected = 0;
+		this.hooks.requestRender();
 		return true;
 	}
 
@@ -214,10 +208,6 @@ export class ListPicker implements Component {
 			// No parent (the root menu): ← behaves like Esc — close, reverting a live preview.
 			if (this.applied !== this.opened) this.hooks.revert();
 			(this.hooks.cancel ?? this.hooks.done)();
-			return;
-		}
-		if (this.query && matchesKey(keyData, "escape")) {
-			this.setQuery("");
 			return;
 		}
 		if (keyData === "Q" || matchesKey(keyData, "q") || matchesKey(keyData, "escape")) {
@@ -278,11 +268,7 @@ export class ListPicker implements Component {
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
 		if (windowStart > 0) body.unshift(truncateToWidth(th.fg("dim", `↑ ${windowStart} more`), width - 4, ""));
 		if (windowEnd < shown.length) body.push(truncateToWidth(th.fg("dim", `↓ ${shown.length - windowEnd} more`), width - 4, ""));
-		// Idle, the line names the key: Space and the digits are commands until a slash focuses it.
-		if (this.field) {
-			const line = this.searching || this.query ? this.field.render(Math.max(1, width - 4)) : ["> " + th.fg("muted", "/ to filter " + this.hooks.search + "…")];
-			body.unshift(...line, "");
-		}
+		if (this.field) body.unshift(...this.field.render(Math.max(1, width - 4)), "");
 		return renderScreen(
 			th,
 			width,

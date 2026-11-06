@@ -817,7 +817,7 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
-const THINKING_LEGEND = "[↑↓] Move  [Space] Off/auto  [0] All levels  [1-6] Toggle level  [/] Search  [A] All auto  [R] All off  [p] Probe  [Enter] Save  [Esc] Cancel";
+const THINKING_LEGEND = "[↑↓] Move  [Type] Filter  [Space] Off/auto  [0] All levels  [1-6] Toggle level  [Ctrl+P] Probe  [Ctrl+E] All auto  [Ctrl+D] All off  [Enter] Save  [Esc] Clear/cancel";
 // minimal … max: the efforts a map can offer; off is pi's own switch, not an effort.
 const EFFORT_LEVELS = THINKING_LEVELS.slice(1);
 
@@ -928,12 +928,11 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 					},
 					press: (keyData) => {
 						if (busy) return;
-						// Plain letters only: Ctrl/Alt/F-keys are swallowed or remapped by some
-						// terminals, so the two bulk keys stay on the same key everywhere. Shift keeps
-						// them deliberate — pi-tui lowercases a key id, so "A" would mean plain `a`.
+						// Every letter types into the always-focused filter, so the commands sit on Ctrl.
+						// Ctrl+A is the field's line start and the tmux prefix, so the bulk keys are E and D.
 						// Neither clears a map: it is what the model accepts, whatever the switch says.
-						if (matchesKey(keyData, "shift+a") || matchesKey(keyData, "shift+r")) {
-							const to = matchesKey(keyData, "shift+a") ? "auto" : "off";
+						if (matchesKey(keyData, "ctrl+e") || matchesKey(keyData, "ctrl+d")) {
+							const to = matchesKey(keyData, "ctrl+e") ? "auto" : "off";
 							for (const id of levels.keys()) levels.set(id, to);
 							refresh();
 							return;
@@ -952,18 +951,18 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 							refresh();
 							return;
 						}
-						if (matchesKey(keyData, "p")) void probe(label);
+						if (matchesKey(keyData, "ctrl+p")) void probe(label);
 					},
 					note: (label) => {
 						if (busy === label) return `probing ${progress ?? ""}`.trim();
 						return levels.get(label) === "auto" ? `auto · ${summary(probed.get(label))}` : "off";
 					},
-					description: () => "Space: off ↔ auto · 0 all levels · 1-6 toggle minimal low medium high xhigh max · / search",
+					description: () => "Space: off ↔ auto · 0 all levels · 1-6 toggle minimal low medium high xhigh max · type to filter",
 					search: "models",
 					legend: () =>
 						`${theme.fg("accent", `${[...levels.values()].filter((l) => l !== "off").length}/${rows.length} thinking`)}${theme.fg("dim", ` · ${THINKING_LEGEND}`)}`,
 				},
-				{ title: screenTitle("Thinking"), description: "levels each model accepts — p probes, 1-6 toggle by hand", legend: THINKING_LEGEND },
+				{ title: screenTitle("Thinking"), description: "levels each model accepts — Ctrl+P probes, 1-6 toggle by hand", legend: THINKING_LEGEND },
 				false,
 				ctx.thinkingLevel,
 				MODEL_VIEWPORT,
@@ -1432,7 +1431,6 @@ if (isMain(import.meta.url)) {
 	assert(levelsSummary([{ id: "a" }]) === "0 thinking", "an all-chat save says so plainly");
 	// The Thinking screen's bulk keys are Shift+letter: pi-tui lowercases a key id, so this
 	// pins that they stay distinct from the plain letters navigation already uses.
-	assert(matchesKey("A", "shift+a") && !matchesKey("a", "shift+a"), "Shift+A is its own key, not plain a");
 	assert(matchesKey("R", "shift+r") && !matchesKey("r", "shift+r"), "Shift+R is its own key, not plain r");
 
 	// The stored key is read back from auth.json in an isolated agent dir (never the user's).
