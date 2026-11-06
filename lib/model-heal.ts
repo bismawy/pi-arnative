@@ -27,12 +27,13 @@ import {
 	parseModelMeta,
 	probeEffort,
 	suggestCompat,
+	THINKING_LEVELS,
 	type Compat,
 	type CompatModel,
 	type ModelMeta,
 } from "./compat.ts";
 import { loadChoice, saveChoice } from "./preset-store.ts";
-import { loadModelsConfig, looseJsonParse, readAuthKey, saveModelsConfig } from "./provider.ts";
+import { levelToWire, loadModelsConfig, looseJsonParse, readAuthKey, saveModelsConfig, wireToLevel } from "./provider.ts";
 
 // ------------------------------------------------------------- setting
 
@@ -134,6 +135,16 @@ function edit(mutate: (cfg: Obj) => string[]): HealResult {
 	return { changed: true, detail, errors: [] };
 }
 
+/** The pre-0.9.2 wizard pin: all seven levels present, one non-off level mapped to itself,
+ *  the other six null. */
+const isSinglePin = (map: unknown): boolean => {
+	if (!isObj(map)) return false;
+	const values = THINKING_LEVELS.map((l) => map[l]);
+	if (values.some((v) => v === undefined)) return false;
+	const live = THINKING_LEVELS.filter((l) => map[l] !== null);
+	return live.length === 1 && live[0] !== "off" && map[live[0]!] === live[0];
+};
+
 const providersOf = (cfg: Obj): Record<string, Obj> => cfg.providers as Record<string, Obj>;
 
 function providerEntry(cfg: Obj, provider: string): Obj {
@@ -195,6 +206,14 @@ export function healFlags(deps: HealDeps, only?: RtModel[], active?: RtModel): H
 			if (!isObj(entry) || !Array.isArray(entry.models)) continue;
 			for (const m of entry.models) {
 				if (!isObj(m) || m.reasoning !== true) continue;
+				// Before 0.9.2 the wizard pinned a level by nulling all six others, which pi reads as
+				// unsupported: the model was stuck on that one level. Rewrite that exact shape as the
+				// ceiling map the wizard writes now; any other map is the user's and stays.
+				if (isSinglePin(m.thinkingLevelMap)) {
+					m.thinkingLevelMap = levelToWire(wireToLevel(true, m.thinkingLevelMap)).thinkingLevelMap;
+					detail.push(`${provider} models[${String(m.id)}]: thinkingLevelMap ceiling`);
+					continue;
+				}
 				if (isObj(m.thinkingLevelMap) && Object.keys(m.thinkingLevelMap).length > 0) continue;
 				m.thinkingLevelMap = { ...DEFAULT_THINKING_MAP };
 				detail.push(`${provider} models[${String(m.id)}]: thinkingLevelMap`);
@@ -524,7 +543,7 @@ if (isMain(import.meta.url)) {
 			file,
 			JSON.stringify({
 				providers: {
-					relay: { ...relay, apiKey: "k", models: [{ id: "gpt-x" }, { id: "claude-sonnet-4-5" }, { id: "r1", reasoning: true }] },
+					relay: { ...relay, apiKey: "k", models: [{ id: "gpt-x" }, { id: "claude-sonnet-4-5" }, { id: "r1", reasoning: true }, { id: "pinned", reasoning: true, thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: null, xhigh: "xhigh", max: null } }] },
 					owned: { ...relay },
 				},
 			}),
@@ -547,6 +566,8 @@ if (isMain(import.meta.url)) {
 		assert(isObj(r1.thinkingLevelMap) && (r1.compat as Obj).supportsDeveloperRole === false, "a reasoning model gets a map and the developer-role opt-out");
 		assert(read().owned!.compat === undefined && isObj((read().owned!.modelOverrides as Obj).o1), "an extension-owned provider is fixed through modelOverrides");
 		assert(existsSync(`${file}.bak-model-heal`), "the first write keeps a backup");
+		const pinned = modelIn("relay", "pinned").thinkingLevelMap as Obj;
+		assert(pinned.minimal === "minimal" && pinned.medium === "medium" && pinned.xhigh === "xhigh" && pinned.max === null && !("off" in pinned), "an old single-pin map becomes a ceiling map");
 
 		// The registry stays stale until refresh; a repeat must find nothing left to write.
 		assert(!healFlags(deps).changed, "a repeated pass is a no-op");

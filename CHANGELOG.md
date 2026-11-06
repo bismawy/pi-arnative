@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Providers: a pinned thinking level no longer locks the model to that one level.** The wizard stored a level by mapping it to itself and every other level to `null`. pi reads `null` as unsupported, so `/thinking`, the thinking cycle key and turning thinking off all stayed on the pinned level (most visibly `xhigh`). A pinned level is now a ceiling: every effort up to it maps to itself, the levels above it are `null`, and `off` stays available. Model heal rewrites the old single-pin map in models.json to the ceiling shape, so an affected model recovers after `/reload` without deleting the provider (`lib/provider.ts` `levelToWire` and `wireToLevel`, `lib/model-heal.ts`, `test/thinking-levels.test.ts`).
+
 ## [0.9.1] - 2026-11-02
 
 ### Added

@@ -317,22 +317,29 @@ export function withoutAuth(auth: unknown, name: string): Record<string, unknown
 
 /** Rewrites one provider's model list and nothing else — compat, headers, name, every
  *  sibling field survives an edit exactly as it was stored. Levels serialize to pi's
- *  wire shape: `reasoning` for anything thinking, plus a `thinkingLevelMap` that pins
- *  exactly one supported level for a detected variant. */
+ *  wire shape: `reasoning` for anything thinking, plus a `thinkingLevelMap` whose pinned
+ *  level is a ceiling: every effort up to it maps to itself, every level above it is null,
+ *  and `off` stays unmapped. pi reads null as unsupported, so the old map that nulled every
+ *  level but one left the user stuck on that level, unable to lower it or turn thinking off. */
 export function levelToWire(level: ThinkingSetting | undefined): { reasoning?: true; thinkingLevelMap?: Record<string, string | null> } {
 	if (level === undefined || level === "off") return {};
 	if (level === "auto") return { reasoning: true };
+	const ceiling = THINKING_LEVELS.indexOf(level);
 	const thinkingLevelMap: Record<string, string | null> = {};
-	for (const l of THINKING_LEVELS) thinkingLevelMap[l] = l === level ? level : null;
+	THINKING_LEVELS.forEach((l, i) => {
+		if (l !== "off") thinkingLevelMap[l] = i <= ceiling ? l : null;
+	});
 	return { reasoning: true, thinkingLevelMap };
 }
 
-/** Reads pi's wire shape back into a level: a single non-off mapped level is that level;
- *  `reasoning: true` without a pin is `auto`. */
+/** Reads pi's wire shape back into a level: the highest level mapped to itself is that level
+ *  when every level above it is null (a ceiling, or the old single-pin shape). Any other map
+ *  (heal's default, a probed remap) and `reasoning: true` alone are `auto`. */
 export function wireToLevel(reasoning: unknown, map: unknown): ThinkingSetting {
-	if (map !== null && typeof map === "object") {
-		const pinned = THINKING_LEVELS.filter((l) => l !== "off" && typeof (map as Record<string, unknown>)[l] === "string");
-		if (pinned.length === 1) return pinned[0]!;
+	if (isObj(map)) {
+		const levels = THINKING_LEVELS.filter((l) => l !== "off");
+		const top = levels.findLastIndex((l) => map[l] === l);
+		if (top !== -1 && levels.slice(top + 1).every((l) => map[l] === null)) return levels[top]!;
 	}
 	return reasoning === true ? "auto" : "off";
 }
@@ -1310,7 +1317,13 @@ if (isMain(import.meta.url)) {
 	const wireHigh = levelToWire("high") as { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> };
 	assert(wireHigh.reasoning === true, "a pinned level sets reasoning");
 	assert(wireHigh.thinkingLevelMap?.high === "high", "the pinned level maps to itself");
-	assert(THINKING_LEVELS.filter((l) => wireHigh.thinkingLevelMap![l] === null).length === 6, "every other level is null");
+	assert(wireHigh.thinkingLevelMap?.medium === "medium" && wireHigh.thinkingLevelMap?.minimal === "minimal", "levels below the ceiling stay available");
+	assert(wireHigh.thinkingLevelMap?.xhigh === null && wireHigh.thinkingLevelMap?.max === null, "levels above the ceiling are null");
+	assert(!("off" in wireHigh.thinkingLevelMap!), "off stays unmapped, so thinking can still be turned off");
+	assert(wireToLevel(true, { off: null, minimal: null, low: null, medium: null, high: null, xhigh: "xhigh", max: null }) === "xhigh", "the old single-pin shape still reads as its level");
+	assert(wireToLevel(true, { low: "low", medium: "medium", high: "high", xhigh: "xhigh" }) === "auto", "heal's default map is auto, not an xhigh pin");
+	assert(wireToLevel(true, { medium: "high" }) === "auto", "a probed remap is auto");
+	for (const l of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) assert(wireToLevel(true, levelToWire(l).thinkingLevelMap) === l, `wire round-trips ${l}`);
 	assert(levelToWire("xhigh")!.thinkingLevelMap!.xhigh === "xhigh", "xhigh needs its explicit map entry");
 	const wireAuto = levelToWire("auto") as { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> };
 	assert(wireAuto.reasoning === true && wireAuto.thinkingLevelMap === undefined, "auto is reasoning without a map");
