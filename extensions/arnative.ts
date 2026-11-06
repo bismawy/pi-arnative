@@ -5,6 +5,7 @@
  * Screens share one chrome and one title shape ({@link renderScreen}); a box border takes
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
+import { bindSetModel } from "../lib/provider.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../lib/ansi.ts";
@@ -560,6 +561,7 @@ export default function (pi: ExtensionAPI) {
 		if (!shouldApplyDefaultTheme(pi.getSettings()?.theme, ctx.ui.getAllThemes())) return;
 		ctx.ui.setTheme(DEFAULT_THEME);
 	});
+	bindSetModel((model) => pi.setModel(model as never));
 	registerCommands(pi);
 }
 

@@ -9,6 +9,7 @@
  * only, Off = nothing. While pi-auto-compat is installed this module defers to it and says so
  * once, so two healers never write models.json at the same time.
  */
+import { reloadCurrentModel } from "../lib/provider.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type FSWatcher, watch } from "node:fs";
@@ -100,7 +101,7 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		if (!result.changed) return;
 		let refreshed = true;
 		try {
-			await registryOf(ctx)?.refresh?.({ allowNetwork: false });
+			refreshed = await reloadCurrentModel(ctx as never, (m) => pi.setModel(m as never));
 		} catch {
 			refreshed = false;
 		}
@@ -211,7 +212,7 @@ export async function healNow(ctx: ExtensionContext): Promise<void> {
 	const detail = [...flags.detail, ...meta.detail, ...effort.detail];
 	const errors = [...flags.errors, ...meta.errors, ...effort.errors];
 	if (detail.length > 0) {
-		await registryOf(ctx)?.refresh?.({ allowNetwork: false }).catch(() => undefined);
+		await reloadCurrentModel(ctx as never, (m) => pi.setModel(m as never)).catch(() => undefined);
 		ctx.ui.notify("[arnative] Model heal fixed:\n  - " + detail.join("\n  - "), "info");
 		return;
 	}

@@ -256,7 +256,7 @@ interface HealState {
 	schema: 1;
 	providers: Record<string, { signature: string; fetchedAt: number }>;
 	sources: Record<string, { contextWindow?: number; maxTokens?: number; at: number }>;
-	efforts: Record<string, { at: number; map: Record<string, string | null>; failed?: boolean }>;
+	efforts: Record<string, { at: number; map: Record<string, string | null>; failed?: boolean; exact?: boolean }>;
 }
 
 const statePath = (): string => join(getAgentDir(), "arnative", "model-heal.json");
@@ -454,6 +454,9 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 
 let effortInFlight = false;
 
+const sameMap = (a: Record<string, string | null> | undefined, b: Record<string, string | null> | undefined): boolean =>
+	THINKING_LEVELS.every((l) => a?.[l] === b?.[l]);
+
 const mapOf = (m: RtModel): Record<string, string | null> | undefined => (isObj(m.thinkingLevelMap) ? (m.thinkingLevelMap as Record<string, string | null>) : undefined);
 
 /** Probe the reasoning efforts each relay accepts and remap rejected levels. A map the user
@@ -475,10 +478,13 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 		const now = Date.now();
 		const pending = (only ?? deps.models()).filter((m) => {
 			const channel = m?.provider ? channels.get(lower(m.provider)) : undefined;
-			if (!channel || !isEffortProbeable(m, channel.compat) || carriesRemap(mapOf(m))) return false;
-			if (force) return true;
+			if (!channel || !isEffortProbeable(m, channel.compat)) return false;
 			const prev = state.efforts[modelKey(m.provider, m.id)];
-			if (!prev) return true;
+			// A shaped map (a null or a remap) is the user's unless the probe wrote it. A map an
+			// older probe wrote (nearest-effort remaps) is redone now, not after the TTL.
+			const probeWrote = prev !== undefined && sameMap(mapOf(m), prev.map);
+			if (carriesRemap(mapOf(m)) && !probeWrote) return false;
+			if (force || !prev || (probeWrote && prev.exact !== true)) return true;
 			if (now - prev.at >= (prev.failed ? EFFORT_FAILURE_TTL_MS : EFFORT_TTL_MS)) return true;
 			return JSON.stringify(mapOf(m) ?? {}) !== JSON.stringify(prev.map); // edited since: respect it
 		});
@@ -510,8 +516,9 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 			const detail: string[] = [];
 			for (const { model, supported } of answered) {
 				const current = mapOf(model);
-				const next = buildEffortMap(current, supported);
-				state.efforts[modelKey(model.provider, model.id)] = { at: Date.now(), map: next ?? current ?? {} };
+				const exact = buildEffortMap(supported)!;
+				const next = sameMap(current, exact) ? undefined : exact;
+				state.efforts[modelKey(model.provider, model.id)] = { at: Date.now(), map: exact, exact: true };
 				if (!next) continue;
 				const { slot, label } = modelSlot(providerEntry(fresh, model.provider), model.id, deps.ownsModels(model.provider));
 				slot.thinkingLevelMap = next;
@@ -624,7 +631,7 @@ if (isMain(import.meta.url)) {
 		}) as unknown as typeof fetch;
 		const r1Model: RtModel = { provider: "relay", id: "r1", reasoning: true, ...relay, thinkingLevelMap: { ...DEFAULT_THINKING_MAP } };
 		const effort = await healEffort({ ...deps, fetchImpl: effortFetch }, true, [r1Model]);
-		assert(effort.changed && (modelIn("relay", "r1").thinkingLevelMap as Obj).medium === "high", "a rejected effort is remapped to the nearest accepted one");
+		assert(effort.changed && (modelIn("relay", "r1").thinkingLevelMap as Obj).medium === null, "a rejected effort is marked unsupported, not remapped");
 		const shaped = await healEffort({ ...deps, fetchImpl: effortFetch }, true, [{ ...r1Model, thinkingLevelMap: { medium: "high" } }]);
 		assert(!shaped.changed, "a user-shaped map is never probed");
 		assert(existsSync(join(dir, "arnative", "model-heal.json")), "state lives in the arnative folder");

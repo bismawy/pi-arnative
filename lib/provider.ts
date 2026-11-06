@@ -339,7 +339,12 @@ export function wireToLevel(reasoning: unknown, map: unknown): ThinkingSetting {
 	if (isObj(map)) {
 		const levels = THINKING_LEVELS.filter((l) => l !== "off");
 		const top = levels.findLastIndex((l) => map[l] === l);
-		if (top !== -1 && levels.slice(top + 1).every((l) => map[l] === null)) return levels[top]!;
+		if (top !== -1 && levels.slice(top + 1).every((l) => map[l] === null)) {
+			// A ceiling maps every level below it to itself; the old single pin nulls them all.
+			// Anything else (an exact probed map with gaps) is a map, not a pin.
+			const below = levels.slice(0, top);
+			if (below.every((l) => map[l] === l) || below.every((l) => map[l] === null)) return levels[top]!;
+		}
 	}
 	return reasoning === true ? "auto" : "off";
 }
@@ -497,7 +502,9 @@ export function loadProviderEntry(config: unknown, name: string): ProviderEntry 
 				const contextWindow = typeof m.contextWindow === "number" ? m.contextWindow : undefined;
 				const maxTokens = typeof m.maxTokens === "number" ? m.maxTokens : undefined;
 				const meta = contextWindow === undefined && maxTokens === undefined ? undefined : { contextWindow, maxTokens };
-				return [{ id: m.id, ...(level === "off" ? {} : { level }), ...(meta ? { meta } : {}), ...(isObj(m.compat) ? { compat: m.compat } : {}) }];
+				// An `auto` model keeps its stored map, so a later save never wipes what a probe learned.
+				const map = level === "auto" && isObj(m.thinkingLevelMap) ? (m.thinkingLevelMap as Record<string, string | null>) : undefined;
+				return [{ id: m.id, ...(level === "off" ? {} : { level }), ...(map ? { map } : {}), ...(meta ? { meta } : {}), ...(isObj(m.compat) ? { compat: m.compat } : {}) }];
 			})
 		: [];
 	return {
@@ -731,14 +738,39 @@ const levelsSummary = (models: ProviderModel[]): string => {
 
 /** Writes one provider's model list through to models.json (auth.json is untouched — the
  *  key only changes through add or delete). */
-const saveModelsNamed = (ctx: ExtensionCommandContext, name: string, models: ProviderModel[]): void => {
+type ModelRef = { provider: string; id: string };
+type SetModel = (model: ModelRef) => Promise<unknown>;
+type RegistryRef = { refresh(options?: { allowNetwork?: boolean }): Promise<unknown>; find(provider: string, id: string): ModelRef | undefined };
+
+let setSessionModel: SetModel | undefined;
+/** pi.setModel lives on the extension API, not on a command ctx; the extension binds it once. */
+export const bindSetModel = (fn: SetModel): void => {
+	setSessionModel = fn;
+};
+
+/** Load models.json into the running session. A registry refresh alone is not enough: pi keeps
+ *  the session model object (and its thinkingLevelMap) until the model is picked again, so
+ *  /thinking kept offering the old levels even after /reload. */
+export async function reloadCurrentModel(ctx: { modelRegistry?: RegistryRef; model?: ModelRef }, setModel: SetModel | undefined = setSessionModel): Promise<boolean> {
+	const registry = ctx.modelRegistry;
+	if (!registry) return false;
+	await registry.refresh({ allowNetwork: false });
+	const current = ctx.model;
+	if (!current) return true;
+	const fresh = registry.find(current.provider, current.id);
+	if (!fresh || fresh === current) return true;
+	if (!setModel) return false;
+	await setModel(fresh);
+	return true;
+}
+const saveModelsNamed = async (ctx: ExtensionCommandContext, name: string, models: ProviderModel[]): Promise<void> => {
 	try {
 		writeJson(modelsPath(), withProviderModels(readJson(modelsPath()), name, models));
 	} catch (error) {
 		ctx.ui.notify(`[arnative] Not saved: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
 		return;
 	}
-	ctx.ui.notify(`[arnative] ${name}: ${models.length} models, ${levelsSummary(models)} — models.json updated. Open /model to refresh.`, "info");
+	ctx.ui.notify(`[arnative] ${name}: ${models.length} models, ${levelsSummary(models)} — ${(await reloadCurrentModel(ctx as never).catch(() => false)) ? "models.json updated and loaded." : "models.json updated. Pick the model again in /model to load it."}`, "info");
 };
 
 const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
@@ -753,7 +785,7 @@ const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entr
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
-	saveModelsNamed(ctx, name, mergeLevels(entry, picked));
+	await saveModelsNamed(ctx, name, mergeLevels(entry, picked));
 };
 
 const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
@@ -783,7 +815,7 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
-	saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
+	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
 const THINKING_LEGEND = "[↑↓] Move  [Space] Cycle  [A] All auto  [R] All off  [p] Probe  [Enter] Save  [Esc] Cancel";
@@ -794,7 +826,7 @@ const THINKING_LEGEND = "[↑↓] Move  [Space] Cycle  [A] All auto  [R] All off
  *  effort names it really accepts and stores the answer as the model's map. */
 const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
 	const levels = new Map(entry.models.map((m) => [m.id, m.level ?? detectLevel(m.id)] as const));
-	const probed = new Map<string, Record<string, string | null>>();
+	const probed = new Map<string, Record<string, string | null>>(entry.models.flatMap((m) => (m.map ? [[m.id, m.map] as const] : [])));
 	const cycle = (label: string): void => {
 		const current = levels.get(label) ?? "off";
 		const next = THINKING_SETTINGS[(THINKING_SETTINGS.indexOf(current) + 1) % THINKING_SETTINGS.length]!;
@@ -841,11 +873,11 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 				warn = `${label}: no effort level answered — the map is unchanged.`;
 				return;
 			}
-			const current = probed.get(label) ?? levelToWire(levels.get(label))?.thinkingLevelMap;
-			const next = buildEffortMap(current, supported);
-			if (next) probed.set(label, next);
+			// The probe's answer replaces any pin: the map states exactly what the channel runs.
+			const next = buildEffortMap(supported)!;
+			probed.set(label, next);
 			levels.set(label, "auto");
-			warn = `${label}: ${next ? summary(next) : "every level is accepted as-is"}.`;
+			warn = `${label}: ${summary(next)}.`;
 		} finally {
 			busy = undefined;
 			progress = undefined;
@@ -929,7 +961,7 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 		saved = true;
 	}
 	if (!saved) return;
-	saveModelsNamed(
+	await saveModelsNamed(
 		ctx,
 		name,
 		entry.models.map((m) => {
@@ -1323,6 +1355,8 @@ if (isMain(import.meta.url)) {
 	assert(wireToLevel(true, { off: null, minimal: null, low: null, medium: null, high: null, xhigh: "xhigh", max: null }) === "xhigh", "the old single-pin shape still reads as its level");
 	assert(wireToLevel(true, { low: "low", medium: "medium", high: "high", xhigh: "xhigh" }) === "auto", "heal's default map is auto, not an xhigh pin");
 	assert(wireToLevel(true, { medium: "high" }) === "auto", "a probed remap is auto");
+	assert(wireToLevel(true, { minimal: null, low: "low", medium: null, high: "high", xhigh: null, max: "max" }) === "auto", "an exact probed map with gaps is auto, not a max ceiling");
+	assert(loadProviderEntry({ providers: { p: { models: [{ id: "m", reasoning: true, thinkingLevelMap: { medium: null } }] } } }, "p")?.models[0]?.map?.medium === null, "a probed map survives a reload");
 	for (const l of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) assert(wireToLevel(true, levelToWire(l).thinkingLevelMap) === l, `wire round-trips ${l}`);
 	assert(levelToWire("xhigh")!.thinkingLevelMap!.xhigh === "xhigh", "xhigh needs its explicit map entry");
 	const wireAuto = levelToWire("auto") as { reasoning?: boolean; thinkingLevelMap?: Record<string, string | null> };
