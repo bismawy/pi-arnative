@@ -187,7 +187,6 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
  *  level travels to the endpoint unchanged — for models that take an effort parameter. */
 export type ThinkingSetting = ThinkingLevel | "auto";
 export const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-export const THINKING_SETTINGS: ThinkingSetting[] = ["off", "auto", ...THINKING_LEVELS.slice(1)];
 
 export interface ProviderModel {
 	id: string;
@@ -818,35 +817,51 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
-const THINKING_LEGEND = "[↑↓] Move  [Space] Cycle  [A] All auto  [R] All off  [p] Probe  [Enter] Save  [Esc] Cancel";
+const THINKING_LEGEND = "[↑↓] Move  [Space] Off/auto  [1-6] Toggle level  [A] All auto  [R] All off  [p] Probe  [Enter] Save  [Esc] Cancel";
+// minimal … max: the efforts a map can offer; off is pi's own switch, not an effort.
+const EFFORT_LEVELS = THINKING_LEVELS.slice(1);
 
-/** Space cycles one model through off → auto → minimal → … → max. `auto` means
- *  `reasoning: true` with no map (every `/think` level passes through unchanged); an
- *  explicit level pins `thinkingLevelMap` to that single value. `p` asks the channel which
- *  effort names it really accepts and stores the answer as the model's map. */
+/** The levels pi offers for a map, read the way pi reads it: a null drops a level, and
+ *  xhigh and max need an entry of their own. No map is pi's default scale. */
+export function offeredLevels(map: Record<string, string | null> | undefined): ThinkingLevel[] {
+	return EFFORT_LEVELS.filter((l) => (map?.[l] === undefined ? l !== "xhigh" && l !== "max" : map[l] !== null));
+}
+
+/** Thinking says what each model can do; the level to use is picked per session in /thinking.
+ *  Space switches a model between off (chat) and auto (reasoning). The levels auto offers come
+ *  from a probe (p), from model heal, or from 1-6, which toggle minimal … max by hand for a
+ *  relay that answers a probe and then ignores the effort. A pin an older version stored, or
+ *  an id suffix such as -high, opens as the level list it allowed. */
 const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
-	const levels = new Map(entry.models.map((m) => [m.id, m.level ?? detectLevel(m.id)] as const));
-	const probed = new Map<string, Record<string, string | null>>(entry.models.flatMap((m) => (m.map ? [[m.id, m.map] as const] : [])));
-	const cycle = (label: string): void => {
-		const current = levels.get(label) ?? "off";
-		const next = THINKING_SETTINGS[(THINKING_SETTINGS.indexOf(current) + 1) % THINKING_SETTINGS.length]!;
-		levels.set(label, next);
-		// A probed map belongs to `auto` only: a pinned level states its own answer.
-		if (next !== "auto") probed.delete(label);
-	};
-	const rows: ListRow[] = entry.models.map((m) => ({ label: m.id }));
-	/** "medium→high, max off" — what a probed map actually changed. */
-	const summary = (map: Record<string, string | null>): string => {
-		const parts = Object.entries(map)
-			.filter(([level, value]) => value !== level && !(value === null && level === "off"))
-			.map(([level, value]) => (value === null ? `${level} off` : `${level}→${value}`));
-		return parts.length === 0 ? "all levels accepted" : parts.join(", ");
-	};
+	const levels = new Map<string, ThinkingSetting>();
+	const probed = new Map<string, Record<string, string | null>>();
+	for (const m of entry.models) {
+		const level = m.level ?? detectLevel(m.id);
+		const map = m.map ?? (level === "off" || level === "auto" ? undefined : levelToWire(level).thinkingLevelMap);
+		levels.set(m.id, level === "off" ? "off" : "auto");
+		if (map) probed.set(m.id, map);
+	}
 	let busy: string | undefined;
 	let progress: string | undefined;
 	let warn: string | undefined;
 	let refresh: () => void = () => {};
 	let closed = false;
+	const cycle = (label: string): void => {
+		levels.set(label, levels.get(label) === "off" ? "auto" : "off");
+	};
+	const toggleLevel = (label: string, level: ThinkingLevel): void => {
+		const current = offeredLevels(probed.get(label));
+		const next = current.includes(level) ? current.filter((l) => l !== level) : [...current, level];
+		if (next.length === 0) {
+			warn = `${label}: keep at least one level, or press Space to turn thinking off.`;
+			return;
+		}
+		probed.set(label, buildEffortMap(next)!);
+		levels.set(label, "auto");
+	};
+	const rows: ListRow[] = entry.models.map((m) => ({ label: m.id }));
+	/** "low high max": the levels /thinking will list for the model. */
+	const summary = (map: Record<string, string | null> | undefined): string => offeredLevels(map).join(" ");
 	const probe = async (label: string): Promise<void> => {
 		const model = entry.models.find((m) => m.id === label);
 		const compat = model?.compat ?? {};
@@ -873,11 +888,10 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 				warn = `${label}: no effort level answered — the map is unchanged.`;
 				return;
 			}
-			// The probe's answer replaces any pin: the map states exactly what the channel runs.
 			const next = buildEffortMap(supported)!;
 			probed.set(label, next);
 			levels.set(label, "auto");
-			warn = `${label}: ${summary(next)}.`;
+			warn = `${label}: accepts ${summary(next)}.`;
 		} finally {
 			busy = undefined;
 			progress = undefined;
@@ -917,32 +931,32 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 						// Plain letters only: Ctrl/Alt/F-keys are swallowed or remapped by some
 						// terminals, so the two bulk keys stay on the same key everywhere. Shift keeps
 						// them deliberate — pi-tui lowercases a key id, so "A" would mean plain `a`.
-						if (matchesKey(keyData, "shift+a")) {
-							for (const id of levels.keys()) levels.set(id, "auto");
-							probed.clear();
-							refresh();
-							return;
-						}
-						if (matchesKey(keyData, "shift+r")) {
-							for (const id of levels.keys()) levels.set(id, "off");
-							probed.clear();
+						// Neither clears a map: it is what the model accepts, whatever the switch says.
+						if (matchesKey(keyData, "shift+a") || matchesKey(keyData, "shift+r")) {
+							const to = matchesKey(keyData, "shift+a") ? "auto" : "off";
+							for (const id of levels.keys()) levels.set(id, to);
 							refresh();
 							return;
 						}
 						const label = rows[picker.index]?.label;
-						if (!label || !matchesKey(keyData, "p")) return;
-						void probe(label);
+						if (!label) return;
+						const digit = EFFORT_LEVELS.findIndex((_l, i) => keyData === String(i + 1));
+						if (digit !== -1) {
+							toggleLevel(label, EFFORT_LEVELS[digit]!);
+							refresh();
+							return;
+						}
+						if (matchesKey(keyData, "p")) void probe(label);
 					},
 					note: (label) => {
 						if (busy === label) return `probing ${progress ?? ""}`.trim();
-						const map = probed.get(label);
-						return `${levels.get(label) ?? "off"}${map ? ` · ${summary(map)}` : ""}`;
+						return levels.get(label) === "auto" ? `auto · ${summary(probed.get(label))}` : "off";
 					},
-					description: () => `cycle: ${THINKING_SETTINGS.join(" → ")}`,
+					description: () => "Space: off ↔ auto · 1-6 toggle minimal low medium high xhigh max",
 					legend: () =>
 						`${theme.fg("accent", `${[...levels.values()].filter((l) => l !== "off").length}/${rows.length} thinking`)}${theme.fg("dim", ` · ${THINKING_LEGEND}`)}`,
 				},
-				{ title: screenTitle("Thinking"), description: "level per model — auto-detected from the id", legend: THINKING_LEGEND },
+				{ title: screenTitle("Thinking"), description: "levels each model accepts — p probes, 1-6 toggle by hand", legend: THINKING_LEGEND },
 				false,
 				ctx.thinkingLevel,
 				MODEL_VIEWPORT,
@@ -951,12 +965,21 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 		});
 		saved = outcome === true;
 	} else {
-		// No custom screens (RPC/headless): `id:level` pairs, e.g. `o1-mini:low`.
-		const answer = await readInput(ctx, "Thinking", "levels as id:level pairs — empty = cancel", "", [...levels].map(([id, l]) => `${id}:${l}`).join(", "));
+		// No custom screens (RPC/headless): `id:off`, `id:auto` or `id:low+high+max`.
+		const current = [...levels].map(([id, l]) => `${id}:${l === "off" ? "off" : probed.has(id) ? offeredLevels(probed.get(id)).join("+") : "auto"}`);
+		const answer = await readInput(ctx, "Thinking", "id:off, id:auto or id:low+high+max — empty = cancel", "", current.join(", "));
 		if (answer === undefined || answer === "") return;
 		for (const pair of answer.split(/[\s,]+/).filter(Boolean)) {
-			const [id, level] = pair.split(":");
-			if (id && level && THINKING_SETTINGS.includes(level as ThinkingSetting)) levels.set(id, level as ThinkingSetting);
+			const [id, value] = pair.split(":");
+			if (!id || !value || !levels.has(id)) continue;
+			if (value === "off" || value === "auto") {
+				levels.set(id, value);
+				continue;
+			}
+			const list = value.split("+").filter((l) => (EFFORT_LEVELS as string[]).includes(l));
+			if (list.length === 0) continue;
+			probed.set(id, buildEffortMap(list)!);
+			levels.set(id, "auto");
 		}
 		saved = true;
 	}

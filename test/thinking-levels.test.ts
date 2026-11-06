@@ -6,7 +6,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { levelToWire } from "../lib/provider.ts";
+import { buildEffortMap } from "../lib/compat.ts";
+import { levelToWire, offeredLevels } from "../lib/provider.ts";
 
 // pi reads only these fields for thinking levels; the cast skips the rest of the Model type.
 const modelFor = (level: Parameters<typeof levelToWire>[0]) => ({ id: "m", provider: "p", ...levelToWire(level) }) as unknown as Parameters<typeof getSupportedThinkingLevels>[0];
@@ -26,6 +27,19 @@ test("a high pin stops at high", () => {
 
 test("a max pin offers the whole scale", () => {
 	assert.deepEqual(getSupportedThinkingLevels(modelFor("max")), ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+});
+
+test("the Thinking screen lists exactly what pi offers", () => {
+	const maps = [undefined, buildEffortMap(["low", "high", "max"]), buildEffortMap(["minimal", "low", "high", "xhigh", "max"]), levelToWire("high").thinkingLevelMap];
+	for (const map of maps) {
+		const model = { id: "m", provider: "p", reasoning: true, ...(map ? { thinkingLevelMap: map } : {}) } as unknown as Parameters<typeof getSupportedThinkingLevels>[0];
+		assert.deepEqual(["off", ...offeredLevels(map)], getSupportedThinkingLevels(model));
+	}
+});
+
+test("a toggled list drops the levels the model rejects", () => {
+	const model = { id: "m", provider: "p", reasoning: true, thinkingLevelMap: buildEffortMap(["low", "high", "max"]) } as unknown as Parameters<typeof getSupportedThinkingLevels>[0];
+	assert.deepEqual(getSupportedThinkingLevels(model), ["off", "low", "high", "max"]);
 });
 
 test("auto keeps pi's default scale", () => {
