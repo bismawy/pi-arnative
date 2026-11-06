@@ -534,6 +534,26 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 	}
 }
 
+/** A turn the relay rejected for its effort: that one level becomes null in the model's map,
+ *  so pi stops offering it and the other levels stay. The map is stamped as probe-written, so
+ *  the shaped-map guard does not lock it as the user's and a later rejection can drop more. */
+export function markRejectedLevel(deps: HealDeps, model: RtModel, level: string): HealResult {
+	if (level === "off" || !(THINKING_LEVELS as readonly string[]).includes(level)) return none();
+	const state = loadState();
+	const result = edit((fresh) => {
+		const { slot, label } = modelSlot(providerEntry(fresh, model.provider), model.id, deps.ownsModels(model.provider));
+		const stored = isObj(slot.thinkingLevelMap) ? (slot.thinkingLevelMap as Record<string, string | null>) : mapOf(model);
+		const base: Record<string, string | null> = { ...(stored ?? DEFAULT_THINKING_MAP) };
+		if (base[level] === null) return [];
+		const next = { ...base, [level]: null };
+		slot.thinkingLevelMap = next;
+		state.efforts[modelKey(model.provider, model.id)] = { at: Date.now(), map: next, exact: true };
+		return [model.provider + " " + label + ": thinkingLevelMap " + level + "=unsupported (rejected by the relay)"];
+	});
+	if (result.changed) saveState({ efforts: state.efforts });
+	return result;
+}
+
 // ----------------------------------------------------------- self-check
 
 if (isMain(import.meta.url)) {
@@ -634,6 +654,12 @@ if (isMain(import.meta.url)) {
 		assert(effort.changed && (modelIn("relay", "r1").thinkingLevelMap as Obj).medium === null, "a rejected effort is marked unsupported, not remapped");
 		const shaped = await healEffort({ ...deps, fetchImpl: effortFetch }, true, [{ ...r1Model, thinkingLevelMap: { medium: "high" } }]);
 		assert(!shaped.changed, "a user-shaped map is never probed");
+		const runtime = markRejectedLevel(deps, r1Model, "low");
+		const afterRuntime = modelIn("relay", "r1").thinkingLevelMap as Obj;
+		assert(runtime.changed && afterRuntime.low === null && afterRuntime.medium === null && afterRuntime.high === "high", "a level rejected at runtime is dropped and the rest stay");
+		assert(!markRejectedLevel(deps, r1Model, "low").changed, "a level already dropped is a no-op");
+		assert(!markRejectedLevel(deps, r1Model, "off").changed, "off is never dropped");
+		assert((await healEffort({ ...deps, fetchImpl: effortFetch }, false, [{ ...r1Model, thinkingLevelMap: afterRuntime as Record<string, string | null> }])).errors.length === 0, "a runtime-dropped map stays probe-owned");
 		assert(existsSync(join(dir, "arnative", "model-heal.json")), "state lives in the arnative folder");
 		// The trigger runs meta and effort at once; neither save may drop the other's stamps.
 		await Promise.all([healMeta(metaDeps, true), healEffort({ ...deps, fetchImpl: effortFetch }, true, [r1Model])]);
