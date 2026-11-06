@@ -817,7 +817,7 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
-const THINKING_LEGEND = "[↑↓] Move  [Type] Filter  [Space] Off/auto  [0] All levels  [1-6] Toggle level  [Ctrl+P] Probe  [Ctrl+E] All auto  [Ctrl+D] All off  [Enter] Save  [Esc] Clear/cancel";
+const THINKING_LEGEND = "[↑↓] Move  [Type] Filter, Enter ends  [Space] Off/auto  [0] All levels  [1-6] Toggle level  [Ctrl+P] Probe  [Ctrl+E] All auto  [Ctrl+D] All off  [Enter] Save  [Esc] Clear/cancel";
 // minimal … max: the efforts a map can offer; off is pi's own switch, not an effort.
 const EFFORT_LEVELS = THINKING_LEVELS.slice(1);
 
@@ -957,7 +957,7 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 						if (busy === label) return `probing ${progress ?? ""}`.trim();
 						return levels.get(label) === "auto" ? `auto · ${summary(probed.get(label))}` : "off";
 					},
-					description: () => "Space: off ↔ auto · 0 all levels · 1-6 toggle minimal low medium high xhigh max · type to filter",
+					description: () => "Space: off ↔ auto · 0 all levels · 1-6 toggle minimal low medium high xhigh max · type to filter, Enter to act on the matches",
 					search: "models",
 					legend: () =>
 						`${theme.fg("accent", `${[...levels.values()].filter((l) => l !== "off").length}/${rows.length} thinking`)}${theme.fg("dim", ` · ${THINKING_LEGEND}`)}`,

@@ -101,6 +101,7 @@ export class ListPicker implements Component {
 	/** Rows shown before the list scrolls (a relay catalog can be far longer than the screen). */
 	private readonly maxRows: number | undefined;
 	private readonly field: Input | undefined;
+	private typing = false;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -126,7 +127,6 @@ export class ListPicker implements Component {
 		this.edge = thinkingColorOf(theme, thinkingLevel);
 		this.maxRows = maxRows;
 		this.field = hooks.search ? new Input({ placeholder: "type to filter " + hooks.search + "…", placeholderStyle: (t) => theme.fg("muted", t) }) : undefined;
-		if (this.field) this.field.focused = true;
 		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
@@ -159,21 +159,32 @@ export class ListPicker implements Component {
 		this.hooks.requestRender();
 	}
 
-	// True when the key belongs to the search field, which is always focused (like the
-	// vision-watcher picker): text and backspace edit the query. Space and the digits stay
-	// commands while the query is empty, so a toggle needs no mode switch; once a query is
-	// typed they are text, so "gpt 5" stays typeable. Esc clears a query before it closes.
+	// True when the key belongs to the search field. A letter starts typing; Enter or an arrow
+	// ends it and keeps the filter, so Space and the digits act on the filtered rows again.
+	// Digits are text only while typing ("v4.1"); Space is always a command, since a model
+	// id has no spaces. Esc clears the query before it closes the screen.
 	private searchKey(keyData: string): boolean {
 		const field = this.field;
 		if (!field) return false;
 		if (matchesKey(keyData, "escape")) {
 			if (!this.query) return false;
+			this.typing = false;
+			field.focused = false;
 			this.setQuery("");
 			return true;
 		}
-		if (!this.query && (matchesKey(keyData, "space") || /^[0-9]$/.test(keyData))) return false;
-		const editing = keyData === "\x7f" || keyData === "\b" || (keyData.length > 0 && !/[\x00-\x1f]/.test(keyData));
-		if (!editing) return false;
+		if (this.typing && (matchesKey(keyData, "enter") || matchesKey(keyData, "up") || matchesKey(keyData, "down"))) {
+			this.typing = false;
+			field.focused = false;
+			this.hooks.requestRender();
+			return matchesKey(keyData, "enter");
+		}
+		const erase = keyData === "\x7f" || keyData === "\b";
+		const text = keyData.length > 0 && !/[\x00-\x1f ]/.test(keyData);
+		if (!(erase && this.query) && !text) return false;
+		if (text && !this.typing && /^[0-9]$/.test(keyData)) return false;
+		this.typing = true;
+		field.focused = true;
 		const before = this.query;
 		field.handleInput(keyData);
 		if (this.query !== before) this.selected = 0;
@@ -450,5 +461,20 @@ if (isMain(import.meta.url)) {
 	assert(!inputCancelled, "Enter is not a cancel");
 	field.handleInput("\x1b");
 	assert(inputCancelled, "Esc cancels the field");
+	// The Thinking flow: type a name, Enter keeps the filter, then Space and digits act on it.
+	const hits: string[] = [];
+	const filtered = new ListPicker(fakeTheme, [{ label: "river/ds-v4" }, { label: "auto/glm" }], undefined, { preview: () => {}, revert: () => {}, done: () => hits.push("done"), requestRender: () => {}, toggle: () => hits.push("toggle"), press: (k) => { if (/^[0-9]$/.test(k)) hits.push("press " + k); }, search: "models" }, { title: "T", description: "d", legend: "l" }, false);
+	for (const ch of "River") filtered.handleInput(ch);
+	filtered.handleInput(" ");
+	filtered.handleInput("4");
+	assert(hits.join() === "toggle" && filtered.index === -1, "while typing, Space toggles and a digit is text");
+	filtered.handleInput("\x7f");
+	filtered.handleInput("\r");
+	filtered.handleInput("0");
+	assert(hits.join() === "toggle,press 0" && filtered.index === 0, "Enter ends typing without saving, then a digit is a command on the match");
+	filtered.handleInput("\x1b");
+	filtered.handleInput("7");
+	assert(hits.join() === "toggle,press 0,press 7", "Esc clears the filter and leaves commands active");
+
 	console.log("list-picker.ts self-check OK");
 }
