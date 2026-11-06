@@ -143,10 +143,17 @@ export class ListPicker implements Component {
 		return this.shown[this.selected] ?? -1;
 	}
 
-	// Rows the search query matches, as indexes into rows.
+	// Rows the search query matches, as indexes into rows. The match is fuzzy (the query's
+	// characters in order, gaps allowed): Space is a command here, so "riverflash" has to
+	// find river/.../DeepSeek-V4.1-Flash without a space between the words.
 	private get shown(): number[] {
 		const q = this.query.toLowerCase();
-		return this.rows.flatMap((r, i) => (q === "" || r.label.toLowerCase().includes(q) ? [i] : []));
+		const fits = (label: string): boolean => {
+			let at = 0;
+			for (const ch of label.toLowerCase()) if (ch === q[at]) at++;
+			return at === q.length;
+		};
+		return this.rows.flatMap((r, i) => (fits(r.label) ? [i] : []));
 	}
 
 	private get query(): string {
@@ -466,8 +473,12 @@ if (isMain(import.meta.url)) {
 	const filtered = new ListPicker(fakeTheme, [{ label: "river/ds-v4" }, { label: "auto/glm" }], undefined, { preview: () => {}, revert: () => {}, done: () => hits.push("done"), requestRender: () => {}, toggle: () => hits.push("toggle"), press: (k) => { if (/^[0-9]$/.test(k)) hits.push("press " + k); }, search: "models" }, { title: "T", description: "d", legend: "l" }, false);
 	for (const ch of "River") filtered.handleInput(ch);
 	filtered.handleInput(" ");
-	filtered.handleInput("4");
+	filtered.handleInput("7");
 	assert(hits.join() === "toggle" && filtered.index === -1, "while typing, Space toggles and a digit is text");
+	filtered.handleInput("\x7f");
+	for (const ch of "ds4") filtered.handleInput(ch);
+	assert(filtered.index === 0 && hits.join() === "toggle", "the filter is fuzzy: riverds4 finds river/ds-v4");
+	for (let i = 0; i < 3; i++) filtered.handleInput("\x7f");
 	filtered.handleInput("\x7f");
 	filtered.handleInput("\r");
 	filtered.handleInput("0");
