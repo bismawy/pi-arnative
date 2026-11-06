@@ -959,7 +959,7 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 						return levels.get(label) === "auto" ? `auto · ${summary(probed.get(label))}` : "off";
 					},
 					description: () => "Space: off ↔ auto · 0 all levels · 1-6 toggle minimal low medium high xhigh max · / search",
-					search: true,
+					search: "models",
 					legend: () =>
 						`${theme.fg("accent", `${[...levels.values()].filter((l) => l !== "off").length}/${rows.length} thinking`)}${theme.fg("dim", ` · ${THINKING_LEGEND}`)}`,
 				},

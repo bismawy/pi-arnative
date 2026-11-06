@@ -74,8 +74,9 @@ interface ListPickerHooks {
 	/** Description re-read on every render, so the line under the title can follow screen
 	 *  state (the model list shows the API flavor `a` switched to). */
 	description?: () => string;
-	// Slash opens a search field that filters rows by label; Esc clears it.
-	search?: boolean;
+	// What the rows are ("models"): shows a filter line under the description, the way
+	// vision-watcher filters its model list. Slash focuses it, Enter keeps it, Esc clears it.
+	search?: string;
 }
 
 /** Box copy, so one picker serves every menu ("Themes - Arnative⠙", "Headers - Arnative⠙", …).
@@ -99,8 +100,8 @@ export class ListPicker implements Component {
 	private readonly edge: (s: string) => string;
 	/** Rows shown before the list scrolls (a relay catalog can be far longer than the screen). */
 	private readonly maxRows: number | undefined;
-	private query = "";
 	private searching = false;
+	private readonly field: Input | undefined;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -125,6 +126,7 @@ export class ListPicker implements Component {
 		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
 		this.edge = thinkingColorOf(theme, thinkingLevel);
 		this.maxRows = maxRows;
+		this.field = hooks.search ? new Input({ placeholder: "type to filter " + hooks.search + "…", placeholderStyle: (t) => theme.fg("muted", t) }) : undefined;
 		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
@@ -147,8 +149,12 @@ export class ListPicker implements Component {
 		return this.rows.flatMap((r, i) => (q === "" || r.label.toLowerCase().includes(q) ? [i] : []));
 	}
 
+	private get query(): string {
+		return this.field?.getValue() ?? "";
+	}
+
 	private setQuery(query: string): void {
-		this.query = query;
+		this.field?.setValue(query);
 		this.selected = 0;
 		this.hooks.requestRender();
 	}
@@ -156,24 +162,28 @@ export class ListPicker implements Component {
 	// True when the key belongs to the search field. Slash opens it; while it is open every
 	// key edits the query except Enter (keep the filter), Esc (clear it) and the arrows.
 	private searchKey(keyData: string): boolean {
-		if (!this.hooks.search) return false;
+		const field = this.field;
+		if (!field) return false;
 		if (!this.searching) {
 			if (keyData !== "/") return false;
 			this.searching = true;
+			field.focused = true;
 			this.hooks.requestRender();
 			return true;
 		}
-		const code = keyData.length === 1 ? keyData.charCodeAt(0) : -1;
-		if (matchesKey(keyData, "escape")) {
+		if (matchesKey(keyData, "escape") || matchesKey(keyData, "enter")) {
 			this.searching = false;
-			this.setQuery("");
-		} else if (matchesKey(keyData, "enter")) {
-			this.searching = false;
-			this.hooks.requestRender();
+			field.focused = false;
+			if (matchesKey(keyData, "escape")) this.setQuery("");
+			else this.hooks.requestRender();
 		} else if (matchesKey(keyData, "up")) this.move(-1);
 		else if (matchesKey(keyData, "down")) this.move(1);
-		else if (code === 8 || code === 127 || matchesKey(keyData, "backspace")) this.setQuery(this.query.slice(0, -1));
-		else if (code >= 32) this.setQuery(this.query + keyData);
+		else {
+			const before = this.query;
+			field.handleInput(keyData);
+			if (this.query !== before) this.selected = 0;
+			this.hooks.requestRender();
+		}
 		return true;
 	}
 
@@ -268,18 +278,18 @@ export class ListPicker implements Component {
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
 		if (windowStart > 0) body.unshift(truncateToWidth(th.fg("dim", `↑ ${windowStart} more`), width - 4, ""));
 		if (windowEnd < shown.length) body.push(truncateToWidth(th.fg("dim", `↓ ${shown.length - windowEnd} more`), width - 4, ""));
+		// Idle, the line names the key: Space and the digits are commands until a slash focuses it.
+		if (this.field) {
+			const line = this.searching || this.query ? this.field.render(Math.max(1, width - 4)) : ["> " + th.fg("muted", "/ to filter " + this.hooks.search + "…")];
+			body.unshift(...line, "");
+		}
 		return renderScreen(
 			th,
 			width,
 			{
 				...this.text,
 				legend: this.hooks.legend ? this.hooks.legend() : this.text.legend,
-				description:
-					this.searching || this.query
-						? "/ " + this.query + (this.searching ? "▏" : "") + " · " + shown.length + " of " + this.rows.length
-						: this.hooks.description
-							? this.hooks.description()
-							: this.text.description,
+				description: this.hooks.description ? this.hooks.description() : this.text.description,
 			},
 			body,
 			edge,
