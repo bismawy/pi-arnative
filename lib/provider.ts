@@ -817,7 +817,7 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
-const THINKING_LEGEND = "[Space] Off/auto  [0-6] Levels  [^P] Probe  [^E/^D] All auto/off  [Enter] Save  [Esc] Back";
+const THINKING_LEGEND = "[/] Filter  [Space] Off/auto  [0-6] Levels  [p] Probe  [a/r] All auto/off  [Enter] Save  [Esc] Back";
 // minimal … max: the efforts a map can offer; off is pi's own switch, not an effort.
 const EFFORT_LEVELS = THINKING_LEVELS.slice(1);
 
@@ -928,11 +928,10 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 					},
 					press: (keyData) => {
 						if (busy) return;
-						// Every letter types into the always-focused filter, so the commands sit on Ctrl.
-						// Ctrl+A is the field's line start and the tmux prefix, so the bulk keys are E and D.
-						// Neither clears a map: it is what the model accepts, whatever the switch says.
-						if (matchesKey(keyData, "ctrl+e") || matchesKey(keyData, "ctrl+d")) {
-							const to = matchesKey(keyData, "ctrl+e") ? "auto" : "off";
+						// Letters reach here only outside the filter (/ toggles typing), so the commands are
+						// plain keys. Neither bulk key clears a map: it is what the model accepts.
+						if (matchesKey(keyData, "a") || matchesKey(keyData, "r")) {
+							const to = matchesKey(keyData, "a") ? "auto" : "off";
 							for (const id of levels.keys()) levels.set(id, to);
 							refresh();
 							return;
@@ -951,18 +950,18 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 							refresh();
 							return;
 						}
-						if (matchesKey(keyData, "ctrl+p")) void probe(label);
+						if (matchesKey(keyData, "p")) void probe(label);
 					},
 					note: (label) => {
 						if (busy === label) return `probing ${progress ?? ""}`.trim();
 						return levels.get(label) === "auto" ? `auto · ${summary(probed.get(label))}` : "off";
 					},
-					description: () => "0 all · 1-6 minimal low medium high xhigh max · type to filter, Enter ends typing",
+					description: () => "0 all · 1-6 minimal low medium high xhigh max · / filter, / or Enter done",
 					search: "models",
 					legend: () =>
 						`${theme.fg("accent", `${[...levels.values()].filter((l) => l !== "off").length}/${rows.length} thinking`)}${theme.fg("dim", ` · ${THINKING_LEGEND}`)}`,
 				},
-				{ title: screenTitle("Thinking"), description: "levels each model accepts — Ctrl+P probes, 1-6 toggle by hand", legend: THINKING_LEGEND },
+				{ title: screenTitle("Thinking"), description: "levels each model accepts — p probes, 1-6 toggle by hand", legend: THINKING_LEGEND },
 				false,
 				ctx.thinkingLevel,
 				MODEL_VIEWPORT,

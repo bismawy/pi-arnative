@@ -144,10 +144,10 @@ export class ListPicker implements Component {
 	}
 
 	// Rows the search query matches, as indexes into rows. The match is fuzzy (the query's
-	// characters in order, gaps allowed): Space is a command here, so "riverflash" has to
-	// find river/.../DeepSeek-V4.1-Flash without a space between the words.
+	// characters in order, gaps allowed, spaces ignored), so "river flash" and "riverflash"
+	// both find river/.../DeepSeek-V4.1-Flash.
 	private get shown(): number[] {
-		const q = this.query.toLowerCase();
+		const q = this.query.toLowerCase().replace(/\s+/g, "");
 		const fits = (label: string): boolean => {
 			let at = 0;
 			for (const ch of label.toLowerCase()) if (ch === q[at]) at++;
@@ -166,32 +166,31 @@ export class ListPicker implements Component {
 		this.hooks.requestRender();
 	}
 
-	// True when the key belongs to the search field. A letter starts typing; Enter or an arrow
-	// ends it and keeps the filter, so Space and the digits act on the filtered rows again.
-	// Digits are text only while typing ("v4.1"); Space is always a command, since a model
-	// id has no spaces. Esc clears the query before it closes the screen.
+	// True when the key belongs to the search field. Slash switches typing on and off. While
+	// typing every key is text (Space and digits too); Enter or slash ends it and keeps the
+	// filter, so every command acts on the matching rows. Esc clears the filter; with no
+	// filter and no typing it falls through and closes the screen.
 	private searchKey(keyData: string): boolean {
 		const field = this.field;
 		if (!field) return false;
-		if (matchesKey(keyData, "escape")) {
-			if (!this.query) return false;
-			this.typing = false;
-			field.focused = false;
+		const setTyping = (on: boolean): true => {
+			this.typing = on;
+			field.focused = on;
+			this.hooks.requestRender();
+			return true;
+		};
+		if (!this.typing) {
+			if (keyData === "/") return setTyping(true);
+			if (!matchesKey(keyData, "escape") || !this.query) return false;
 			this.setQuery("");
 			return true;
 		}
-		if (this.typing && (matchesKey(keyData, "enter") || matchesKey(keyData, "up") || matchesKey(keyData, "down"))) {
-			this.typing = false;
-			field.focused = false;
-			this.hooks.requestRender();
-			return matchesKey(keyData, "enter");
+		if (keyData === "/" || matchesKey(keyData, "enter")) return setTyping(false);
+		if (matchesKey(keyData, "escape")) {
+			this.setQuery("");
+			return setTyping(false);
 		}
-		const erase = keyData === "\x7f" || keyData === "\b";
-		const text = keyData.length > 0 && !/[\x00-\x1f ]/.test(keyData);
-		if (!(erase && this.query) && !text) return false;
-		if (text && !this.typing && /^[0-9]$/.test(keyData)) return false;
-		this.typing = true;
-		field.focused = true;
+		if (matchesKey(keyData, "up") || matchesKey(keyData, "down")) return false;
 		const before = this.query;
 		field.handleInput(keyData);
 		if (this.query !== before) this.selected = 0;
@@ -468,24 +467,26 @@ if (isMain(import.meta.url)) {
 	assert(!inputCancelled, "Enter is not a cancel");
 	field.handleInput("\x1b");
 	assert(inputCancelled, "Esc cancels the field");
-	// The Thinking flow: type a name, Enter keeps the filter, then Space and digits act on it.
+	// The Thinking flow: / starts typing, every key is text, Enter keeps the filter, then commands act on it.
 	const hits: string[] = [];
 	const filtered = new ListPicker(fakeTheme, [{ label: "river/ds-v4" }, { label: "auto/glm" }], undefined, { preview: () => {}, revert: () => {}, done: () => hits.push("done"), requestRender: () => {}, toggle: () => hits.push("toggle"), press: (k) => { if (/^[0-9]$/.test(k)) hits.push("press " + k); }, search: "models" }, { title: "T", description: "d", legend: "l" }, false);
-	for (const ch of "River") filtered.handleInput(ch);
-	filtered.handleInput(" ");
-	filtered.handleInput("7");
-	assert(hits.join() === "toggle" && filtered.index === -1, "while typing, Space toggles and a digit is text");
+	filtered.handleInput("r");
+	assert(filtered.index === 0, "a letter outside typing does not filter");
+	filtered.handleInput("/");
+	for (const ch of "River 7") filtered.handleInput(ch);
+	assert(hits.join() === "" && filtered.index === -1, "while typing, Space and digits are text");
 	filtered.handleInput("\x7f");
 	for (const ch of "ds4") filtered.handleInput(ch);
-	assert(filtered.index === 0 && hits.join() === "toggle", "the filter is fuzzy: riverds4 finds river/ds-v4");
-	for (let i = 0; i < 3; i++) filtered.handleInput("\x7f");
-	filtered.handleInput("\x7f");
+	assert(filtered.index === 0 && hits.join() === "", "the filter is fuzzy and ignores spaces: river ds4 finds river/ds-v4");
 	filtered.handleInput("\r");
 	filtered.handleInput("0");
-	assert(hits.join() === "toggle,press 0" && filtered.index === 0, "Enter ends typing without saving, then a digit is a command on the match");
+	filtered.handleInput(" ");
+	assert(hits.join() === "press 0,toggle" && filtered.index === 0, "Enter ends typing without saving, then keys are commands on the match");
 	filtered.handleInput("\x1b");
 	filtered.handleInput("7");
-	assert(hits.join() === "toggle,press 0,press 7", "Esc clears the filter and leaves commands active");
+	assert(hits.join() === "press 0,toggle,press 7", "Esc clears the filter and leaves commands active");
+	filtered.handleInput("\x1b");
+	assert(hits.join().endsWith("done"), "Esc with no filter closes the screen");
 
 	console.log("list-picker.ts self-check OK");
 }
