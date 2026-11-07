@@ -13,7 +13,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseOklch, oklchToRgb } from "../lib/color.ts";
+import { contrast, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
 import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,7 +86,12 @@ const THEMES = {
 		neutralChroma: 0.012,
 		primary: "oklch(82% 0.14 218)",
 		secondary: "oklch(78% 0.11 282)",
-		hues: { heading: 75, label: 282 },
+		// Violet labels are the second tone; amber headings the third.
+		borderAccent: "secondary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
+		hues: { heading: 75, label: 282, link: 282, code: 282, bullet: 218, border: 282, selected: 282 },
 	},
 	"arnative-sun": {
 		accent: "oklch(82.4% 0.1408 70.170730)",
@@ -94,9 +99,15 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 70,
 		neutralChroma: 0.012,
-		primary: "oklch(84% 0.15 70)",
-		secondary: "oklch(78% 0.12 35)",
-		hues: { heading: 60, label: 330 },
+		// Sunset: amber focus, coral signature, indigo labels for the cool counterpoint.
+		primary: "oklch(84% 0.13 30)",
+		secondary: "oklch(78% 0.11 255)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
+		hues: { heading: 30, label: 255, link: 255, code: 255, bullet: 70, border: 255, selected: 255 },
 	},
 	"arnative-zinc": {
 		accent: "oklch(71.2% 0.0129 286.066504)",
@@ -104,9 +115,15 @@ const THEMES = {
 		canvasL: 0.26,
 		neutralHue: 285,
 		neutralChroma: 0.005,
-		primary: "oklch(86% 0.015 285)",
-		secondary: "oklch(72% 0.025 240)",
-		hues: { heading: 285, label: 285 },
+		// Quiet on purpose: two faint hues, a warm-grey signature and sky labels.
+		primary: "oklch(86% 0.02 300)",
+		secondary: "oklch(78% 0.045 235)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
+		hues: { heading: 300, label: 235, link: 235, code: 235, bullet: 286, border: 235, selected: 235 },
 	},
 	"arnative-violet": {
 		accent: "oklch(70.9% 0.1592 293.541199)",
@@ -114,9 +131,15 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 295,
 		neutralChroma: 0.012,
-		primary: "oklch(82% 0.15 294)",
-		secondary: "oklch(78% 0.11 215)",
-		hues: { heading: 295, label: 330 },
+		// Violet focus, magenta signature, cyan labels.
+		primary: "oklch(82% 0.15 330)",
+		secondary: "oklch(78% 0.11 210)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
+		hues: { heading: 330, label: 210, link: 210, code: 210, bullet: 294, border: 210, selected: 210 },
 	},
 	"arnative-emerald": {
 		accent: "oklch(84.5% 0.1299 164.978166)",
@@ -124,9 +147,15 @@ const THEMES = {
 		canvasL: 0.27,
 		neutralHue: 165,
 		neutralChroma: 0.012,
-		primary: "oklch(84% 0.13 165)",
-		secondary: "oklch(78% 0.10 195)",
-		hues: { heading: 165, label: 200 },
+		// Emerald with gold: the label tier and headings carry the warm counterpoint.
+		primary: "oklch(84% 0.12 200)",
+		secondary: "oklch(78% 0.11 85)",
+		borderAccent: "secondary",
+		headingColor: "secondary",
+		linkColor: "primary",
+		codeColor: "primary",
+		bulletColor: "accent",
+		hues: { heading: 85, label: 85, link: 200, code: 200, bullet: 165, border: 85, selected: 85 },
 	},
 	"arnative-matrix": {
 		accent: "oklch(86.9% 0.2776 144.466116)",
@@ -135,11 +164,16 @@ const THEMES = {
 		neutralHue: 145,
 		neutralChroma: 0.02,
 		primary: "oklch(88% 0.24 145)",
-		secondary: "oklch(76% 0.16 165)",
+		secondary: "oklch(78% 0.12 190)",
 		surfaceMsg: "oklch(24% 0.035 145)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "primary",
 		hues: {
-			heading: 145, link: 145, label: 145,
-			keyword: 145, func: 145, variable: 145, string: 145, number: 145, type: 145,
+			heading: 145, link: 190, label: 190, border: 190, selected: 190,
+			keyword: 190, func: 145, variable: 190, string: 145, number: 190, type: 190,
 		},
 	},
 	"arnative-cyberpunk": {
@@ -390,6 +424,37 @@ function derive(spec) {
 	return { vars, roles, exp };
 }
 
+// --- dual-tone guard -------------------------------------------------------
+
+/** Hues between two colours, 0..180. */
+const hueGap = (a, b) => {
+	const d = Math.abs(hue(a) - hue(b)) % 360;
+	return d > 180 ? 360 - d : d;
+};
+
+/** How far the label tier must sit from the accent. Every theme draws the footer, the
+ *  selected row and the detail line on `borderAccent`; when that shares the accent's hue
+ *  the whole UI reads as one colour, which is how six themes ended up mono-tone. */
+const MIN_HUE_GAP = { default: 25, "arnative-zinc": 15 };
+
+function assertDualTone(name, { vars, roles, exp }) {
+	const accent = parseOklch(vars.accent);
+	const labelValue = roles.borderAccent in vars ? vars[roles.borderAccent] : roles.borderAccent;
+	const label = parseOklch(String(labelValue));
+	assert(accent !== null && label !== null, `${name}: accent and borderAccent must both be oklch`);
+	const min = MIN_HUE_GAP[name] ?? MIN_HUE_GAP.default;
+	const gap = hueGap(accent.H, label.H);
+	assert(
+		gap >= min,
+		`${name}: accent ${Math.round(accent.H)} and borderAccent ${Math.round(label.H)} are ${gap.toFixed(0)}° apart, need ${min}°`,
+	);
+	// A label tier without chroma is grey text, not a second tone.
+	assert(label.C >= 0.02, `${name}: borderAccent chroma ${label.C} is too low to read as a tone`);
+	// And it has to stand off the canvas it is drawn on.
+	const ratio = contrast(toHex(labelValue), toHex(exp.pageBg));
+	assert(ratio >= 3, `${name}: borderAccent contrast ${ratio.toFixed(2)} on pageBg is too low`);
+}
+
 // --- rendering -------------------------------------------------------------
 
 function render(name, { vars, roles, exp }) {
@@ -421,7 +486,9 @@ function render(name, { vars, roles, exp }) {
 const check = process.argv.includes("--check");
 let drifted = 0;
 for (const [name, spec] of Object.entries(THEMES)) {
-	const content = render(name, derive({ ...spec, name }));
+	const derived = derive({ ...spec, name });
+	assertDualTone(name, derived);
+	const content = render(name, derived);
 	const file = join(HERE, `${name}.json`);
 	if (check) {
 		const current = await readFile(file, "utf8").catch(() => "");
