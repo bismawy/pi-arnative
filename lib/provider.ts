@@ -525,13 +525,13 @@ const PROVIDERS_TEXT: ScreenText = {
 
 const ADD_ROW = "+ Add provider";
 
-const MODEL_LEGEND = "[↑↓] Move  [Space] Toggle  [a] API  [Enter] Save  [Esc] Cancel";
-const MODEL_LEGEND_LOCKED = "[↑↓] Move  [Space] Toggle  [Enter] Save  [Esc] Cancel";
+const MODEL_LEGEND = "[/] Filter  [Space] Toggle  [a] API  [Enter] Save  [Esc] Cancel";
+const MODEL_LEGEND_LOCKED = "[/] Filter  [Space] Toggle  [Enter] Save  [Esc] Cancel";
 /** Rows visible before the model list scrolls (a relay catalog can exceed the screen). */
 const MODEL_VIEWPORT = 10;
 
 /** One model-selection screen: Space checks rows, `a` cycles the API flavor (unless the
- *  stored api is final), Enter saves. Esc leaves without writing anything. */
+ *  stored api is final), `/` filters by name, Enter saves. Esc leaves without writing anything. */
 const pickModels = async (
 	ctx: ExtensionCommandContext,
 	models: string[],
@@ -565,6 +565,9 @@ const pickModels = async (
 					flavor = API_FLAVORS[(API_FLAVORS.indexOf(flavor) + 1) % API_FLAVORS.length]!;
 				},
 				description: () => `${FLAVOR_LABELS[flavor]}${opts.via ? ` · ${opts.via}` : ""}`,
+				// A relay catalog is long (one had 75 ids), so the same filter line / keeps on the
+				// Thinking screen narrows it here too: the count stays whole, the rows do not.
+				search: "models",
 				// The picked count lives in the legend, accented, next to the keys it refers to.
 				legend: () =>
 					`${theme.fg("accent", `${checked.size}/${models.length} picked`)}${theme.fg("dim", ` · ${opts.lockFlavor ? MODEL_LEGEND_LOCKED : MODEL_LEGEND}`)}`,
@@ -1343,6 +1346,14 @@ if (isMain(import.meta.url)) {
 	const picked0 = renderModels(new Set(["m1"]), [{ label: "m1" }, { label: "m2" }]);
 	assert(picked0.some((l) => l.includes("[x] m1")) && picked0.some((l) => l.includes("[ ] m2")), "checked and unchecked rows render");
 	assert(picked0.some((l) => l.includes("[a] API")), "the model legend advertises the flavor switch");
+	// Models and Probe models share this screen, so the filter is checked once here.
+	const searchable = new ListPicker(fakeTheme, [{ label: "river/flash" }, { label: "river/glm" }, { label: "other/kimi" }], undefined, { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {}, search: "models" }, { title: screenTitle("Models"), description: "d", legend: MODEL_LEGEND }, false);
+	assert(searchable.render(70).map(stripAnsi).some((l) => l.includes("> Type to filter models...")), "the idle model filter names the key-less placeholder");
+	searchable.handleInput("/");
+	for (const ch of "river glm") searchable.handleInput(ch);
+	const narrowed = searchable.render(70).map(stripAnsi);
+	assert(narrowed.filter((l) => /river\/(flash|glm)|other\/kimi/.test(l)).length === 1 && narrowed.some((l) => l.includes("river/glm")), "typing narrows the model list to the fuzzy match");
+	assert(searchable.index === 1, "the selection follows the filtered row back to its model");
 
 	// The store reads with pi's own tolerance: a hand-edited models.json (comments, trailing
 	// commas) is exactly what pi itself accepts, and strings containing `//` or `,]` survive.
