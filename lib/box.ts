@@ -193,7 +193,7 @@ if (isMain(import.meta.url)) {
 	// The header copy is longer than a narrow terminal: the wall must win over the text.
 	const longCopy = "Selection previews live — arnative themes only (all themes: /settings → Theme).";
 	for (const w of [40, 50, 56, 60]) {
-		const narrow = renderScreen(th, w, { title: screenTitle("Themes"), description: longCopy, legend: "[Esc] Revert" }, []);
+		const narrow = renderScreen(th, w, { title: screenTitle("Themes"), description: longCopy, legend: "[Esc] Back" }, []);
 		assert(narrow.every((l) => visibleWidth(l) === w), `a long description keeps every line at width ${w}`);
 		assert(
 			narrow.filter((l) => l.startsWith("│")).every((l) => l.endsWith("│")),

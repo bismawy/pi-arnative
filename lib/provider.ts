@@ -525,8 +525,8 @@ const PROVIDERS_TEXT: ScreenText = {
 
 const ADD_ROW = "+ Add provider";
 
-const MODEL_LEGEND = "[/] Filter  [Space] Toggle  [a] API  [Enter] Save  [Esc] Cancel";
-const MODEL_LEGEND_LOCKED = "[/] Filter  [Space] Toggle  [Enter] Save  [Esc] Cancel";
+const MODEL_LEGEND = "[/] Filter  [Space] Toggle  [a] API  [Enter] Save  [Esc] Back";
+const MODEL_LEGEND_LOCKED = "[/] Filter  [Space] Toggle  [Enter] Save  [Esc] Back";
 /** Rows visible before the model list scrolls (a relay catalog can exceed the screen). */
 const MODEL_VIEWPORT = 10;
 
@@ -659,7 +659,7 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 
 	const key = await readInput(ctx, "Provider", "API key — empty for local or keyless endpoints", "sk-…");
 	// Esc cancels the flow, Enter on an empty field means keyless: readInput keeps the two
-	// apart (undefined vs ""), and the field's own legend promises [Esc] Cancel.
+	// apart (undefined vs ""), and the field's own legend promises [Esc] Back.
 	if (key === undefined) return;
 
 	const suggested = guessProviderName(endpoint);

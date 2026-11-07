@@ -639,7 +639,7 @@ if (isMain(import.meta.url)) {
 
 	// Live-preview picker (shared by Themes and Headers): move = preview, Enter = keep, Esc = revert.
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
-	const pickerText: ListPickerText = { title: screenTitle("Themes"), description: "sub", legend: "[Esc] Revert" };
+	const pickerText: ListPickerText = { title: screenTitle("Themes"), description: "sub", legend: "[Esc] Back" };
 	const previews: string[] = [];
 	let reverted = 0;
 	let done = 0;
@@ -667,8 +667,8 @@ if (isMain(import.meta.url)) {
 	// `←` reports upward instead of closing on a screen with a parent, reverting the live
 	// preview first; the root menu has nothing behind it and omits the key.
 	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "the root menu legend omits ←");
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "submenu legend advertises ← Back");
-	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", "submenu legend advertises Esc Back");
+	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [Esc] Back", "live legend advertises Esc Back");
 	let backs = 0;
 	let backReverts = 0;
 	const childPicker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", {
@@ -679,8 +679,9 @@ if (isMain(import.meta.url)) {
 		requestRender: () => {},
 	}, pickerText);
 	childPicker.handleInput("\x1b[D"); // ←
-	assert(backs === 1 && backReverts === 0, "← reports back to the parent and leaves the revert to it");
-	// The root menu has no parent, so ← must still leave the screen — never a dead key.
+	childPicker.handleInput("\x1b"); // Esc
+	assert(backs === 2 && backReverts === 0, "Esc and ← both report back; the parent owns the revert");
+	// The root menu has no parent, so the same keys must still leave the screen.
 	let rootCancels = 0;
 	const rootPicker = new ListPicker(fakeTheme, nameRows(["a"]), undefined, {
 		preview: () => {},
@@ -690,7 +691,8 @@ if (isMain(import.meta.url)) {
 		requestRender: () => {},
 	}, pickerText, false);
 	rootPicker.handleInput("\x1b[D");
-	assert(rootCancels === 1, "← closes the root menu, which has no parent");
+	rootPicker.handleInput("\x1b"); // Esc
+	assert(rootCancels === 2, "Esc and ← close the root menu, which has no parent");
 
 	// The main menu reuses the picker with preview/revert as no-ops: moving changes no
 	// setting, only Enter opens a row. `reverted` proves it.

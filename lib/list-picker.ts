@@ -17,7 +17,7 @@ export const LIST_LEGEND_ROOT = LEGEND_ROOT;
 export const LIST_LEGEND_MOVE = LEGEND_MOVE;
 export const LIST_LEGEND_LIVE = LEGEND_LIVE;
 /** A text field: Enter keeps the value, Esc leaves it untouched. */
-export const INPUT_LEGEND = "[Enter] Save  [Esc] Cancel";
+export const INPUT_LEGEND = "[Enter] Save  [Esc] Back";
 
 /** One picker row: `Label · Note`. `note` is absent on the preset lists (themes, headers,
  *  footers), which are bare names. */
@@ -171,9 +171,9 @@ export class ListPicker implements Component {
 	}
 
 	// True when the key belongs to the search field. Slash switches typing on and off. While
-	// typing every key is text (Space and digits too); Enter or slash ends it and keeps the
-	// filter, so every command acts on the matching rows. Esc clears the filter; with no
-	// filter and no typing it falls through and closes the screen.
+	// typing every key is text (Space and digits too) and the arrows edit the field, so
+	// Enter, slash or Esc ends typing and keeps the filter; every command then acts on the
+	// matching rows. Esc one more time is the screen's Back.
 	private searchKey(keyData: string): boolean {
 		const field = this.field;
 		if (!field) return false;
@@ -183,23 +183,24 @@ export class ListPicker implements Component {
 			this.hooks.requestRender();
 			return true;
 		};
-		if (!this.typing) {
-			if (keyData === "/") return setTyping(true);
-			if (!matchesKey(keyData, "escape") || !this.query) return false;
-			this.setQuery("");
-			return true;
-		}
-		if (keyData === "/" || matchesKey(keyData, "enter")) return setTyping(false);
-		if (matchesKey(keyData, "escape")) {
-			this.setQuery("");
-			return setTyping(false);
-		}
+		if (!this.typing) return keyData === "/" && setTyping(true);
+		if (keyData === "/" || matchesKey(keyData, "enter") || matchesKey(keyData, "escape")) return setTyping(false);
 		if (matchesKey(keyData, "up") || matchesKey(keyData, "down")) return false;
 		const before = this.query;
 		field.handleInput(keyData);
 		if (this.query !== before) this.selected = 0;
 		this.hooks.requestRender();
 		return true;
+	}
+
+	/** Esc/←: `back` owns an uncommitted preview's revert, so it is not duplicated here. */
+	private leave(): void {
+		if (this.hooks.back) {
+			this.hooks.back();
+			return;
+		}
+		if (this.applied !== this.opened) this.hooks.revert();
+		(this.hooks.cancel ?? this.hooks.done)();
 	}
 
 	private move(delta: number): void {
@@ -218,20 +219,18 @@ export class ListPicker implements Component {
 
 	handleInput(keyData: string): void {
 		if (this.searchKey(keyData)) return;
-		if (matchesBack(keyData)) {
-			// Leave for the parent without touching the preview: `back` owns the revert of an
-			// uncommitted preview, because "cancel" here means "close", not "undo".
-			if (this.hooks.back === false) return;
-			if (this.hooks.back) {
-				this.hooks.back();
-				return;
-			}
-			// No parent (the root menu): ← behaves like Esc — close, reverting a live preview.
-			if (this.applied !== this.opened) this.hooks.revert();
-			(this.hooks.cancel ?? this.hooks.done)();
+		// Esc steps out one level: a screen with a parent reopens it, and the root closes.
+		// ← is the same key for muscle memory, but a fill screen (`back: false`) hides it.
+		if (matchesKey(keyData, "escape")) {
+			this.leave();
 			return;
 		}
-		if (keyData === "Q" || matchesKey(keyData, "q") || matchesKey(keyData, "escape")) {
+		if (matchesBack(keyData)) {
+			if (this.hooks.back === false) return;
+			this.leave();
+			return;
+		}
+		if (keyData === "Q" || matchesKey(keyData, "q")) {
 			if (this.applied !== this.opened) this.hooks.revert();
 			(this.hooks.cancel ?? this.hooks.done)();
 			return;
@@ -388,8 +387,8 @@ export class InputPicker implements Component, Focusable {
 // Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
 	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "root legend pinned, no ← behind the root menu");
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "move legend pinned, ← advertised where a back target exists");
-	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", "move legend pinned: Esc is Back where a parent exists");
+	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [Esc] Back", "live legend pinned: Esc drops the preview and steps out");
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 	const quiet = (): void => undefined;
 	const picker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
@@ -492,11 +491,11 @@ if (isMain(import.meta.url)) {
 	filtered.handleInput("0");
 	filtered.handleInput(" ");
 	assert(hits.join() === "press 0,toggle" && filtered.index === 0, "Enter ends typing without saving, then keys are commands on the match");
+	filtered.handleInput("/");
 	filtered.handleInput("\x1b");
-	filtered.handleInput("7");
-	assert(hits.join() === "press 0,toggle,press 7", "Esc clears the filter and leaves commands active");
+	assert(hits.join() === "press 0,toggle", "Esc while typing ends typing and keeps the filter, so the screen stays open");
 	filtered.handleInput("\x1b");
-	assert(hits.join().endsWith("done"), "Esc with no filter closes the screen");
+	assert(hits.join().endsWith("done"), "a second Esc, outside typing, leaves the screen");
 
 	console.log("list-picker.ts self-check OK");
 }

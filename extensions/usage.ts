@@ -139,11 +139,13 @@ export class UsageModalComponent implements Component {
 
 	handleInput(keyData: string): void {
 		const rows = this.buildFlatRows();
-		if (matchesBack(keyData)) {
+		// Esc and ← both step out one level: the dashboard reports it upward so the /arnative
+		// menu reopens. q closes outright, for a dashboard opened by /usage on its own.
+		if (matchesBack(keyData) || matchesKey(keyData, "escape")) {
 			this.onDone(true);
 			return;
 		}
-		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q") || matchesKey(keyData, "escape")) {
+		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q")) {
 			this.onDone(false);
 			return;
 		}
@@ -758,17 +760,17 @@ if (isMain(import.meta.url)) {
 		} as never) === undefined,
 		"a wheel event is left to the terminal",
 	);
-	// `←` is the arnative-wide "go back" key: the dashboard reports it upward instead of
-	// closing, so the /arnative menu can reopen. Esc/q still close it outright.
+	// `←` and Esc are the arnative-wide "go back" keys: the dashboard reports them upward
+	// instead of closing, so the /arnative menu can reopen. q still closes it outright.
 	const doneArgs: boolean[] = [];
 	const nav = new UsageModalComponent(fakeTheme, (back) => doneArgs.push(back), () => {}, "high");
 	nav.handleInput("\x1b[D"); // ←
 	nav.handleInput("\x1b"); // Esc
 	nav.handleInput("q");
-	assert(doneArgs.length === 3 && doneArgs[0] === true && doneArgs[1] === false && doneArgs[2] === false, "← reports back, Esc/q close");
+	assert(doneArgs.length === 3 && doneArgs[0] === true && doneArgs[1] === true && doneArgs[2] === false, "← and Esc report back, q closes");
 	assert(
-		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => l.includes("[←] Back")),
-		"the dashboard legend advertises the back key",
+		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => l.includes("[Esc] Back")),
+		"the dashboard legend advertises Esc Back",
 	);
 
 	// models.json rates price the provider and models directly.
