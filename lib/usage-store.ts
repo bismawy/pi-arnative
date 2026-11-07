@@ -6,7 +6,7 @@
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -513,6 +513,96 @@ export function resetUsageCache(): void {
 	cachedSummary = null;
 	cachedRange = null;
 	lastScanMs = 0;
+}
+
+// =============================================================================
+// Reset: move the history aside, never destroy it
+// =============================================================================
+//
+// The numbers on the dashboard are not a counter we own: they are a fold over Pi's
+// session files. Deleting the cache changes nothing, so a real reset has to move those
+// files. They go to `arnative/usage-trash/<stamp>/` with their folder structure intact,
+// which is what makes the reset undoable; Pi simply stops seeing them, and `/resume`
+// forgets those sessions until they are moved back.
+
+/** Where a reset parks the history: one folder per reset, so two resets never collide. */
+export function usageTrashRoot(): string {
+	return join(cacheDir(), "usage-trash");
+}
+
+/** What a reset would move: used by the confirmation line, before anything is touched. */
+export function usageHistorySize(keep: readonly string[] = []): { files: number; bytes: number } {
+	const sessionsDir = join(getAgentDir(), "sessions");
+	const kept = new Set(keep.map((p) => p.toLowerCase()));
+	let files = 0;
+	let bytes = 0;
+	for (const file of scanSessionFiles(sessionsDir)) {
+		if (kept.has(file.toLowerCase())) continue;
+		try {
+			bytes += statSync(file).size;
+			files++;
+		} catch {
+			// Vanished between the scan and the stat: it is gone, so it is not part of the total.
+		}
+	}
+	return { files, bytes };
+}
+
+/** Move every session file except `keep` (the one in use) into the trash, and drop the
+ *  cache. Returns the folder to pass to {@link restoreUsageHistory}. */
+export function resetUsageHistory(keep: readonly string[] = []): { moved: number; bytes: number; dir: string } {
+	const sessionsDir = join(getAgentDir(), "sessions");
+	const kept = new Set(keep.map((p) => p.toLowerCase()));
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+	const dir = join(usageTrashRoot(), stamp);
+	let moved = 0;
+	let bytes = 0;
+	for (const file of scanSessionFiles(sessionsDir)) {
+		if (kept.has(file.toLowerCase())) continue;
+		const rel = relative(sessionsDir, file);
+		const dest = join(dir, rel);
+		try {
+			bytes += statSync(file).size;
+			mkdirSync(join(dest, ".."), { recursive: true });
+			try {
+				renameSync(file, dest);
+			} catch {
+				// Different volume: copy, then drop the original.
+				copyFileSync(file, dest);
+				unlinkSync(file);
+			}
+			moved++;
+		} catch {
+			// A locked file (Windows, session still open elsewhere) stays where it is: the reset
+			// moved what it could, and the confirmation line reports the count it actually moved.
+		}
+	}
+	resetUsageCache();
+	return { moved, bytes, dir };
+}
+
+/** The undo of {@link resetUsageHistory}: move the parked files back into place. */
+export function restoreUsageHistory(dir: string): { restored: number } {
+	const sessionsDir = join(getAgentDir(), "sessions");
+	let restored = 0;
+	for (const file of scanSessionFiles(dir)) {
+		const dest = join(sessionsDir, relative(dir, file));
+		try {
+			mkdirSync(join(dest, ".."), { recursive: true });
+			if (existsSync(dest)) continue; // A new session took that name: keep both.
+			try {
+				renameSync(file, dest);
+			} catch {
+				copyFileSync(file, dest);
+				unlinkSync(file);
+			}
+			restored++;
+		} catch {
+			// Locked: leave it in the trash, the rest still comes back.
+		}
+	}
+	resetUsageCache();
+	return { restored };
 }
 
 /** One file's rollup, narrowed to the days a range covers. Same shape the `all` path reads

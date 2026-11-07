@@ -67,6 +67,11 @@ const BACK = keySet(BACK_KEY_LABEL, "left");
 const CANCEL = keySet("Esc", "escape");
 /** The usage dashboard window switch: Tab forward, Shift+Tab back. */
 const RANGE = keySet("Tab", "tab");
+/** Upper case on purpose: the lower case keys already navigate, so a plain r cannot
+ *  start a destructive flow by accident. Both footers name the capital letter. */
+export const RESET_USAGE = keySet("R", "shift+r");
+/** The undo of a reset, offered only while a reset is the last thing that happened. */
+export const UNDO_USAGE = keySet("U", "shift+u");
 
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
@@ -79,9 +84,14 @@ export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], 
 export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [CANCEL.label, "Back"]);
 /** A list you only read (the `/todos` recap): moving changes nothing, so there is no Open. */
 export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
-/** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
-export function legendUsage(width: number): string {
-	const full = legend([MOVE.label, "Move"], [RANGE.label, "Range"], ["Click", "Open/close"], [CANCEL.label, "Back"]);
+/** The usage dashboard. `reset` adds the key that deletes history, so a screen without
+ *  that key never advertises it; `undo` appears only while a reset can be undone. */
+export function legendUsage(width: number, opts: { reset?: boolean; undo?: boolean } = {}): string {
+	const pairs: [string, string][] = [[MOVE.label, "Move"], [RANGE.label, "Range"], ["Click", "Open/close"]];
+	if (opts.reset) pairs.push([CANCEL.label, "Back"], [RESET_USAGE.label, "Reset"]);
+	if (opts.undo) pairs.push([UNDO_USAGE.label, "Undo"]);
+	if (!opts.reset) pairs.push([CANCEL.label, "Back"]);
+	const full = legend(...pairs);
 	return width >= visibleWidth(full) ? full : legend([CANCEL.label, "Back"]);
 }
 
@@ -132,5 +142,9 @@ if (isMain(import.meta.url)) {
 	assert(legendUsage(120).includes("[Esc] Back"), "a wide usage legend advertises Esc Back");
 	assert(legendUsage(120).includes("[Click] Open/close"), "a wide usage legend advertises the mouse");
 	assert(legendUsage(20) === "[Esc] Back", "a narrow usage legend degrades to the one key that still fits");
+	assert(legendUsage(160, { reset: true }).includes("[R] Reset"), "a reset-capable dashboard advertises R Reset");
+	assert(!legendUsage(160).includes("Reset"), "the read-only dashboard does not advertise a key it lacks");
+	assert(RESET_USAGE.matches("R") && !RESET_USAGE.matches("r"), "a capital R is shift+r, not r");
+	assert(UNDO_USAGE.matches("U") && !UNDO_USAGE.matches("u"), "a capital U is shift+u, not u");
 	console.log("shortcuts.ts self-check OK");
 }

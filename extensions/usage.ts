@@ -12,7 +12,7 @@ import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
 import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
-import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
+import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../lib/shortcuts.ts";
 import {
 	collectUsageSummary,
 	estimateCost,
@@ -23,6 +23,9 @@ import {
 	dayKey,
 	rangeStart,
 	resetUsageCache,
+	resetUsageHistory,
+	restoreUsageHistory,
+	usageHistorySize,
 	USAGE_RANGES,
 	type UsageRange,
 	type UsageSummary,
@@ -37,6 +40,26 @@ export function formatCost(n: number): string {
 		return s === "1000.00" ? "$1.0k" : `$${s}`;
 	}
 	return `$${(n / 1000).toFixed(1)}k`;
+}
+
+/** File size in the unit a person reads: 281 MB, 1.4 GB. */
+/** `1 session`, `312 sessions`: a count that reads as prose, because the notice is prose. */
+function countOf(n: number, noun: string): string {
+	return n + " " + noun + (n === 1 ? "" : "s");
+}
+
+/** The trash path without the home prefix: the tail is what a person can type. */
+function shortTrash(dir: string): string {
+	const at = dir.replaceAll("\\", "/").indexOf("arnative/usage-trash/");
+	return at >= 0 ? dir.replaceAll("\\", "/").slice(at) : dir;
+}
+
+export function formatBytes(n: number): string {
+	if (!n || n <= 0) return "0 B";
+	if (n < 1024) return n + " B";
+	if (n < 1024 * 1024) return Math.round(n / 1024) + " kB";
+	if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(0) + " MB";
+	return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
 }
 
 export function formatCount(n: number): string {
@@ -85,6 +108,14 @@ export class UsageModalComponent implements Component {
 	private edgeOf: (s: string) => string;
 	/** Row layout of the last render: which table row sits on which screen line. */
 	private rowHitboxes: { line: number; index: number }[] = [];
+	/** A destructive step waits here until the user answers it. Nothing is touched before. */
+	private confirmStep: "reset" | "undo" | null = null;
+	/** One line under the table, stating what the last reset moved. */
+	private notice: string | null = null;
+	/** The folder the last reset parked the history in, so U can put it back. */
+	private trashDir: string | null = null;
+	/** The file pi is writing right now. Moving it would break the running session. */
+	private activeFile: string | undefined;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -92,8 +123,11 @@ export class UsageModalComponent implements Component {
 		onDone: (back: boolean) => void,
 		requestRender: () => void,
 		thinkingLevel?: string,
+		/** The session file in use. Excluded from a reset: pi keeps appending to it. */
+		activeFile?: string,
 	) {
 		this.theme = theme;
+		this.activeFile = activeFile;
 		this.onDone = onDone;
 		this.requestRender = requestRender;
 		this.edgeOf = thinkingColorOf(theme, thinkingLevel);
@@ -159,6 +193,26 @@ export class UsageModalComponent implements Component {
 		return true;
 	}
 
+	/** Do the step the user just confirmed, then re-read whatever is left on disk. */
+	private runConfirm(step: "reset" | "undo"): void {
+		if (step === "reset") {
+			const kept = this.activeFile ? [this.activeFile] : [];
+			const result = resetUsageHistory(kept);
+			this.trashDir = result.moved > 0 ? result.dir : null;
+			this.notice = "Moved " + countOf(result.moved, "session") + " (" + formatBytes(result.bytes) + ") to " + shortTrash(result.dir);
+		} else if (this.trashDir) {
+			const result = restoreUsageHistory(this.trashDir);
+			this.notice = "Restored " + countOf(result.restored, "session");
+			this.trashDir = null;
+		}
+		this.summary = collectUsageSummary(true, this.range);
+		this.selectedIndex = 0;
+		this.expandedProviders.clear();
+		const first = this.summary.providers[0];
+		if (first) this.expandedProviders.add(first.name);
+		this.requestRender();
+	}
+
 	/** Switch the window and re-read the numbers for it. Selection returns to the first row:
 	 *  a provider that carried the last 3 months can be absent from today. */
 	private setRange(range: UsageRange): void {
@@ -174,14 +228,35 @@ export class UsageModalComponent implements Component {
 
 	handleInput(keyData: string): void {
 		const rows = this.buildFlatRows();
+		// A pending question owns the keyboard: any key but y answers no, so a stray press
+		// can neither delete anything nor navigate.
+		if (this.confirmStep) {
+			const yes = matchesKey(keyData, "y") || matchesKey(keyData, "Y");
+			const step = this.confirmStep;
+			this.confirmStep = null;
+			if (yes) this.runConfirm(step);
+			else this.requestRender();
+			return;
+		}
 		// Esc and ← both step out one level: the dashboard reports it upward so the /arnative
 		// menu reopens. q closes outright, for a dashboard opened by /usage on its own.
 		if (matchesBack(keyData) || matchesKey(keyData, "escape")) {
 			this.onDone(true);
 			return;
 		}
-		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q")) {
+		if (matchesKey(keyData, "q") || matchesKey(keyData, "shift+q")) {
 			this.onDone(false);
+			return;
+		}
+		if (RESET_USAGE.matches(keyData)) {
+			this.confirmStep = "reset";
+			this.notice = null;
+			this.requestRender();
+			return;
+		}
+		if (UNDO_USAGE.matches(keyData) && this.trashDir) {
+			this.confirmStep = "undo";
+			this.requestRender();
 			return;
 		}
 		if (matchesKey(keyData, "tab") || matchesKey(keyData, "shift+tab")) {
@@ -363,6 +438,7 @@ export class UsageModalComponent implements Component {
 		// The selected row's detail sits under the table, where the eye lands after scanning it.
 		body.push("");
 		body.push(this.selectedDetail(rows[this.selectedIndex], acc, soft));
+		if (this.notice) body.push(th.fg("muted", this.notice));
 
 		// Table-width separator above Total band (skill arnative-pi §6 rule 7).
 		const tableW = colW.name + sessionW + messagesW + colW.tokens + colW.cost;
@@ -389,11 +465,30 @@ export class UsageModalComponent implements Component {
 			{
 				title: screenTitle("Usage"),
 				description: width >= 70 ? "Token, message & cache usage across all local Pi sessions." : "Usage across all local sessions.",
-				legend: legendUsage(width),
+				legend: this.footer(width, th),
 			},
 			body,
 			edge,
 		);
+	}
+
+	/** The last row of the box: a pending question, or the keys that are live right now. */
+	private footer(width: number, th: { fg(c: string, t: string): string }): string {
+		if (this.confirmStep === "reset") {
+			const size = usageHistorySize(this.activeFile ? [this.activeFile] : []);
+			const what = countOf(size.files, "session") + " (" + formatBytes(size.bytes) + ")";
+			return th.fg("accent", "Delete " + what + "?") + " " + th.fg("muted", "moves to the trash") + "  " + th.fg("text", "[y] Yes  [Esc] Cancel");
+		}
+		if (this.confirmStep === "undo") {
+			return (
+				th.fg("accent", "Put the history back?") +
+				" " +
+				th.fg("muted", "the trash folder stays") +
+				"  " +
+				th.fg("text", "[y] Yes  [Esc] Cancel")
+			);
+		}
+		return legendUsage(width, { reset: true, undo: this.trashDir !== null });
 	}
 
 	/** Detail for the selected row: icon in `accent`, text and `·` dividers in `accentSoft`. */
@@ -422,7 +517,13 @@ export async function openUsage(ctx: ExtensionCommandContext): Promise<boolean> 
 	// The thinking level colors the box, so read it when the dashboard opens.
 	const thinkingLevel = ctx.thinkingLevel;
 	const back = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-		return new UsageModalComponent(theme, (wantsBack) => done(wantsBack), () => tui.requestRender(), thinkingLevel);
+		return new UsageModalComponent(
+			theme,
+			(wantsBack) => done(wantsBack),
+			() => tui.requestRender(),
+			thinkingLevel,
+			ctx.sessionManager.getSessionFile() ?? undefined,
+		);
 	});
 	return back === true;
 }
@@ -992,5 +1093,34 @@ if (isMain(import.meta.url)) {
 	assert(scrolled.some((l) => l.includes("↑ 2 more")), "moving down announces the rows now above the window");
 	assert(!scrolled.some((l) => l.includes("↓ ")), "the bottom of the list announces only what is above");
 
+
+	// --- Reset: history moves to the trash, never into oblivion ----------------
+	assert(formatBytes(0) === "0 B" && formatBytes(1536) === "2 kB" && formatBytes(281 * 1024 * 1024) === "281 MB", "formatBytes picks the readable unit");
+	const resetDir = mkdtempSync(join(tmpdir(), "arnative-reset-"));
+	process.env.PI_CODING_AGENT_DIR = resetDir;
+	const resetSessions = join(resetDir, "sessions", "proj");
+	mkdirSync(resetSessions, { recursive: true });
+	const resetLine = JSON.stringify({ message: { role: "assistant", provider: "google", model: "gemini-3.8-flash", usage: { input: 1000, output: 10, cacheRead: 0, cost: { total: 0.01 } } } });
+	const livePath = join(resetSessions, "live.jsonl");
+	writeFileSync(livePath, resetLine + String.fromCharCode(10));
+	writeFileSync(join(resetSessions, "old.jsonl"), resetLine + String.fromCharCode(10));
+	resetUsageCache();
+	const resetModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high", livePath);
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("[R] Reset")), "the footer advertises R Reset");
+	resetModal.handleInput("R");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Delete 1 session (151 B)?")), "R states the size and asks before anything is touched");
+	resetModal.handleInput("");
+	assert(existsSync(join(resetSessions, "old.jsonl")), "any other key cancels and no file moves");
+	resetModal.handleInput("R");
+	resetModal.handleInput("y");
+	assert(!existsSync(join(resetSessions, "old.jsonl")), "confirming moves the other sessions out");
+	assert(existsSync(livePath), "the session in use is never moved");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Moved 1 session")), "the notice states what moved");
+	assert(collectUsageSummary(true).totals.msgs === 1, "only the live session is still counted");
+	resetModal.handleInput("U");
+	resetModal.handleInput("y");
+	assert(existsSync(join(resetSessions, "old.jsonl")), "U puts the history back");
+	assert(collectUsageSummary(true).totals.msgs === 2, "both sessions count again");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Restored 1 session")), "the notice states what came back");
 	console.log("usage.ts self-check OK");
 }
