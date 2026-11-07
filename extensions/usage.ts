@@ -13,7 +13,20 @@ import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
 import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
 import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
-import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
+import {
+	collectUsageSummary,
+	estimateCost,
+	formatTokens,
+	getModelAllTimeUsage,
+	hasPrice,
+	loadPriceTable,
+	dayKey,
+	rangeStart,
+	resetUsageCache,
+	USAGE_RANGES,
+	type UsageRange,
+	type UsageSummary,
+} from "../lib/usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -50,10 +63,19 @@ export interface RowItem {
 	expanded?: boolean;
 }
 
+/** Labels on the range bar, in tab order. */
+const RANGE_LABELS: Record<UsageRange, string> = { all: "All", today: "Today", "7d": "7 day", "30d": "30 day", "3m": "3 month" };
+/** Data rows on screen at once: five reads as a table, sixteen pushed the Total row off. */
+const USAGE_VIEWPORT = 5;
+
 export class UsageModalComponent implements Component {
 	private expandedProviders = new Set<string>();
 	private selectedIndex = 0;
 	private summary: UsageSummary;
+	/** Which window the numbers cover. `all` keeps the old dashboard's meaning. */
+	private range: UsageRange = "all";
+	/** Tab hitboxes of the last render: column span of each range on the bar line. */
+	private tabHitboxes: { line: number; start: number; end: number; range: UsageRange }[] = [];
 
 	private theme: { fg(c: string, t: string): string; bold?(t: string): string };
 	private onDone: (back: boolean) => void;
@@ -75,7 +97,7 @@ export class UsageModalComponent implements Component {
 		this.onDone = onDone;
 		this.requestRender = requestRender;
 		this.edgeOf = thinkingColorOf(theme, thinkingLevel);
-		this.summary = collectUsageSummary(true);
+		this.summary = collectUsageSummary(true, this.range);
 		// Default: expand the first provider when there is one
 		if (this.summary.providers.length > 0) {
 			this.expandedProviders.add(this.summary.providers[0]!.name);
@@ -137,6 +159,19 @@ export class UsageModalComponent implements Component {
 		return true;
 	}
 
+	/** Switch the window and re-read the numbers for it. Selection returns to the first row:
+	 *  a provider that carried the last 3 months can be absent from today. */
+	private setRange(range: UsageRange): void {
+		if (range === this.range) return;
+		this.range = range;
+		this.summary = collectUsageSummary(true, range);
+		this.selectedIndex = 0;
+		this.expandedProviders.clear();
+		const first = this.summary.providers[0];
+		if (first) this.expandedProviders.add(first.name);
+		this.requestRender();
+	}
+
 	handleInput(keyData: string): void {
 		const rows = this.buildFlatRows();
 		// Esc and ← both step out one level: the dashboard reports it upward so the /arnative
@@ -147,6 +182,12 @@ export class UsageModalComponent implements Component {
 		}
 		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q")) {
 			this.onDone(false);
+			return;
+		}
+		if (matchesKey(keyData, "tab") || matchesKey(keyData, "shift+tab")) {
+			const at = USAGE_RANGES.indexOf(this.range);
+			const step = matchesKey(keyData, "shift+tab") ? -1 : 1;
+			this.setRange(USAGE_RANGES[(at + step + USAGE_RANGES.length) % USAGE_RANGES.length]!);
 			return;
 		}
 		if (matchesKey(keyData, "up") || matchesKey(keyData, "k")) {
@@ -175,6 +216,12 @@ export class UsageModalComponent implements Component {
 	handleMouse(event: TuiMouseEvent): { handled: boolean; render?: boolean } | undefined {
 		if (event.type === "wheel" || event.type === "move" || event.type === "drag" || event.type === "release") {
 			return undefined;
+		}
+		// A click on the range bar picks that window, so the bar is a control, not a label.
+		const tab = this.tabHitboxes.find((h) => h.line === event.y && event.x >= h.start && event.x <= h.end);
+		if (tab) {
+			if (event.type === "click") this.setRange(tab.range);
+			return { handled: true, render: event.type === "click" };
 		}
 		const hit = this.rowHitboxes.find((h) => h.line === event.y);
 		if (!hit) {
@@ -247,15 +294,40 @@ export class UsageModalComponent implements Component {
 		/** Rows the chrome draws above the body: top edge, title, description, blank. */
 		const CHROME_ROWS = 4;
 		this.rowHitboxes = [];
+		this.tabHitboxes = [];
+
+		// Row 1: the window bar. The active range is the only accented word, so the numbers
+		// below are read with the window they cover; the counter on the same line says how many
+		// rows exist beyond the viewport.
+		const bar: string[] = [];
+		let barCol = 0;
+		for (const r of USAGE_RANGES) {
+			if (bar.length > 0) {
+				bar.push(dim(" · "));
+				barCol += 3;
+			}
+			const label = RANGE_LABELS[r];
+			const text = r === this.range ? acc(bold(label)) : th.fg("muted", label);
+			this.tabHitboxes.push({ line: CHROME_ROWS + 1, start: barCol + 2, end: barCol + label.length + 1, range: r });
+			bar.push(text);
+			barCol += label.length;
+		}
+		const counter = `${Math.min(rows.length, USAGE_VIEWPORT)}/${rows.length}`;
+		const barLine = bar.join("");
+		const counterFits = contentW - barCol - counter.length - 2 >= 0;
+		body.push(counterFits ? barLine + " ".repeat(contentW - barCol - counter.length) + dim(counter) : barLine);
+		body.push("");
 		body.push(headerText);
 
-		// Data rows (with a display height cap so it cannot overflow)
-		const maxVisibleRows = 16;
+		// Row 2 onward: the table, windowed so the box keeps one height however long the list
+		// of providers and models grows. The line above and below say what is out of sight.
+		const maxVisibleRows = USAGE_VIEWPORT;
 		let startIdx = 0;
 		if (rows.length > maxVisibleRows) {
 			startIdx = Math.max(0, Math.min(this.selectedIndex - Math.floor(maxVisibleRows / 2), rows.length - maxVisibleRows));
 		}
 		const visibleRows = rows.slice(startIdx, startIdx + maxVisibleRows);
+		if (startIdx > 0) body.push(dim(`↑ ${startIdx} more`));
 
 		for (let i = 0; i < visibleRows.length; i++) {
 			const item = visibleRows[i]!;
@@ -281,6 +353,8 @@ export class UsageModalComponent implements Component {
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
 		}
+		const hiddenBelow = rows.length - (startIdx + visibleRows.length);
+		if (hiddenBelow > 0) body.push(dim(`↓ ${hiddenBelow} more`));
 
 		// The selected row's detail sits under the table, where the eye lands after scanning it.
 		body.push("");
@@ -833,6 +907,78 @@ if (isMain(import.meta.url)) {
 			`cost is never clipped at width ${w}`,
 		);
 	}
+
+	// Ranges: three dated files — today, 10 days back, 45 days back — so each window has a
+	// number only it can produce.
+	const dayMs = 86_400_000;
+	const nowMs = Date.now();
+	const stampOf = (offsetDays: number): string => new Date(nowMs - offsetDays * dayMs).toISOString();
+	const datedAsst = (provider: string, model: string, input: number, offsetDays: number) =>
+		JSON.stringify({ timestamp: stampOf(offsetDays), message: { role: "assistant", provider, model, usage: { input, output: 1, cacheRead: 0, cost: { total: 0 } } } });
+	writeFileSync(
+		join(fixture, "sessions", "ui", "dated.jsonl"),
+		[datedAsst("rangely", "m-today", 10, 0), datedAsst("rangely", "m-ten", 20, 10), datedAsst("rangely", "m-old", 40, 45)].join(String.fromCharCode(10)),
+	);
+	resetUsageCache();
+	const msgIn = (range: UsageRange): number => {
+		const found = collectUsageSummary(true, range).providers.find((p) => p.name === "rangely");
+		return found?.msgs ?? 0;
+	};
+	assert(msgIn("all") === 3, "the all window keeps every dated message");
+	assert(msgIn("today") === 1, "today counts only the message written today");
+	assert(msgIn("7d") === 1, "7 day stops before the ten-day record, so only today counts");
+	assert(msgIn("30d") === 2, "30 day covers today and ten days back, not forty-five");
+	assert(msgIn("3m") === 3, "3 month covers all three");
+	// A window with nothing in it is empty, not an error: the bar can be pressed on a quiet day.
+	assert(collectUsageSummary(true, "today").totals.msgs >= 1, "today still reports the rows it has");
+
+	// The backfill: a cache item written before ranges existed has totals but no day buckets.
+	// Asking for a range must re-parse that file rather than report a wrong window.
+	const cacheFile = join(fixture, "arnative", "usage-cache.json");
+	resetUsageCache();
+	const legacy = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, Record<string, unknown>>;
+	for (const item of Object.values(legacy)) delete item.d;
+	writeFileSync(cacheFile, JSON.stringify(legacy), "utf8");
+	resetUsageCache();
+	assert(msgIn("today") === 1, "an item without day buckets is re-parsed once a range is asked for");
+	const reloaded = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, { d?: unknown }>;
+	assert(Object.values(reloaded).some((item) => item.d !== undefined), "the re-parse writes the day buckets back");
+
+	// The range bar: five windows, the active one accented, and the counter states how many
+	// rows exist past the viewport. Tab moves the window and the numbers follow it.
+	const barModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high");
+	const barOnce = barModal.render(100).map(plain);
+	const barLine = barOnce.find((l) => l.includes("All") && l.includes("Today") && l.includes("3 month"));
+	assert(barLine !== undefined, "the range bar names every window on one line");
+	assert(USAGE_RANGES.every((r) => barLine!.includes(RANGE_LABELS[r])), "every range label is on the bar");
+	assert(barLine!.indexOf("All") < barLine!.indexOf("Today"), "the bar keeps tab order");
+	const beforeRange = barModal.render(100).map(plain).join("\n");
+	barModal.handleInput("\t");
+	const afterRange = barModal.render(100).map(plain).join("\n");
+	assert(beforeRange !== afterRange, "Tab switches the window and repaints");
+	barModal.handleInput("\x1b[Z");
+	assert(barModal.render(100).map(plain).join("\n") === beforeRange, "Shift+Tab walks the bar back to where it started");
+
+	// The viewport: five rows on screen with a count and an arrow for what is out of sight.
+	const manyModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "medium");
+	const provider = (n: number) => ({
+		name: `p${n}`, sessions: 1, msgs: 1, input: 1000, output: 10, cacheRead: 0, totalTokens: 1010, cost: 0.01, estimatedCost: 0,
+		models: [{ name: "m", sessions: 1, msgs: 1, input: 1000, output: 10, cacheRead: 0, totalTokens: 1010, cost: 0.01, estimatedCost: 0 }],
+	});
+	(manyModal as unknown as { summary: unknown }).summary = {
+		providers: [1, 2, 3, 4, 5, 6, 7].map(provider),
+		totals: { sessions: 7, msgs: 7, input: 7000, output: 70, cacheRead: 0, totalTokens: 7070, cost: 0.07, reportedCost: 0.07, estimatedCost: 0 },
+	};
+	const many = manyModal.render(96).map(plain);
+	assert(many.some((l) => l.includes("5/7")), "the counter reads 5/7 with five rows shown of seven");
+	assert(many.some((l) => l.includes("↓ 2 more")), "rows below the window are counted");
+	assert(!many.some((l) => l.includes("↑ ")), "nothing is announced above the top of the list");
+	const dataRows = many.filter((l) => /^[│|] [▾▸ ] P[0-9]/.test(l));
+	assert(dataRows.length === 5, `exactly five data rows are drawn (got ${dataRows.length})`);
+	for (let i = 0; i < 6; i++) manyModal.handleInput("\x1b[B");
+	const scrolled = manyModal.render(96).map(plain);
+	assert(scrolled.some((l) => l.includes("↑ 2 more")), "moving down announces the rows now above the window");
+	assert(!scrolled.some((l) => l.includes("↓ ")), "the bottom of the list announces only what is above");
 
 	console.log("usage.ts self-check OK");
 }

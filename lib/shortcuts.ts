@@ -65,6 +65,8 @@ const MOVE = keySet("↑↓", "up", "down");
 const CHOOSE = keySet("Enter", "enter");
 const BACK = keySet(BACK_KEY_LABEL, "left");
 const CANCEL = keySet("Esc", "escape");
+/** The usage dashboard window switch: Tab forward, Shift+Tab back. */
+const RANGE = keySet("Tab", "tab");
 
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
@@ -79,7 +81,7 @@ export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Selec
 export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
 /** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
 export function legendUsage(width: number): string {
-	const full = legend([MOVE.label, "Move"], ["Click", "Open/close"], [CANCEL.label, "Back"]);
+	const full = legend([MOVE.label, "Move"], [RANGE.label, "Range"], ["Click", "Open/close"], [CANCEL.label, "Back"]);
 	return width >= visibleWidth(full) ? full : legend([CANCEL.label, "Back"]);
 }
 
