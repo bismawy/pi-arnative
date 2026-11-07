@@ -129,6 +129,7 @@ interface UsageModelStats {
 	input: number;
 	output: number;
 	cacheRead: number;
+	/** Prompt + completion + cache reads: the same total a vendor dashboard reports. */
 	totalTokens: number;
 	cost: number;
 	/** Cost reconstructed from the price table, only when `cost` is 0. Never folded into `cost`. */
@@ -681,7 +682,7 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 				input: mData.input,
 				output: mData.output,
 				cacheRead: mData.cacheRead,
-				totalTokens: mData.input + mData.output,
+				totalTokens: mData.input + mData.output + mData.cacheRead,
 				cost: mData.cost,
 			});
 		}
@@ -694,7 +695,7 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 			input: pData.input,
 			output: pData.output,
 			cacheRead: pData.cacheRead,
-			totalTokens: pData.input + pData.output,
+			totalTokens: pData.input + pData.output + pData.cacheRead,
 			cost: pData.cost,
 			models,
 		});
@@ -724,7 +725,7 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 			input: totalInp,
 			output: totalOut,
 			cacheRead: totalCache,
-			totalTokens: totalInp + totalOut,
+			totalTokens: totalInp + totalOut + totalCache,
 			cost: totalCost,
 			reportedCost: totalCost,
 			estimatedCost,

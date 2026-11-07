@@ -466,6 +466,14 @@ if (isMain(import.meta.url)) {
 	assert(summary.totals.sessions === 1, "collectUsageSummary detects total sessions");
 	assert(summary.totals.msgs === 3, "collectUsageSummary counts assistant messages only");
 	assert(Math.abs(summary.totals.cost - 0.06) < 1e-9, "collectUsageSummary counts cost");
+	// Tokens is everything the model moved, cache reads included: a vendor dashboard counts
+	// the same three numbers, so 240M cached tokens cannot vanish from the headline.
+	assert(
+		summary.totals.totalTokens === summary.totals.input + summary.totals.output + summary.totals.cacheRead,
+		"the Tokens total is prompt + completion + cache reads",
+	);
+	assert(summary.totals.totalTokens === 175, `the fixture moves 175 tokens in total, got ${summary.totals.totalTokens}`);
+	assert(summary.providers[0]!.models[0]!.totalTokens === 162, "a model row counts its cache reads too");
 
 	const modelUsage = getModelAllTimeUsage("gemini-3.8-flash");
 	assert(modelUsage.input === 150 && modelUsage.output === 10 && modelUsage.cacheRead === 2, "getModelAllTimeUsage sums one model across messages");
@@ -877,8 +885,8 @@ if (isMain(import.meta.url)) {
 		providers: [
 			{
 				name: "alpha", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000,
-				totalTokens: 1_500_000, cost: 0, estimatedCost: 0.546,
-				models: [{ name: "deepseek-v4.1-flash", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000, totalTokens: 1_500_000, cost: 0, estimatedCost: 0.546 }],
+				totalTokens: 3_500_000, cost: 0, estimatedCost: 0.546,
+				models: [{ name: "deepseek-v4.1-flash", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000, totalTokens: 3_500_000, cost: 0, estimatedCost: 0.546 }],
 			},
 			{
 				name: "antigravity", sessions: 1, msgs: 1, input: 2_200_000, output: 626_000, cacheRead: 0,
@@ -886,7 +894,7 @@ if (isMain(import.meta.url)) {
 				models: [{ name: "gemini-3.8-flash", sessions: 1, msgs: 1, input: 2_200_000, output: 626_000, cacheRead: 0, totalTokens: 2_826_000, cost: 0.65, estimatedCost: 0 }],
 			},
 		],
-		totals: { sessions: 2, msgs: 3, input: 3_200_000, output: 1_126_000, cacheRead: 2_000_000, totalTokens: 4_326_000, cost: 0.65, reportedCost: 0.65, estimatedCost: 0.546 },
+		totals: { sessions: 2, msgs: 3, input: 3_200_000, output: 1_126_000, cacheRead: 2_000_000, totalTokens: 6_326_000, cost: 0.65, reportedCost: 0.65, estimatedCost: 0.546 },
 	};
 	(estModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set(["alpha"]);
 	const estLines = estModal.render(90);
