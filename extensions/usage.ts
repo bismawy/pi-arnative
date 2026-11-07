@@ -308,15 +308,19 @@ export class UsageModalComponent implements Component {
 			}
 			const label = RANGE_LABELS[r];
 			const text = r === this.range ? acc(bold(label)) : th.fg("muted", label);
-			this.tabHitboxes.push({ line: CHROME_ROWS + 1, start: barCol + 2, end: barCol + label.length + 1, range: r });
+			this.tabHitboxes.push({ line: CHROME_ROWS + 2, start: barCol + 2, end: barCol + label.length + 1, range: r });
 			bar.push(text);
 			barCol += label.length;
 		}
 		const counter = `${Math.min(rows.length, USAGE_VIEWPORT)}/${rows.length}`;
+		const rule = th.fg("borderMuted", "\u2500".repeat(Math.max(0, contentW)));
 		const barLine = bar.join("");
-		const counterFits = contentW - barCol - counter.length - 2 >= 0;
+		const counterFits = contentW - barCol - counter.length - 1 >= 0;
+		// The bar is a control between two rules, so the eye reads it as a switch over the table
+		// below it, not as a line of the table itself.
+		body.push(rule);
 		body.push(counterFits ? barLine + " ".repeat(contentW - barCol - counter.length) + dim(counter) : barLine);
-		body.push("");
+		body.push(rule);
 		body.push(headerText);
 
 		// Row 2 onward: the table, windowed so the box keeps one height however long the list
@@ -362,7 +366,7 @@ export class UsageModalComponent implements Component {
 
 		// Table-width separator above Total band (skill arnative-pi §6 rule 7).
 		const tableW = colW.name + sessionW + messagesW + colW.tokens + colW.cost;
-		body.push(th.fg("dim", "─".repeat(Math.max(0, tableW))));
+		body.push(th.fg("borderMuted", "─".repeat(Math.max(0, tableW))));
 
 		// Total row
 		const t = this.summary.totals;
@@ -697,7 +701,7 @@ if (isMain(import.meta.url)) {
 		!lines.slice(headerAt + 1, firstRow).some((l) => l.includes("├")),
 		"no rule sits between the header and the first row",
 	);
-	assert(plain(lines[headerAt - 1]!).slice(1, -1).trim() === "", "a blank row separates the description from the header");
+	assert(/^─+$/.test(plain(lines[headerAt - 1]!).slice(1, -1).trim()), "a rule closes the window bar above the header");
 	// The header is content: it sits flush with the title, and each column title ends on the
 	// same cell its own numbers end on.
 	const headerLine = plain(lines[headerAt]!);
