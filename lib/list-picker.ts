@@ -102,6 +102,9 @@ export class ListPicker implements Component {
 	private readonly maxRows: number | undefined;
 	private readonly field: Input | undefined;
 	private typing = false;
+	private get placeholder(): string {
+		return "Type to filter " + (this.hooks?.search ?? "") + "...";
+	}
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -126,7 +129,8 @@ export class ListPicker implements Component {
 		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
 		this.edge = thinkingColorOf(theme, thinkingLevel);
 		this.maxRows = maxRows;
-		this.field = hooks.search ? new Input({ placeholder: "type to filter " + hooks.search + "…", placeholderStyle: (t) => theme.fg("muted", t) }) : undefined;
+		// The live field: accent prompt and a cursor, shown only while typing (render draws the idle line).
+		this.field = hooks.search ? new Input({ prompt: theme.fg("accent", "> "), placeholder: this.placeholder, placeholderStyle: (t) => theme.fg("muted", t) }) : undefined;
 		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
@@ -285,7 +289,13 @@ export class ListPicker implements Component {
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
 		if (windowStart > 0) body.unshift(truncateToWidth(th.fg("dim", `↑ ${windowStart} more`), width - 4, ""));
 		if (windowEnd < shown.length) body.push(truncateToWidth(th.fg("dim", `↓ ${shown.length - windowEnd} more`), width - 4, ""));
-		if (this.field) body.unshift(...this.field.render(Math.max(1, width - 4)), "");
+		if (this.field) {
+			// Idle, pi-tui's Input would still paint its fake cursor, so the off state is drawn here:
+			// a disabled prompt (the editor's idle border colour) over the kept query or the placeholder.
+			const idle = th.fg("borderMuted", "> ") + (this.query ? th.fg("text", this.query) : th.fg("dim", this.placeholder));
+			const line = this.typing ? this.field.render(Math.max(1, width - 4)) : [truncateToWidth(idle, width - 4, "")];
+			body.unshift(...line, "");
+		}
 		return renderScreen(
 			th,
 			width,
