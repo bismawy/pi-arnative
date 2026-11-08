@@ -216,12 +216,12 @@ const THEMES = {
 		canvasL: 0.26,
 		neutralHue: 300,
 		neutralChroma: 0.015,
-		// Hot fuchsia focus, purple headings, royal-blue labels — the three hues of the
-		// Coolors trending magenta ramp (f72585-7209b7-4361ee).
-		primary: "oklch(76% 0.16 300)",
+		// Hot fuchsia focus, royal-blue labels; the model name in the footer takes the
+		// same pink (primary), purple headings stay on their own literal.
+		primary: "oklch(78% 0.18 334)",
 		secondary: "oklch(78% 0.13 240)",
 		borderAccent: "secondary",
-		headingColor: "primary",
+		headingColor: "oklch(76% 0.16 300)",
 		linkColor: "secondary",
 		codeColor: "secondary",
 		bulletColor: "accent",
@@ -233,12 +233,12 @@ const THEMES = {
 		canvasL: 0.26,
 		neutralHue: 25,
 		neutralChroma: 0.012,
-		// Vivid red focus, cream headings, navy labels — from the Coolors trending red
-		// palette (c1121f-fdf0d5-003049).
-		primary: "oklch(92% 0.03 85)",
+		// Vivid red focus, navy labels; the model name in the footer takes the same
+		// red (primary), cream headings stay on their own literal.
+		primary: "oklch(74% 0.17 28)",
 		secondary: "oklch(74% 0.10 215)",
 		borderAccent: "secondary",
-		headingColor: "primary",
+		headingColor: "oklch(92% 0.03 85)",
 		linkColor: "secondary",
 		codeColor: "secondary",
 		bulletColor: "accent",

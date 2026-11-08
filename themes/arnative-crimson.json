@@ -7,7 +7,7 @@
 		"fgMuted": "oklch(72% 0.012 25)",
 		"fgDim": "oklch(61% 0.012 25)",
 		"fgFaint": "oklch(49% 0.012 25)",
-		"primary": "oklch(92% 0.03 85)",
+		"primary": "oklch(74% 0.159 28)",
 		"secondary": "oklch(74% 0.1 215)",
 		"secondarySoft": "oklch(82% 0.018 215)",
 		"accent": "oklch(78% 0.129 28)",
@@ -47,7 +47,7 @@
 		"toolTitle": "fg",
 
 		"toolOutput": "fgMuted",
-		"mdHeading": "primary",
+		"mdHeading": "oklch(92% 0.03 85)",
 		"mdLink": "secondary",
 		"mdLinkUrl": "fgDim",
 		"mdCode": "secondary",
