@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- **Shortcut to open settings:** Press `Alt+a` (Windows/WSL) or `Ctrl+Alt+a` (macOS/Linux) to immediately open the `/arnative` settings menu (`lib/shortcuts.ts`, `extensions/arnative.ts`).
+- **Five new themes:** Added `arnative-magical` (lavender & rose pink), `arnative-lemonade` (sage, peach & lime), `arnative-blossom` (rose & petal pink), `arnative-garden` (earth gold, olive moss & terracotta), and `arnative-earthy` (warm tan, sage moss & clay brown) (`themes/gen-themes.mjs`, `themes/*.json`).
+- **Harmonized chat & system boxes:** User chat bubbles (`userMessageBg`) and system notification boxes like `[compaction]` (`customMessageBg` / `customMessageLabel`) now derive directly from each theme's `primary` hue for consistent theme accenting across Cyberpunk, Crimson, Matrix, Gruvbox, Neutral, Nord, Zinc, Dracula, and new themes.
+- **Custom theme auto-sync in dev loop:** `npm run overlay` now mirrors updated theme JSON files directly into `~/.pi/agent/themes/` (`scripts/overlay.mjs`).
+
+### Added
 - **Four palettes: `arnative-zinc`, `arnative-nord`, `arnative-dracula`, `arnative-gruvbox`.** Zinc follows the sage-and-steel palette (`#e0e2db`, `#d2d4c8`, `#b8bdb5`, `#889696`, `#5f7470`): deep teal is the focus, soft linen the headings, cool steel the links and code, dust grey the footer labels. Nord, Dracula and Gruvbox follow their published palettes: polar-night canvas with frost-blue focus and aurora-purple labels, night canvas with purple focus, pink headings and model name, and orange labels, warm canvas with orange focus and aqua labels. Each palette declares a second hue at least 25° from its accent, so no screen reads as one colour, and the generator now rejects two themes that share an accent or footer colour (`themes/gen-themes.mjs`, `assertDistinctThemes`; `themes/*.json`). The README theme list names the real files again (`README.md`).
 
 ### Fixed

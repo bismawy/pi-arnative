@@ -37,6 +37,8 @@ export const SHORTCUT_RELOAD = build("r");
 export const SHORTCUT_TOGGLE_FOOTER = build("m");
 /** Expand/collapse the task list widget. Same platform split: Alt+o on Windows/WSL. */
 export const SHORTCUT_TOGGLE_TODOS = build("o");
+/** Open the /arnative settings menu. Alt+a on Windows/WSL, Ctrl+alt+a elsewhere. */
+export const SHORTCUT_OPEN_ARNATIVE = build("a");
 /** Scroll the expanded task list: `j` down, `k` up, one task per press. */
 export const SHORTCUT_SCROLL_TODOS_DOWN = build("j");
 export const SHORTCUT_SCROLL_TODOS_UP = build("k");

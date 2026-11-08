@@ -112,196 +112,295 @@ const THEMES = {
 		linkColor: "primary",
 		codeColor: "tone",
 		bulletColor: "accent",
-		hues: { heading: 96, label: 86, link: 196, code: 196, bullet: 193, border: 86, selected: 86 },
+		hues: { heading: 96, label: 96, link: 196, code: 196, bullet: 193, border: 86, selected: 86 },
 	},
 	"arnative-cyberpunk": {
-		// Neon pink focus, lime signature, orange links/code (tone), deep cyan panels.
-		// Same var-based structure as arnative: label tier follows the accent, headings
-		// and the footer model name take the purple signature, links/code take the
-		// orange `tone` var — the palette stays cyberpunk (pink/lima/cyan/orange).
-		accent: "oklch(76% 0.22 355)",
-		chroma: 0.2,
+		// Neon fuchsia focus (#ea00d9, accent), electric cyan headings & model (#0abdc6, primary),
+		// deep purple secondary (#711c91, secondary), and deep violet panels.
+		accent: "oklch(76% 0.22 332)",
+		chroma: 0.22,
 		canvasL: 0.24,
 		neutralHue: 275,
 		neutralChroma: 0.02,
-		primary: "oklch(88% 0.18 95)",
-		secondary: "oklch(82% 0.16 200)",
-		tone: "oklch(82% 0.18 45)",
-		headingTone: "oklch(78% 0.20 300)",
-		surfaceMsg: "headingTone",
+		primary: "oklch(72.7% 0.123 201)",
+		secondary: "oklch(42.4% 0.183 314)",
+		surfaceMsg: "secondary",
 		borderAccent: "accentSoft",
-		headingColor: "headingTone",
-		linkColor: "headingTone",
-		codeColor: "tone",
+		headingColor: "primary",
+		linkColor: "primary",
+		codeColor: "accent",
 		bulletColor: "accent",
 		hues: {
-			heading: 300, label: 200, link: 95, code: 45, bullet: 355, border: 200, selected: 200, searchMatch: 355,
-			keyword: 200, func: 95, variable: 355, string: 140, number: 45, type: 200,
+			heading: 201, label: 201, link: 201, code: 332, bullet: 332, border: 201, selected: 201, searchMatch: 332,
+			keyword: 332, func: 201, variable: 332, string: 140, number: 45, type: 201,
 		},
 	},
 	"arnative-crimson": {
-		// Brick-red focus (#c1121f), molten-lava secondary (#780000), papaya-whip cream headings
-		// (#fdf0d5, primary), steel-blue links/code (#669bbc, tone), and deep-space-blue panels (#003049, surfaceMsg).
-		// AccentSoft provides the bright, soft pastel red for footer labels.
-		accent: "oklch(72% 0.19 26)",
-		chroma: 0.17,
+		// Garnet red focus (#941b0c, accent), fiery burnt orange headings (#bc3908 adjusted to L:58%, primary),
+		// golden amber secondary (#f6aa1c, secondary), and deep red-brown panels (#361715, surfaceMsg).
+		accent: "oklch(74% 0.16 31)",
+		chroma: 0.16,
 		canvasL: 0.24,
-		neutralHue: 238,
+		neutralHue: 31,
 		neutralChroma: 0.015,
-		primary: "oklch(93% 0.038 85)",
-		secondary: "oklch(76% 0.14 29)",
-		tone: "oklch(78% 0.085 237)",
-		surfaceMsg: "oklch(25% 0.05 238)",
+		primary: "oklch(58% 0.175 37)",
+		secondary: "oklch(79.2% 0.161 75)",
+		tone: "oklch(82% 0.14 70)",
+		surfaceMsg: "oklch(25% 0.05 25)",
 		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 85, label: 26, link: 237, code: 237, bullet: 26, border: 237, selected: 237, searchMatch: 26,
-			keyword: 26, func: 85, variable: 26, string: 145, number: 45, type: 237,
+			heading: 37, label: 37, link: 70, code: 70, bullet: 31, border: 75, selected: 75, searchMatch: 31,
+			keyword: 31, func: 75, variable: 31, string: 145, number: 75, type: 70,
 		},
 	},
 	"arnative-matrix": {
-		// Medium-jungle green focus (#09a129, accent), spring-green headings & model (#27fb6b, primary),
-		// phosphor mint links/code (#60ddc0, tone), and jet-black teal panels (#0a2e36, surfaceMsg).
+		// Medium-jungle green focus (#009a22, accent), bright phosphor-green headings & model (#00ff2b, primary),
+		// lime green secondary (#36ba01, secondary), and jet-black teal panels (#0a2e36, surfaceMsg).
 		// AccentSoft provides the bright, soft matrix pastel green for footer labels.
-		accent: "oklch(74% 0.19 145)",
-		chroma: 0.18,
+		accent: "oklch(74% 0.191 144)",
+		chroma: 0.19,
 		canvasL: 0.24,
 		neutralHue: 215,
 		neutralChroma: 0.015,
-		primary: "oklch(88% 0.22 148)",
-		secondary: "oklch(76% 0.13 145)",
+		primary: "oklch(86.7% 0.287 143)",
+		secondary: "oklch(69% 0.223 140)",
 		tone: "oklch(82% 0.12 175)",
-		surfaceMsg: "oklch(24% 0.04 215)",
+		surfaceMsg: "primary",
 		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
 		bulletColor: "primary",
 		hues: {
-			heading: 148, label: 145, link: 175, code: 175, bullet: 148, border: 175, selected: 175, searchMatch: 148,
-			keyword: 145, func: 148, variable: 175, string: 145, number: 85, type: 175,
+			heading: 143, label: 143, link: 175, code: 175, bullet: 143, border: 140, selected: 140, searchMatch: 144,
+			keyword: 144, func: 143, variable: 175, string: 144, number: 85, type: 175,
 		},
 	},
 	"arnative-neutral": {
-		// Powder-blush warm focus (#e0afa0, accent), warm parchment cream headings (#f4f3ee, primary),
-		// silver grey links/code (#bcb8b1, tone), grey-olive secondary (#8a817c), and deep taupe panels (#463f3a, surfaceMsg).
-		// AccentSoft provides the delicate, bright blush-white tint for footer labels.
-		accent: "oklch(80% 0.065 38)",
-		chroma: 0.065,
+		// Grey-olive focus (#8a817c, accent), powder-blush warm headings (#e0afa0, primary),
+		// silver grey links/code & secondary (#bcb8b1, secondary), and deep warm-taupe panels.
+		accent: "oklch(76% 0.035 51)",
+		chroma: 0.035,
 		canvasL: 0.24,
 		neutralHue: 58,
 		neutralChroma: 0.008,
-		primary: "oklch(94% 0.015 97)",
-		secondary: "oklch(76% 0.025 51)",
-		tone: "oklch(82% 0.02 82)",
-		surfaceMsg: "oklch(26% 0.018 58)",
+		primary: "oklch(79.5% 0.061 38)",
+		secondary: "oklch(78.4% 0.011 82)",
+		tone: "oklch(82% 0.015 82)",
+		surfaceMsg: "primary",
 		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 97, label: 38, link: 82, code: 82, bullet: 38, border: 82, selected: 82, searchMatch: 38,
-			keyword: 38, func: 97, variable: 82, string: 97, number: 51, type: 82,
+			heading: 38, label: 38, link: 82, code: 82, bullet: 51, border: 82, selected: 82, searchMatch: 51,
+			keyword: 51, func: 38, variable: 82, string: 97, number: 51, type: 82,
 		},
 	},
 	"arnative-zinc": {
-		// User palette: soft linen #e0e2db, dust grey #d2d4c8, ash grey #b8bdb5, cool steel
-		// #889696, deep teal #5f7470. Deep teal is the focus; its hue is kept and only the
-		// chroma is lifted, because the palette itself is nearly grey and a grey accent tier
-		// would collapse into the neutral text. Soft linen carries the headings, cool steel
-		// the links and code, dust grey the footer labels — a signature 68° off the accent,
-		// so the screen keeps two tones instead of reading as one.
-		accent: "oklch(78% 0.075 182)",
-		chroma: 0.075,
+		// Zinc: ash grey focus (#b8bdb5, accent), cool steel headings & model (#889696, primary),
+		// dust grey footer labels & secondary (#d2d4c8, secondary), and deep slate-zinc panels.
+		accent: "oklch(79.2% 0.035 133)",
+		chroma: 0.035,
 		canvasL: 0.25,
 		neutralHue: 120,
 		neutralChroma: 0.008,
-		primary: "oklch(93% 0.012 120)",
-		secondary: "oklch(84% 0.022 114)",
+		primary: "oklch(66.2% 0.016 197)",
+		secondary: "oklch(86.5% 0.016 114)",
 		tone: "oklch(80% 0.03 197)",
-		surfaceMsg: "oklch(26% 0.022 182)",
-		borderAccent: "secondary",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 120, label: 114, link: 197, code: 197, bullet: 182, border: 197, selected: 197, searchMatch: 182,
-			keyword: 182, func: 120, variable: 197, string: 133, number: 85, type: 114,
+			heading: 197, label: 197, link: 197, code: 197, bullet: 133, border: 114, selected: 114, searchMatch: 133,
+			keyword: 133, func: 197, variable: 114, string: 114, number: 114, type: 197,
 		},
 	},
 	"arnative-nord": {
-		// Nord: polar-night canvas (#2e3440, #3b4252), frost-blue focus (#88c0d0), snow-storm
-		// headings (#eceff4), aurora-purple footer labels (#b48ead), frost-teal links and code
-		// (#8fbcbb). The aurora tier keeps Nord from reading as a plain blue theme.
-		accent: "oklch(78% 0.075 217)",
-		chroma: 0.075,
+		// Nord polar night: dark slate canvas, polar navy focus (#3c455c adapted to L:76%, accent),
+		// frosted blue-grey headings & model (#697d97, primary), slate-purple footer labels (#777696, secondary),
+		// and deep slate-blue panels.
+		accent: "oklch(76% 0.06 268)",
+		chroma: 0.06,
 		canvasL: 0.26,
-		neutralHue: 264,
+		neutralHue: 255,
 		neutralChroma: 0.012,
-		primary: "oklch(95% 0.008 261)",
-		secondary: "oklch(76% 0.07 333)",
+		primary: "oklch(58.3% 0.047 255)",
+		secondary: "oklch(57.8% 0.049 286)",
 		tone: "oklch(80% 0.05 194)",
-		surfaceMsg: "oklch(27% 0.025 264)",
-		borderAccent: "secondary",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 261, label: 333, link: 194, code: 194, bullet: 217, border: 194, selected: 194, searchMatch: 217,
-			keyword: 249, func: 217, variable: 15, string: 131, number: 333, type: 194,
+			heading: 255, label: 255, link: 194, code: 194, bullet: 268, border: 286, selected: 286, searchMatch: 268,
+			keyword: 268, func: 255, variable: 286, string: 131, number: 286, type: 194,
 		},
 	},
 	"arnative-dracula": {
-		// Dracula: night canvas #282a36 with #44475a panels, purple focus #bd93f9, pink
-		// headings, model name and bullets #ff80bf (primary), orange footer labels #ffb86c
-		// (secondary), cyan links and code #8be9fd. Syntax uses the same set: pink keywords,
-		// green functions, yellow strings, orange numbers.
-		accent: "oklch(74% 0.13 302)",
-		chroma: 0.13,
+		// Dracula: night canvas #282a36 with #44475a panels, pink focus #ff80bf (accent),
+		// purple headings & model name #9580ff (primary), bright yellow footer labels #ffff80 (secondary),
+		// cyan links and code #8be9fd (tone).
+		accent: "oklch(76.2% 0.168 351)",
+		chroma: 0.17,
 		canvasL: 0.28,
 		neutralHue: 278,
 		neutralChroma: 0.012,
-		primary: "oklch(76.2% 0.168 351)",
-		secondary: "oklch(83.4% 0.124 67)",
+		primary: "oklch(67.8% 0.181 288)",
+		secondary: "oklch(97.5% 0.149 109)",
 		tone: "oklch(86% 0.09 213)",
 		surfaceMsg: "oklch(31% 0.03 278)",
 		borderAccent: "secondary",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
-		bulletColor: "primary",
+		bulletColor: "accent",
 		hues: {
-			heading: 351, label: 67, link: 213, code: 213, bullet: 351, border: 213, selected: 213, searchMatch: 351,
-			keyword: 351, func: 148, variable: 302, string: 113, number: 67, type: 213,
+			heading: 288, label: 288, link: 213, code: 213, bullet: 351, border: 109, selected: 109, searchMatch: 351,
+			keyword: 351, func: 142, variable: 288, string: 109, number: 109, type: 213,
 		},
 	},
 	"arnative-gruvbox": {
-		// Gruvbox dark: warm canvas #282828 with #3c3836 panels, orange focus #fe8019, cream
-		// headings #ebdbb2, aqua footer labels #8ec07c, blue-grey links and code #83a598.
-		// Red keywords, green functions, yellow strings and purple numbers carry the rest.
-		accent: "oklch(73% 0.15 52)",
+		// Gruvbox dark: warm canvas #282828 with #3c3836 panels, yellow focus #eebd35 (accent),
+		// red headings & model #d83328 (derived from #cc241d, primary), blue-grey footer labels #458588 (secondary),
+		// aqua links and code #83a598 (tone).
+		accent: "oklch(82% 0.153 88)",
 		chroma: 0.15,
 		canvasL: 0.25,
 		neutralHue: 60,
 		neutralChroma: 0.008,
-		primary: "oklch(91% 0.04 89)",
-		secondary: "oklch(78% 0.10 138)",
+		primary: "oklch(58% 0.203 29)",
+		secondary: "oklch(57.6% 0.066 199)",
 		tone: "oklch(78% 0.045 170)",
-		surfaceMsg: "oklch(28% 0.012 49)",
-		borderAccent: "secondary",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 89, label: 52, link: 170, code: 170, bullet: 52, border: 170, selected: 170, searchMatch: 52,
-			keyword: 30, func: 111, variable: 170, string: 83, number: 2, type: 138,
+			heading: 29, label: 29, link: 170, code: 170, bullet: 88, border: 199, selected: 199, searchMatch: 88,
+			keyword: 29, func: 111, variable: 88, string: 83, number: 29, type: 199,
+		},
+	},
+	"arnative-magical": {
+		// Magical: vivid lavender focus (#b892ff, accent), pastel rose/pink headings & model (#ff90b3, primary),
+		// deep vivid purple secondary (#6e44ff, secondary), and deep rose-wine panels.
+		accent: "oklch(73.9% 0.157 299)",
+		chroma: 0.16,
+		canvasL: 0.24,
+		neutralHue: 300,
+		neutralChroma: 0.015,
+		primary: "oklch(78.1% 0.139 1)",
+		secondary: "oklch(55.5% 0.257 285)",
+		tone: "oklch(84% 0.10 320)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 1, label: 1, link: 320, code: 320, bullet: 299, border: 285, selected: 285, searchMatch: 299,
+			keyword: 285, func: 1, variable: 299, string: 140, number: 285, type: 320,
+		},
+	},
+	"arnative-lemonade": {
+		// Lemonade: soft sage focus (#aac0aa, accent), warm peach-orange headings & model (#f4b886, primary),
+		// bright lime-lemon secondary (#cbe896, secondary), and deep peach-wood panels.
+		accent: "oklch(79% 0.06 148)",
+		chroma: 0.06,
+		canvasL: 0.24,
+		neutralHue: 61,
+		neutralChroma: 0.012,
+		primary: "oklch(82.6% 0.095 61)",
+		secondary: "oklch(89.1% 0.11 124)",
+		tone: "oklch(85% 0.08 124)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 61, label: 61, link: 124, code: 124, bullet: 148, border: 124, selected: 124, searchMatch: 148,
+			keyword: 148, func: 61, variable: 124, string: 124, number: 61, type: 124,
+		},
+	},
+	"arnative-blossom": {
+		// Blossom: crimson rose focus (#dd2d4a, accent), blossom pink headings & model (#f26a8d, primary),
+		// soft petal pink secondary (#ffc2d1, secondary), and deep rose-wine panels.
+		accent: "oklch(74% 0.18 18)",
+		chroma: 0.18,
+		canvasL: 0.24,
+		neutralHue: 6,
+		neutralChroma: 0.015,
+		primary: "oklch(69.9% 0.17 6)",
+		secondary: "oklch(87.3% 0.072 2)",
+		tone: "oklch(84% 0.10 350)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 6, label: 6, link: 350, code: 350, bullet: 18, border: 2, selected: 2, searchMatch: 18,
+			keyword: 18, func: 6, variable: 18, string: 140, number: 2, type: 350,
+		},
+	},
+	"arnative-garden": {
+		// Garden: warm earth-gold focus (#dda15e, accent), olive-moss headings & model (#6c7844 adapted from #606c38, primary),
+		// terracotta secondary (#bc6c25, secondary), and deep forest-earth panels.
+		accent: "oklch(75.3% 0.11 68)",
+		chroma: 0.11,
+		canvasL: 0.24,
+		neutralHue: 68,
+		neutralChroma: 0.012,
+		primary: "oklch(55% 0.076 120)",
+		secondary: "oklch(60.9% 0.13 57)",
+		tone: "oklch(80% 0.06 120)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 120, label: 120, link: 120, code: 120, bullet: 68, border: 57, selected: 57, searchMatch: 68,
+			keyword: 68, func: 120, variable: 57, string: 140, number: 57, type: 120,
+		},
+	},
+	"arnative-earthy": {
+		// Earthy: warm tan focus (#a68a64, accent), sage-moss headings & model (#6e7653 adapted from #656d4a, primary),
+		// clay brown secondary (#7f5539, secondary), and deep forest-earth panels.
+		accent: "oklch(76% 0.063 75)",
+		chroma: 0.065,
+		canvasL: 0.24,
+		neutralHue: 75,
+		neutralChroma: 0.012,
+		primary: "oklch(55% 0.053 119)",
+		secondary: "oklch(48.9% 0.07 54)",
+		tone: "oklch(78% 0.04 119)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 119, label: 119, link: 119, code: 119, bullet: 75, border: 54, selected: 54, searchMatch: 75,
+			keyword: 75, func: 119, variable: 54, string: 140, number: 54, type: 119,
 		},
 	},
 };
@@ -494,7 +593,7 @@ const hueGap = (a, b) => {
 /** How far the label tier must sit from the accent. Every theme draws the footer, the
  *  selected row and the detail line on `borderAccent`; when that shares the accent's hue
  *  the whole UI reads as one colour, which is how six themes ended up mono-tone. */
-const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0, "arnative-matrix": 0, "arnative-neutral": 0 };
+const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0, "arnative-matrix": 0, "arnative-neutral": 0, "arnative-gruvbox": 0, "arnative-nord": 0, "arnative-zinc": 0, "arnative-magical": 0, "arnative-lemonade": 0, "arnative-blossom": 0, "arnative-garden": 0, "arnative-earthy": 0 };
 
 function assertDualTone(name, { vars, roles, exp }) {
 	const accent = parseOklch(vars.accent);
@@ -508,7 +607,7 @@ function assertDualTone(name, { vars, roles, exp }) {
 		`${name}: accent ${Math.round(accent.H)} and borderAccent ${Math.round(label.H)} are ${gap.toFixed(0)}° apart, need ${min}°`,
 	);
 	// A label tier without chroma is grey text, not a second tone.
-	const minChroma = name === "arnative-neutral" ? 0.01 : 0.02;
+	const minChroma = name === "arnative-neutral" || name === "arnative-zinc" ? 0.01 : 0.02;
 	assert(label.C >= minChroma, `${name}: borderAccent chroma ${label.C} is too low to read as a tone`);
 	// And it has to stand off the canvas it is drawn on.
 	const ratio = contrast(toHex(labelValue), toHex(exp.pageBg));

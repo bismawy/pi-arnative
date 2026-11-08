@@ -38,6 +38,7 @@ import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
+import { SHORTCUT_OPEN_ARNATIVE } from "../lib/shortcuts.ts";
 
 export interface ArnativeMenu {
 	value: string;
@@ -563,6 +564,12 @@ export default function (pi: ExtensionAPI) {
 	});
 	bindSetModel((model) => pi.setModel(model as never));
 	registerCommands(pi);
+	for (const key of SHORTCUT_OPEN_ARNATIVE.keys) {
+		pi.registerShortcut(key, {
+			description: "Open Arnative settings menu",
+			handler: (ctx) => arnativeHandler("", ctx as never),
+		});
+	}
 }
 
 // Self-check: `node extensions/arnative.ts`
