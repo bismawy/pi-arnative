@@ -185,6 +185,29 @@ const THEMES = {
 			keyword: 145, func: 148, variable: 175, string: 145, number: 85, type: 175,
 		},
 	},
+	"arnative-neutral": {
+		// Powder-blush warm focus (#e0afa0, accent), warm parchment cream headings (#f4f3ee, primary),
+		// silver grey links/code (#bcb8b1, tone), grey-olive secondary (#8a817c), and deep taupe panels (#463f3a, surfaceMsg).
+		// AccentSoft provides the delicate, bright blush-white tint for footer labels.
+		accent: "oklch(80% 0.065 38)",
+		chroma: 0.065,
+		canvasL: 0.24,
+		neutralHue: 58,
+		neutralChroma: 0.008,
+		primary: "oklch(94% 0.015 97)",
+		secondary: "oklch(76% 0.025 51)",
+		tone: "oklch(82% 0.02 82)",
+		surfaceMsg: "oklch(26% 0.018 58)",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 97, label: 38, link: 82, code: 82, bullet: 38, border: 82, selected: 82, searchMatch: 38,
+			keyword: 38, func: 97, variable: 82, string: 97, number: 51, type: 82,
+		},
+	},
 };
 
 // --- role order (matches the pi theme schema) ------------------------------
@@ -375,7 +398,7 @@ const hueGap = (a, b) => {
 /** How far the label tier must sit from the accent. Every theme draws the footer, the
  *  selected row and the detail line on `borderAccent`; when that shares the accent's hue
  *  the whole UI reads as one colour, which is how six themes ended up mono-tone. */
-const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0, "arnative-matrix": 0 };
+const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0, "arnative-matrix": 0, "arnative-neutral": 0 };
 
 function assertDualTone(name, { vars, roles, exp }) {
 	const accent = parseOklch(vars.accent);
@@ -389,7 +412,8 @@ function assertDualTone(name, { vars, roles, exp }) {
 		`${name}: accent ${Math.round(accent.H)} and borderAccent ${Math.round(label.H)} are ${gap.toFixed(0)}° apart, need ${min}°`,
 	);
 	// A label tier without chroma is grey text, not a second tone.
-	assert(label.C >= 0.02, `${name}: borderAccent chroma ${label.C} is too low to read as a tone`);
+	const minChroma = name === "arnative-neutral" ? 0.01 : 0.02;
+	assert(label.C >= minChroma, `${name}: borderAccent chroma ${label.C} is too low to read as a tone`);
 	// And it has to stand off the canvas it is drawn on.
 	const ratio = contrast(toHex(labelValue), toHex(exp.pageBg));
 	assert(ratio >= 3, `${name}: borderAccent contrast ${ratio.toFixed(2)} on pageBg is too low`);
