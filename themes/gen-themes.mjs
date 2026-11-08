@@ -45,7 +45,7 @@ function oklch(L, C, H) {
  * it by the scale, so a coarser round-trip shifts the last hex digit and the
  * `declare == derive` guard in ui-render-tweaks.ts fails.
  */
-function soften(value, scale = 0.5, l = 0.82) {
+function soften(value, scale = 0.15, l = 0.94) {
 	const o = parseOklch(value);
 	assert(o !== null, `cannot soften a non-oklch color: ${value}`);
 	const { chroma } = oklchToRgb(l, o.C * scale, o.H);
@@ -199,7 +199,7 @@ function derive(spec) {
 		secondary: secondaryVal,
 		secondarySoft: soften(borderAccentVal),
 		accent: accentVal,
-		accentSoft: soften(accentVal, 0.15, 0.94),
+		accentSoft: soften(accentVal),
 		accentBorder: accentBorderVal,
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),

@@ -429,7 +429,7 @@ if (isMain(import.meta.url)) {
 	// Mirrors `soften()` (themes/gen-themes.mjs) and `softenColor` (lib/ansi.ts): the soft
 	// tier is the base color at L 0.82 with a fifth of its chroma. Both sides read the
 	// declared OKLCH string (not the 8-bit hex), so the comparison is not rounded twice.
-	const softenToHex = (base: string, scale = 0.5, l = 0.82) => {
+	const softenToHex = (base: string, scale = 0.15, l = 0.94) => {
 		const o = parseOklch(base);
 		assert(o !== null, `cannot soften a non-oklch color: ${base}`);
 		return toHex(`oklch(${+(l * 100).toFixed(1)}% ${oklchToRgb(l, o.C * scale, o.H).chroma} ${o.H})`);
@@ -555,7 +555,7 @@ if (isMain(import.meta.url)) {
 		for (const [softName, baseName] of [["accentSoft", "accent"], ["secondarySoft", "borderAccent"]] as const) {
 			const base = d.vars[d.colors[baseName] ?? baseName]!;
 			const declared = toHex(d.vars[softName]!);
-			const derived = softenToHex(base, softName === "secondarySoft" ? 0.5 : 0.15, softName === "secondarySoft" ? 0.82 : 0.94);
+			const derived = softenToHex(base);
 			assert(declared === derived, `theme ${f}: vars.${softName} ${declared} != runtime ${derived} (derived from ${baseName})`);
 		}
 		const canvas = hex("userMessageBg");

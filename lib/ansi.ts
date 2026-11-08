@@ -46,8 +46,8 @@ export function setActiveTheme<T>(th: T | null): void {
  * chroma): it reads as a pale, near-white tint, clearly distinct from the accent,
  * while footer labels stay a visible second color.
  */
-const SOFT_L = 0.82;
-const SOFT_CHROMA_SCALE = 0.5;
+const SOFT_L = 0.94;
+const SOFT_CHROMA_SCALE = 0.15;
 const SOFT_L_ACCENT = 0.94;
 const SOFT_CHROMA_SCALE_ACCENT = 0.15;
 function softenColor(c: { c?: number; h?: number }, scale = SOFT_CHROMA_SCALE, l = SOFT_L): { kind: "oklch"; l: number; c: number; h: number } {
@@ -187,8 +187,8 @@ if (isMain(import.meta.url)) {
 	// on the blue tier instead of inheriting the pink accent hue.
 	const labelOut = softSecondaryOf(modern)("x");
 	assert(
-		labelOut.includes('"l":0.82') && labelOut.includes('"c":0.05') && labelOut.includes('"h":200'),
-		"softSecondaryOf softens borderAccent (l=0.82, c=borderAccent*0.5, same hue)",
+		labelOut.includes('"l":0.94') && labelOut.includes('"c":0.015') && labelOut.includes('"h":200'),
+		"softSecondaryOf softens borderAccent (l=0.94, c=borderAccent*0.15, same hue)",
 	);
 	assert(labelOut !== modernOut, "the soft label tier differs from the soft accent tier");
 	assert(softSecondaryOf({ fg: () => "", style: (t) => `<x>${t}</x>`, colors: {} })("x") === softOf({ fg: () => "", style: (t) => `<x>${t}</x>`, colors: {} })("x"), "softSecondaryOf falls back to softOf without a borderAccent");
