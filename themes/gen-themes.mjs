@@ -208,6 +208,102 @@ const THEMES = {
 			keyword: 38, func: 97, variable: 82, string: 97, number: 51, type: 82,
 		},
 	},
+	"arnative-zinc": {
+		// User palette: soft linen #e0e2db, dust grey #d2d4c8, ash grey #b8bdb5, cool steel
+		// #889696, deep teal #5f7470. Deep teal is the focus; its hue is kept and only the
+		// chroma is lifted, because the palette itself is nearly grey and a grey accent tier
+		// would collapse into the neutral text. Soft linen carries the headings, cool steel
+		// the links and code, dust grey the footer labels — a signature 68° off the accent,
+		// so the screen keeps two tones instead of reading as one.
+		accent: "oklch(78% 0.075 182)",
+		chroma: 0.075,
+		canvasL: 0.25,
+		neutralHue: 120,
+		neutralChroma: 0.008,
+		primary: "oklch(93% 0.012 120)",
+		secondary: "oklch(84% 0.022 114)",
+		tone: "oklch(80% 0.03 197)",
+		surfaceMsg: "oklch(26% 0.022 182)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 120, label: 114, link: 197, code: 197, bullet: 182, border: 197, selected: 197, searchMatch: 182,
+			keyword: 182, func: 120, variable: 197, string: 133, number: 85, type: 114,
+		},
+	},
+	"arnative-nord": {
+		// Nord: polar-night canvas (#2e3440, #3b4252), frost-blue focus (#88c0d0), snow-storm
+		// headings (#eceff4), aurora-purple footer labels (#b48ead), frost-teal links and code
+		// (#8fbcbb). The aurora tier keeps Nord from reading as a plain blue theme.
+		accent: "oklch(78% 0.075 217)",
+		chroma: 0.075,
+		canvasL: 0.26,
+		neutralHue: 264,
+		neutralChroma: 0.012,
+		primary: "oklch(95% 0.008 261)",
+		secondary: "oklch(76% 0.07 333)",
+		tone: "oklch(80% 0.05 194)",
+		surfaceMsg: "oklch(27% 0.025 264)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 261, label: 333, link: 194, code: 194, bullet: 217, border: 194, selected: 194, searchMatch: 217,
+			keyword: 249, func: 217, variable: 15, string: 131, number: 333, type: 194,
+		},
+	},
+	"arnative-dracula": {
+		// Dracula: night canvas #282a36 with #44475a panels, purple focus #bd93f9, pink
+		// headings, model name and bullets #ff80bf (primary), orange footer labels #ffb86c
+		// (secondary), cyan links and code #8be9fd. Syntax uses the same set: pink keywords,
+		// green functions, yellow strings, orange numbers.
+		accent: "oklch(74% 0.13 302)",
+		chroma: 0.13,
+		canvasL: 0.28,
+		neutralHue: 278,
+		neutralChroma: 0.012,
+		primary: "oklch(76.2% 0.168 351)",
+		secondary: "oklch(83.4% 0.124 67)",
+		tone: "oklch(86% 0.09 213)",
+		surfaceMsg: "oklch(31% 0.03 278)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "primary",
+		hues: {
+			heading: 351, label: 67, link: 213, code: 213, bullet: 351, border: 213, selected: 213, searchMatch: 351,
+			keyword: 351, func: 148, variable: 302, string: 113, number: 67, type: 213,
+		},
+	},
+	"arnative-gruvbox": {
+		// Gruvbox dark: warm canvas #282828 with #3c3836 panels, orange focus #fe8019, cream
+		// headings #ebdbb2, aqua footer labels #8ec07c, blue-grey links and code #83a598.
+		// Red keywords, green functions, yellow strings and purple numbers carry the rest.
+		accent: "oklch(73% 0.15 52)",
+		chroma: 0.15,
+		canvasL: 0.25,
+		neutralHue: 60,
+		neutralChroma: 0.008,
+		primary: "oklch(91% 0.04 89)",
+		secondary: "oklch(78% 0.10 138)",
+		tone: "oklch(78% 0.045 170)",
+		surfaceMsg: "oklch(28% 0.012 49)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 89, label: 52, link: 170, code: 170, bullet: 52, border: 170, selected: 170, searchMatch: 52,
+			keyword: 30, func: 111, variable: 170, string: 83, number: 2, type: 138,
+		},
+	},
 };
 
 // --- role order (matches the pi theme schema) ------------------------------
@@ -419,6 +515,26 @@ function assertDualTone(name, { vars, roles, exp }) {
 	assert(ratio >= 3, `${name}: borderAccent contrast ${ratio.toFixed(2)} on pageBg is too low`);
 }
 
+// --- cross-theme distinctness ----------------------------------------------
+
+/** Two themes may not share a signature colour: the picker previews one at a time, so a
+ *  repeated accent or footer tier makes two palettes look like the same theme. */
+function assertDistinctThemes(themes) {
+	const seen = new Map();
+	for (const [name, { vars, roles }] of themes) {
+		const label = roles.borderAccent in vars ? vars[roles.borderAccent] : roles.borderAccent;
+		for (const [tier, value] of [
+			["accent", vars.accent],
+			["borderAccent", label],
+		]) {
+			const hex = toHex(value);
+			const other = seen.get(hex);
+			assert(other === undefined, `${name}.${tier} ${hex} repeats ${other}`);
+			seen.set(hex, `${name}.${tier}`);
+		}
+	}
+}
+
 // --- rendering -------------------------------------------------------------
 
 function render(name, { vars, roles, exp }) {
@@ -449,9 +565,11 @@ function render(name, { vars, roles, exp }) {
 
 const check = process.argv.includes("--check");
 let drifted = 0;
+const built = new Map();
 for (const [name, spec] of Object.entries(THEMES)) {
 	const derived = derive({ ...spec, name });
 	assertDualTone(name, derived);
+	built.set(name, derived);
 	const content = render(name, derived);
 	const file = join(HERE, `${name}.json`);
 	if (check) {
@@ -465,6 +583,7 @@ for (const [name, spec] of Object.entries(THEMES)) {
 		console.log(`✓ ${name}.json`);
 	}
 }
+assertDistinctThemes(built);
 if (check) {
 	if (drifted) process.exit(1);
 	console.log(`✓ ${Object.keys(THEMES).length} themes in sync with gen-themes.mjs`);

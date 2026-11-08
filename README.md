@@ -12,7 +12,7 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 
 pi-arnative replaces pi’s default terminal chrome with a unified visual interface.
 
-- Warm Themes: Contrast-checked OKLCH color palettes generated without drift (`arnative` plus 10 variants).
+- Warm Themes: Contrast-checked OKLCH color palettes generated without drift (`arnative` plus eight variants).
 - Tabbed Header: Compact box menu showing Directory, Model, Context, Skills, Extensions, and Shortcuts.
 - Rounded Tool Boxes: Status, spinner, runtime duration, and clickable `[show]` / `[hide]` output toggles.
 - Task List: `todo` tool, `/todos` view, and a boxed widget above the editor that auto-hides 30s after all tasks finish.
@@ -122,7 +122,7 @@ Bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 <details>
 <summary><b>Theme Variants & Development</b></summary>
 
-**Themes (`themes/gen-themes.mjs` + `lib/color.ts`):** `arnative` · `sun` · `zinc` · `violet` · `emerald` · `matrix` · `cyberpunk` · `synthwave` · `gruvbox` · `nord` · `dracula`
+**Themes (`themes/gen-themes.mjs` + `lib/color.ts`):** `arnative` · `arnative-cyberpunk` · `arnative-crimson` · `arnative-matrix` · `arnative-neutral` · `arnative-zinc` · `arnative-nord` · `arnative-dracula` · `arnative-gruvbox`
 
 ```bash
 npm test                              # Run self-checks and unit tests
