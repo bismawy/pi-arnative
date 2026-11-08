@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-08
+
 ### Added
 - **Shortcut to open settings:** Press `Alt+a` (Windows/WSL) or `Ctrl+Alt+a` (macOS/Linux) to immediately open the `/arnative` settings menu (`lib/shortcuts.ts`, `extensions/arnative.ts`).
 - **Five new themes:** Added `arnative-magical` (lavender & rose pink), `arnative-lemonade` (sage, peach & lime), `arnative-blossom` (rose & petal pink), `arnative-garden` (earth gold, olive moss & terracotta), and `arnative-earthy` (warm tan, sage moss & clay brown) (`themes/gen-themes.mjs`, `themes/*.json`).
