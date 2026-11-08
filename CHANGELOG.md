@@ -26,6 +26,8 @@
 - **Arnative is rebuilt on a cyan-and-gold palette, all roles referencing vars.** Strong-cyan accent (#02cecb), bright-gold primary (#fed811), school-bus-yellow secondary (#fdc100), a new icy-aqua `tone` var (#b4ffff) for links/code, and a deep-teal message panel (#06837f, deepened to keep contrast floors; the decorative `mdHr` is now exempt from the text floor). `mdHeading`/`mdLink`/`mdCode` reference `primary`/`tone` instead of literals, matching the sun pattern. The generator gained an optional per-theme `tone` var (themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
 - Arnative's footer label tier now follows the accent (`borderAccent: accentBorder`, so `secondarySoft` resolves to soft cyan), and markdown links join headings on `primary` (bright gold); inline code keeps the icy-aqua `tone`. The dual-tone guard allows a zero hue gap for arnative because the gold signature lives on headings/links (`themes/gen-themes.mjs`).
 - The footer label tier (`secondarySoft`) is softened with a stronger chroma scale (0.35 vs 0.18), so arnative's cyan labels read as a tinted second tone instead of grey; the runtime self-check mirrors the same scale (themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
+- Saturation of the label tier raised again: chroma scale 0.35 → 0.6 (aritynative secondarySoft ≈ 0.047 chroma), so footer labels read as a vivid cyan tint (themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
+
 
 
 

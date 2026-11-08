@@ -556,7 +556,7 @@ if (isMain(import.meta.url)) {
 			const base = d.vars[d.colors[baseName] ?? baseName]!;
 			const declared = toHex(d.vars[softName]!);
 			// The label tier uses the stronger 0.35 scale; accent soft stays at 0.18.
-		const derived = softenToHex(base, softName === "secondarySoft" ? 0.35 : 0.18);
+		const derived = softenToHex(base, softName === "secondarySoft" ? 0.6 : 0.18);
 			assert(declared === derived, `theme ${f}: vars.${softName} ${declared} != runtime ${derived} (derived from ${baseName})`);
 		}
 		const canvas = hex("userMessageBg");

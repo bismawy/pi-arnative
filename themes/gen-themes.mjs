@@ -407,7 +407,7 @@ function derive(spec) {
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
 		primary: primaryVal,
 		secondary: secondaryVal,
-		secondarySoft: soften(borderAccentVal, 0.35),
+		secondarySoft: soften(borderAccentVal, 0.6),
 		accent: accentVal,
 		accentSoft: soften(accentVal),
 		accentBorder: accentBorderVal,

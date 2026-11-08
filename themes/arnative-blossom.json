@@ -9,7 +9,7 @@
 		"fgFaint": "oklch(49% 0.015 300)",
 		"primary": "oklch(78% 0.18 334)",
 		"secondary": "oklch(78% 0.125 240)",
-		"secondarySoft": "oklch(82% 0.04375 240)",
+		"secondarySoft": "oklch(82% 0.075 240)",
 		"accent": "oklch(78% 0.17 334)",
 		"accentSoft": "oklch(82% 0.0306 334)",
 		"accentBorder": "oklch(82% 0.102 334)",
