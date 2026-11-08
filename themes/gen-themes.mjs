@@ -33,11 +33,12 @@ function oklch(L, C, H) {
 }
 
 /**
- * Soft tier of a color: clone at L 0.82 with `scale` (default 0.6, matching
- * `SOFT_CHROMA_SCALE` in lib/ansi.ts) of the GAMUT-CLAMPED chroma, hue kept.
- * `lib/ansi.ts` softens the resolved token with this same recipe at runtime, so a
- * `*Soft` var declared here and the extension's derived value agree. Grey-collapse
- * is avoided because the hue is carried, not dropped.
+ * Soft tier of a color: clone at L 0.82 with `scale` (default 0.5, matching
+ * `SOFT_CHROMA_SCALE` in lib/ansi.ts; the accent tier uses 0.35, matching
+ * `SOFT_CHROMA_SCALE_ACCENT`) of the GAMUT-CLAMPED chroma, hue kept.
+ * `lib/ansi.ts` softens the resolved token with these same recipes at runtime,
+ * so `*Soft` vars declared here and the extension's derived values agree.
+ * Grey-collapse is avoided because the hue is carried, not dropped.
  *
  * The chroma keeps five decimals (not the usual three): the soft tier multiplies
  * it by the scale, so a coarser round-trip shifts the last hex digit and the
@@ -126,7 +127,6 @@ const THEMES = {
 		secondary: "oklch(82% 0.16 200)",
 		tone: "oklch(82% 0.18 45)",
 		headingTone: "oklch(78% 0.20 300)",
-		surfaceMsg: "oklch(24% 0.035 200)",
 		borderAccent: "accentBorder",
 		headingColor: "headingTone",
 		linkColor: "headingTone",
@@ -197,7 +197,7 @@ function derive(spec) {
 		secondary: secondaryVal,
 		secondarySoft: soften(borderAccentVal),
 		accent: accentVal,
-		accentSoft: soften(accentVal),
+		accentSoft: soften(accentVal, 0.35),
 		accentBorder: accentBorderVal,
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),

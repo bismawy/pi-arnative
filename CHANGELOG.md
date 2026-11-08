@@ -31,6 +31,8 @@
 - The theme family is trimmed to two: `arnative` and `arnative-cyberpunk`; the other thirteen variants are removed. Cyberpunk is rebuilt in arnative's var-based format — labels follow the accent (`borderAccent: accentBorder`), headings and links take `primary`, code takes a new electric-purple `tone` var, bullets take the accent — while keeping its own neon pink/lime/cyan palette (themes/gen-themes.mjs, extensions/arnative.ts, test/todo-box.test.ts).
 - Cyberpunk swaps its purple tone for orange: code/links now take `vars.tone` (orange, `oklch(82% 0.18 45)`) and the footer model name/headings take a new `vars.headingTone` (purple, `oklch(78% 0.20 300)`) — both var-backed, no role literals (themes/gen-themes.mjs).
 - Cyberpunk links now join headings on `vars.headingTone` (purple); code keeps the orange `vars.tone`, and labels stay pink-soft (themes/gen-themes.mjs).
+- Cyberpunk chat background drops its literal override: `vars.surfaceMsg` now falls back to the generator-default neutral (deep purple tint `oklch(24% 0.01 275)`), so the panel stays in the theme without hand-picked colors (themes/gen-themes.mjs).
+
 
 
 
