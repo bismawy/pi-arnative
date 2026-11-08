@@ -429,10 +429,10 @@ if (isMain(import.meta.url)) {
 	// Mirrors `soften()` (themes/gen-themes.mjs) and `softenColor` (lib/ansi.ts): the soft
 	// tier is the base color at L 0.82 with a fifth of its chroma. Both sides read the
 	// declared OKLCH string (not the 8-bit hex), so the comparison is not rounded twice.
-	const softenToHex = (base: string) => {
+	const softenToHex = (base: string, scale = 0.18) => {
 		const o = parseOklch(base);
 		assert(o !== null, `cannot soften a non-oklch color: ${base}`);
-		return toHex(`oklch(82% ${oklchToRgb(0.82, o.C * 0.18, o.H).chroma} ${o.H})`);
+		return toHex(`oklch(82% ${oklchToRgb(0.82, o.C * scale, o.H).chroma} ${o.H})`);
 	};
 	// The built-in theme adds fallbacks (scrollbarTrack<-muted, thinkingMax<-thinkingXhigh),
 	// so the fg map must be complete; take the whole palette like pi's loader does.
@@ -555,7 +555,8 @@ if (isMain(import.meta.url)) {
 		for (const [softName, baseName] of [["accentSoft", "accent"], ["secondarySoft", "borderAccent"]] as const) {
 			const base = d.vars[d.colors[baseName] ?? baseName]!;
 			const declared = toHex(d.vars[softName]!);
-			const derived = softenToHex(base);
+			// The label tier uses the stronger 0.35 scale; accent soft stays at 0.18.
+		const derived = softenToHex(base, softName === "secondarySoft" ? 0.35 : 0.18);
 			assert(declared === derived, `theme ${f}: vars.${softName} ${declared} != runtime ${derived} (derived from ${baseName})`);
 		}
 		const canvas = hex("userMessageBg");

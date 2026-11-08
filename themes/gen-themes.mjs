@@ -33,19 +33,21 @@ function oklch(L, C, H) {
 }
 
 /**
- * Soft tier of a color: clone at L 0.82 with a fifth of the GAMUT-CLAMPED chroma, hue
- * kept. `lib/ansi.ts` softens the resolved token with this same recipe at runtime, so a
- * `*Soft` var declared here and the extension's derived value agree. Grey-collapse is
- * avoided because the hue is carried, not dropped.
+ * Soft tier of a color: clone at L 0.82 with `scale` (default 1/5) of the
+ * GAMUT-CLAMPED chroma, hue kept. `lib/ansi.ts` softens the resolved token with
+ * this same recipe at runtime, so a `*Soft` var declared here and the extension's
+ * derived value agree. Grey-collapse is avoided because the hue is carried, not
+ * dropped. The label tier (`secondarySoft`) uses a stronger scale (0.35) so the
+ * footer reads as a tinted second tone instead of a grey.
  *
- * The chroma keeps five decimals (not the usual three): the soft tier multiplies it by
- * 0.18, so a coarser round-trip shifts the last hex digit and the `declare == derive`
- * guard in ui-render-tweaks.ts fails.
+ * The chroma keeps five decimals (not the usual three): the soft tier multiplies
+ * it by the scale, so a coarser round-trip shifts the last hex digit and the
+ * `declare == derive` guard in ui-render-tweaks.ts fails.
  */
-function soften(value) {
+function soften(value, scale = 0.18) {
 	const o = parseOklch(value);
 	assert(o !== null, `cannot soften a non-oklch color: ${value}`);
-	const { chroma } = oklchToRgb(0.82, o.C * 0.18, o.H);
+	const { chroma } = oklchToRgb(0.82, o.C * scale, o.H);
 	return `oklch(82% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
 }
 
@@ -405,7 +407,7 @@ function derive(spec) {
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
 		primary: primaryVal,
 		secondary: secondaryVal,
-		secondarySoft: soften(borderAccentVal),
+		secondarySoft: soften(borderAccentVal, 0.35),
 		accent: accentVal,
 		accentSoft: soften(accentVal),
 		accentBorder: accentBorderVal,
