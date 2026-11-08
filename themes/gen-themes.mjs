@@ -176,6 +176,40 @@ const THEMES = {
 			keyword: 190, func: 145, variable: 190, string: 145, number: 190, type: 190,
 		},
 	},
+	"arnative-ocean": {
+		accent: "oklch(78% 0.10 245)",
+		chroma: 0.11,
+		canvasL: 0.26,
+		neutralHue: 235,
+		neutralChroma: 0.012,
+		// Deep-water navy: a periwinkle-steel focus with foggy-teal labels, straight
+		// from the Coolors "Midnight Navy" palette (0d1b2a-778da9).
+		primary: "oklch(80% 0.09 232)",
+		secondary: "oklch(78% 0.09 195)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
+		hues: { heading: 232, label: 195, link: 195, code: 195, bullet: 245, border: 195, selected: 195 },
+	},
+	"arnative-fiesta": {
+		accent: "oklch(72% 0.16 24)",
+		chroma: 0.14,
+		canvasL: 0.27,
+		neutralHue: 40,
+		neutralChroma: 0.015,
+		// Fiesta: coral focus, amber signature, navy labels — three warm hues from the
+		// Coolors "Fiesta" palette (f95738-f4d35e-0d3b66).
+		primary: "oklch(82% 0.14 75)",
+		secondary: "oklch(76% 0.10 250)",
+		borderAccent: "secondary",
+		headingColor: "primary",
+		linkColor: "secondary",
+		codeColor: "secondary",
+		bulletColor: "accent",
+		hues: { heading: 75, label: 250, link: 250, code: 250, bullet: 24, border: 250, selected: 250 },
+	},
 	"arnative-cyberpunk": {
 		accent: "oklch(76% 0.22 355)",
 		chroma: 0.2,
