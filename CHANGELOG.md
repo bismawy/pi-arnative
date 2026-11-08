@@ -5,7 +5,7 @@
 ### Added
 - **Shortcut to open settings:** Press `Alt+a` (Windows/WSL) or `Ctrl+Alt+a` (macOS/Linux) to immediately open the `/arnative` settings menu (`lib/shortcuts.ts`, `extensions/arnative.ts`).
 - **Five new themes:** Added `arnative-magical` (lavender & rose pink), `arnative-lemonade` (sage, peach & lime), `arnative-blossom` (rose & petal pink), `arnative-garden` (earth gold, olive moss & terracotta), and `arnative-earthy` (warm tan, sage moss & clay brown) (`themes/gen-themes.mjs`, `themes/*.json`).
-- **Harmonized chat & system boxes:** User chat bubbles (`userMessageBg`) and system notification boxes like `[compaction]` (`customMessageBg` / `customMessageLabel`) now derive directly from each theme's `primary` hue for consistent theme accenting across Cyberpunk, Crimson, Matrix, Gruvbox, Neutral, Nord, Zinc, Dracula, and new themes.
+- **Harmonized chat & system boxes:** User chat bubbles (`userMessageBg`) and system notification boxes like `[compaction]` (`customMessageBg` / `customMessageLabel`) now derive directly from each theme's `primary` hue for consistent theme accenting across Cyberpunk, Crimson, Matrix, Gruvbox, Neutral, Nord, Zinc, Dracula, and new themes. User chat backgrounds are deepened to a stealth dark tier (L: 19%) across all themes for softer reading contrast.
 - **Custom theme auto-sync in dev loop:** `npm run overlay` now mirrors updated theme JSON files directly into `~/.pi/agent/themes/` (`scripts/overlay.mjs`).
 
 ### Added

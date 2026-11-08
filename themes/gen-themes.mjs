@@ -102,9 +102,8 @@ const THEMES = {
 		primary: "oklch(88.8% 0.181 96)",
 		secondary: "oklch(84.2% 0.172 86)",
 		tone: "oklch(95.1% 0.073 196)",
-		// Teal panel, deepened until the strictest token floors pass on it (thinkingOff
-		// at 1.3:1 is the tightest; the decorative rule mdHr is not text).
-		surfaceMsg: "oklch(33% 0.05 191)",
+		// Teal panel, deepened to L:19% for stealth dark contrast.
+		surfaceMsg: "oklch(19% 0.04 191)",
 		// The label tier follows the accent (soft cyan); the gold signature lives on
 		// headings and links instead, so the theme keeps two tones without the label gap.
 		borderAccent: "accentSoft",
@@ -124,7 +123,7 @@ const THEMES = {
 		neutralChroma: 0.02,
 		primary: "oklch(72.7% 0.123 201)",
 		secondary: "oklch(42.4% 0.183 314)",
-		surfaceMsg: "secondary",
+		surfaceMsg: "primary",
 		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "primary",
@@ -146,7 +145,7 @@ const THEMES = {
 		primary: "oklch(58% 0.175 37)",
 		secondary: "oklch(79.2% 0.161 75)",
 		tone: "oklch(82% 0.14 70)",
-		surfaceMsg: "oklch(25% 0.05 25)",
+		surfaceMsg: "primary",
 		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "tone",
@@ -259,7 +258,7 @@ const THEMES = {
 		primary: "oklch(67.8% 0.181 288)",
 		secondary: "oklch(97.5% 0.149 109)",
 		tone: "oklch(86% 0.09 213)",
-		surfaceMsg: "oklch(31% 0.03 278)",
+		surfaceMsg: "primary",
 		borderAccent: "secondary",
 		headingColor: "primary",
 		linkColor: "tone",
@@ -476,15 +475,14 @@ function derive(spec) {
 	if (spec.headingTone) vars.headingTone = colorLiteral(spec.headingTone);
 
 	// The message panel: a literal/hex override, or the name of a var whose hue is
-	// darkened to the canvas level — so a theme can reuse an existing signature var
-	// (e.g. `headingTone`) instead of hand-picking a color. Defaults to the neutral
-	// canvas tint.
+	// darkened to a stealth dark level (L:19%) — so a theme can reuse an existing signature var
+	// instead of hand-picking a color. Defaults to the neutral canvas tint.
 	if (typeof spec.surfaceMsg === "string" && spec.surfaceMsg in vars) {
 		const src = parseOklch(vars[spec.surfaceMsg]);
 		assert(src !== null, `surfaceMsg var must be an oklch color: ${spec.surfaceMsg}`);
-		vars.surfaceMsg = oklch(base, Math.min(src.C * 0.35, 0.06), src.H);
+		vars.surfaceMsg = oklch(0.19, Math.min(src.C * 0.35, 0.05), src.H);
 	} else {
-		vars.surfaceMsg = spec.surfaceMsg ?? oklch(base, nc * 0.5, nh);
+		vars.surfaceMsg = spec.surfaceMsg ?? oklch(0.19, nc * 0.5, nh);
 	}
 
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
