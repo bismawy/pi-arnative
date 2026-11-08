@@ -430,6 +430,6 @@ test("footer labels take the soft border-accent tier, icons keep accent", async 
 	const icon = softOf(modern as never)("main");
 	assert.ok(label.includes('"h":200'), "the label keeps the border-accent hue (blue), not the accent hue");
 	assert.ok(icon.includes('"h":355'), "the accent tier keeps its own hue (pink)");
-	assert.ok(label.includes('"c":0.02085'), "the label chroma is the border accent softened by 0.15");
-	assert.ok(label.includes('"l":0.94'), "the soft tier sits at L 0.94");
+	assert.ok(label.includes('"c":0.03475'), "the label chroma is the border accent softened by 0.25");
+	assert.ok(label.includes('"l":0.9'), "the soft tier sits at L 0.90");
 });

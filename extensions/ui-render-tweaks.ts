@@ -429,7 +429,7 @@ if (isMain(import.meta.url)) {
 	// Mirrors `soften()` (themes/gen-themes.mjs) and `softenColor` (lib/ansi.ts): the soft
 	// tier is the base color at L 0.82 with a fifth of its chroma. Both sides read the
 	// declared OKLCH string (not the 8-bit hex), so the comparison is not rounded twice.
-	const softenToHex = (base: string, scale = 0.15, l = 0.94) => {
+	const softenToHex = (base: string, scale = 0.25, l = 0.90) => {
 		const o = parseOklch(base);
 		assert(o !== null, `cannot soften a non-oklch color: ${base}`);
 		return toHex(`oklch(${+(l * 100).toFixed(1)}% ${oklchToRgb(l, o.C * scale, o.H).chroma} ${o.H})`);
@@ -552,7 +552,7 @@ if (isMain(import.meta.url)) {
 		// The declared soft vars must equal what the extensions derive at runtime, or the
 		// footer label colour drifts from the theme file. `softenToHex` mirrors
 		// `soften()` in gen-themes.mjs and `softenColor` in lib/ansi.ts.
-		for (const [softName, baseName] of [["accentSoft", "accent"], ["secondarySoft", "borderAccent"]] as const) {
+		for (const [softName, baseName] of [["accentSoft", "accent"], ["secondarySoft", "secondary"]] as const) {
 			const base = d.vars[d.colors[baseName] ?? baseName]!;
 			const declared = toHex(d.vars[softName]!);
 			const derived = softenToHex(base);

@@ -45,7 +45,7 @@ function oklch(L, C, H) {
  * it by the scale, so a coarser round-trip shifts the last hex digit and the
  * `declare == derive` guard in ui-render-tweaks.ts fails.
  */
-function soften(value, scale = 0.15, l = 0.94) {
+function soften(value, scale = 0.25, l = 0.90) {
 	const o = parseOklch(value);
 	assert(o !== null, `cannot soften a non-oklch color: ${value}`);
 	const { chroma } = oklchToRgb(l, o.C * scale, o.H);
@@ -107,7 +107,7 @@ const THEMES = {
 		surfaceMsg: "oklch(33% 0.05 191)",
 		// The label tier follows the accent (soft cyan); the gold signature lives on
 		// headings and links instead, so the theme keeps two tones without the label gap.
-		borderAccent: "accentBorder",
+		borderAccent: "accentSoft",
 		headingColor: "primary",
 		linkColor: "primary",
 		codeColor: "tone",
@@ -129,7 +129,7 @@ const THEMES = {
 		tone: "oklch(82% 0.18 45)",
 		headingTone: "oklch(78% 0.20 300)",
 		surfaceMsg: "headingTone",
-		borderAccent: "accentBorder",
+		borderAccent: "accentSoft",
 		headingColor: "headingTone",
 		linkColor: "headingTone",
 		codeColor: "tone",
@@ -187,8 +187,9 @@ function derive(spec) {
 	// lib/ansi.ts). One source keeps the declared value and the runtime one identical.
 	const accentBorderVal = oklch(0.82, c * 0.6, h);
 	const accentVal = oklch(0.78, c, h);
-	const borderAccentRole = spec.borderAccent ?? "accentBorder";
-	const borderAccentVal = { accentBorder: accentBorderVal, secondary: secondaryVal }[borderAccentRole] ?? borderAccentRole;
+	const accentSoftVal = soften(accentVal);
+	const borderAccentRole = spec.borderAccent ?? "accentSoft";
+	const borderAccentVal = { accentBorder: accentBorderVal, accentSoft: accentSoftVal, secondary: secondaryVal }[borderAccentRole] ?? borderAccentRole;
 
 	const vars = {
 		fg: oklch(NEUTRAL.fg, nc, nh),
@@ -197,9 +198,9 @@ function derive(spec) {
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
 		primary: primaryVal,
 		secondary: secondaryVal,
-		secondarySoft: soften(borderAccentVal),
+		secondarySoft: soften(secondaryVal),
 		accent: accentVal,
-		accentSoft: soften(accentVal),
+		accentSoft: accentSoftVal,
 		accentBorder: accentBorderVal,
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
