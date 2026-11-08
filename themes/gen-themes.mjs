@@ -127,6 +127,7 @@ const THEMES = {
 		secondary: "oklch(82% 0.16 200)",
 		tone: "oklch(82% 0.18 45)",
 		headingTone: "oklch(78% 0.20 300)",
+		surfaceMsg: "headingTone",
 		borderAccent: "accentBorder",
 		headingColor: "headingTone",
 		linkColor: "headingTone",
@@ -202,12 +203,23 @@ function derive(spec) {
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
 		warning: oklch(0.86, Math.min(c, 0.14), sem("warning")),
-		surfaceMsg: spec.surfaceMsg ?? oklch(base, nc * 0.5, nh),
 	};
 	// Optional third signature tone (a color of its own, reused by roles via its var).
 	if (spec.tone) vars.tone = colorLiteral(spec.tone);
 	// Optional heading/model signature tone (e.g. cyberpunk's purple), also a var.
 	if (spec.headingTone) vars.headingTone = colorLiteral(spec.headingTone);
+
+	// The message panel: a literal/hex override, or the name of a var whose hue is
+	// darkened to the canvas level — so a theme can reuse an existing signature var
+	// (e.g. `headingTone`) instead of hand-picking a color. Defaults to the neutral
+	// canvas tint.
+	if (typeof spec.surfaceMsg === "string" && spec.surfaceMsg in vars) {
+		const src = parseOklch(vars[spec.surfaceMsg]);
+		assert(src !== null, `surfaceMsg var must be an oklch color: ${spec.surfaceMsg}`);
+		vars.surfaceMsg = oklch(base, Math.min(src.C * 0.35, 0.06), src.H);
+	} else {
+		vars.surfaceMsg = spec.surfaceMsg ?? oklch(base, nc * 0.5, nh);
+	}
 
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
 	const roles = {

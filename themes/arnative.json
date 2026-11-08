@@ -16,8 +16,8 @@
 		"success": "oklch(78% 0.13 145)",
 		"error": "oklch(76% 0.13 25)",
 		"warning": "oklch(86% 0.13 85)",
-		"surfaceMsg": "oklch(33% 0.05 191)",
-		"tone": "oklch(95.1% 0.073 196)"
+		"tone": "oklch(95.1% 0.073 196)",
+		"surfaceMsg": "oklch(33% 0.05 191)"
 	},
 	"colors": {
 		"accent": "accent",
