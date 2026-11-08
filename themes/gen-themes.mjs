@@ -35,11 +35,11 @@ function oklch(L, C, H) {
 /**
  * Soft tier of a color: clone at lightness `l` (default 0.82) with `scale`
  * (default 0.5, matching `SOFT_CHROMA_SCALE` in lib/ansi.ts; the accent tier
- * uses 0.25 at 0.86 lightness, matching `SOFT_CHROMA_SCALE_ACCENT` and
- * `SOFT_L_ACCENT`) of the GAMUT-CLAMPED chroma, hue kept.
- * `lib/ansi.ts` softens the resolved token with these same recipes at runtime,
- * so `*Soft` vars declared here and the extension's derived values agree.
- * Grey-collapse is avoided because the hue is carried, not dropped.
+ * uses 0.15 at 0.94 lightness — a near-white tint — matching
+ * `SOFT_CHROMA_SCALE_ACCENT` and `SOFT_L_ACCENT`) of the GAMUT-CLAMPED
+ * chroma, hue kept. `lib/ansi.ts` softens the resolved token with these same
+ * recipes at runtime, so `*Soft` vars declared here and the extension's derived
+ * values agree. Grey-collapse is avoided because the hue is carried, not dropped.
  *
  * The chroma keeps five decimals (not the usual three): the soft tier multiplies
  * it by the scale, so a coarser round-trip shifts the last hex digit and the
@@ -199,7 +199,7 @@ function derive(spec) {
 		secondary: secondaryVal,
 		secondarySoft: soften(borderAccentVal),
 		accent: accentVal,
-		accentSoft: soften(accentVal, 0.25, 0.86),
+		accentSoft: soften(accentVal, 0.15, 0.94),
 		accentBorder: accentBorderVal,
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
