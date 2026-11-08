@@ -12,7 +12,7 @@ import test from "node:test";
 
 import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
 
-initTheme("arnative-gruvbox");
+initTheme("arnative-cyberpunk");
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "arnative-todo-box-"));
 await import("../extensions/tools.ts");
 

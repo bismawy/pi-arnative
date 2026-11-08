@@ -626,7 +626,7 @@ if (isMain(import.meta.url)) {
 	// The /arnative picker lists the package's family only; everything else (system, dark,
 	// light, a theme of the user's own) stays in /settings → Theme.
 	assert(isArnativeThemeName("arnative"), "the default theme is family");
-	assert(isArnativeThemeName("arnative-sun"), "a variant is family");
+	assert(isArnativeThemeName("arnative-cyberpunk"), "a variant is family");
 	for (const outsider of ["system", "dark", "light", "omarchy-system", "arnativeX", ""])
 		assert(!isArnativeThemeName(outsider), `${JSON.stringify(outsider)} is not family`);
 
@@ -643,7 +643,7 @@ if (isMain(import.meta.url)) {
 	const previews: string[] = [];
 	let reverted = 0;
 	let done = 0;
-	const picker = new ListPicker(fakeTheme, nameRows(["arnative", "arnative-nord"]), "arnative", {
+	const picker = new ListPicker(fakeTheme, nameRows(["arnative", "arnative-cyberpunk"]), "arnative", {
 		preview: (n) => previews.push(n),
 		revert: () => reverted++,
 		done: () => done++,
@@ -656,8 +656,8 @@ if (isMain(import.meta.url)) {
 	assert(lines.some((l) => l.includes("→ arnative")), "the cursor marks the live value");
 	assert(!lines.some((l) => l.includes("●")), "no redundant ● column next to the → cursor");
 	picker.handleInput("\x1b[B"); // down
-	assert(previews.length === 1 && previews[0] === "arnative-nord", "move previews immediately");
-	assert(picker.render(50).some((l) => l.includes("→ arnative-nord")), "the cursor follows the preview");
+	assert(previews.length === 1 && previews[0] === "arnative-cyberpunk", "move previews immediately");
+	assert(picker.render(50).some((l) => l.includes("→ arnative-cyberpunk")), "the cursor follows the preview");
 	picker.handleInput("\r"); // enter
 	assert(done === 1 && reverted === 0, "Enter keeps (no revert)");
 	picker.handleInput("\x1b[B");
