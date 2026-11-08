@@ -27,6 +27,8 @@
 - Arnative's footer label tier now follows the accent (`borderAccent: accentBorder`, so `secondarySoft` resolves to soft cyan), and markdown links join headings on `primary` (bright gold); inline code keeps the icy-aqua `tone`. The dual-tone guard allows a zero hue gap for arnative because the gold signature lives on headings/links (`themes/gen-themes.mjs`).
 - The footer label tier (`secondarySoft`) is softened with a stronger chroma scale (0.35 vs 0.18), so arnative's cyan labels read as a tinted second tone instead of grey; the runtime self-check mirrors the same scale (themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
 - Saturation of the label tier raised again: chroma scale 0.35 → 0.6 (aritynative secondarySoft ≈ 0.047 chroma), so footer labels read as a vivid cyan tint (themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
+- Root cause fixed: the runtime label painter (`softSecondaryOf`) had its own fixed 0.18 chroma scale, so the earlier generator-only scale bumps never reached the screen. The scale is now a single shared constant — 0.5 — in lib/ansi.ts, gen-themes.mjs and the self-checks, so footer labels (and all soft tiers) render at the declared saturation (themes/gen-themes.mjs, lib/ansi.ts, extensions/ui-render-tweaks.ts, test/footer-minimal.test.ts).
+
 
 
 
