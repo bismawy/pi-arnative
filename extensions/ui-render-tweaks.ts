@@ -429,7 +429,7 @@ if (isMain(import.meta.url)) {
 	// Mirrors `soften()` (themes/gen-themes.mjs) and `softenColor` (lib/ansi.ts): the soft
 	// tier is the base color at L 0.82 with a fifth of its chroma. Both sides read the
 	// declared OKLCH string (not the 8-bit hex), so the comparison is not rounded twice.
-	const softenToHex = (base: string, scale = 0.25, l = 0.90) => {
+	const softenToHex = (base: string, scale = 0.35, l = 0.90) => {
 		const o = parseOklch(base);
 		assert(o !== null, `cannot soften a non-oklch color: ${base}`);
 		return toHex(`oklch(${+(l * 100).toFixed(1)}% ${oklchToRgb(l, o.C * scale, o.H).chroma} ${o.H})`);
