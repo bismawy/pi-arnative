@@ -13,7 +13,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { contrast, hexToOklch, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
+import { contrast, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
 import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -47,40 +47,6 @@ function soften(value) {
 	assert(o !== null, `cannot soften a non-oklch color: ${value}`);
 	const { chroma } = oklchToRgb(0.82, o.C * 0.18, o.H);
 	return `oklch(82% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
-}
-
-/**
- * Resolve any theme color value to {L, C, H}: an oklch literal parses directly,
- * anything else goes through hex (a resolved var reference). Used by `mix`.
- */
-function toOklab(value) {
-	const o = parseOklch(value);
-	if (o) return o;
-	return hexToOklch(toHex(value));
-}
-
-/**
- * Mix two colors toward each other in OKLab space — the generator's "opacity"
- * simulation. Terminals have no alpha channel, so a color at reduced opacity is
- * emulated by blending it toward the solid canvas (`t` is `b`'s weight: 0 keeps
- * `a`, 1 keeps `b`). An optional `hueOverride` pins the result's hue, so a role
- * that must keep its own family (search match) blends lightness and chroma
- * without drifting off-hue.
- */
-function mix(a, b, t, hueOverride) {
-	const A = toOklab(a);
-	const B = toOklab(b);
-	const L = A.L * (1 - t) + B.L * t;
-	const C = A.C * (1 - t) + B.C * t;
-	let H = hueOverride;
-	if (H === undefined) {
-		const ax = A.C * Math.cos((A.H * Math.PI) / 180);
-		const ay = A.C * Math.sin((A.H * Math.PI) / 180);
-		const bx = B.C * Math.cos((B.H * Math.PI) / 180);
-		const by = B.C * Math.sin((B.H * Math.PI) / 180);
-		H = ((Math.atan2(ay * (1 - t) + by * t, ax * (1 - t) + bx * t) * 180) / Math.PI + 360) % 360;
-	}
-	return oklch(L, C, H);
 }
 
 // --- shared ramps ----------------------------------------------------------
@@ -414,9 +380,6 @@ function derive(spec) {
 	// lib/ansi.ts). One source keeps the declared value and the runtime one identical.
 	const accentBorderVal = oklch(0.82, c * 0.6, h);
 	const accentVal = oklch(0.78, c, h);
-	// The page canvas (exp.pageBg). `mix` blends highlight tints toward it, which is
-	// the practical stand-in for alpha compositing in a solid terminal theme.
-	const canvas = oklch(base - 0.06, nc, nh);
 	const borderAccentRole = spec.borderAccent ?? "accentBorder";
 	const borderAccentVal = { accentBorder: accentBorderVal, secondary: secondaryVal }[borderAccentRole] ?? borderAccentRole;
 
@@ -454,7 +417,7 @@ function derive(spec) {
 		selectedBg: oklch(base + 0.07, Math.min(c * 0.25, 0.06), roleHue("selected")),
 		scrollbarTrack: "fgFaint",
 		scrollbarThumb: "accentSoft",
-		searchMatchBg: mix(accentVal, canvas, 0.65, roleHue("searchMatch")),
+		searchMatchBg: oklch(base + 0.14, Math.min(c * 0.45, 0.10), roleHue("searchMatch")),
 		searchMatchText: "fg",
 		userMessageBg: "surfaceMsg",
 		userMessageText: "fg",
@@ -505,7 +468,7 @@ function derive(spec) {
 	};
 
 	const exp = {
-		pageBg: canvas,
+		pageBg: oklch(base - 0.06, nc, nh),
 		cardBg: oklch(base - 0.03, nc, nh),
 		infoBg: oklch(base + 0.05, Math.min(c * 0.25, 0.06), h),
 	};
@@ -590,18 +553,6 @@ function render(name, { vars, roles, exp }) {
 }
 
 // --- main ------------------------------------------------------------------
-
-// mix() sanity: endpoints are exact and a 50/50 blend averages lightness.
-{
-	const a = "oklch(70% 0.1 30)";
-	const b = "oklch(30% 0.05 200)";
-	assert(mix(a, a, 0.5) === a, "mix with itself keeps the color");
-	const A = parseOklch(a);
-	const B = parseOklch(b);
-	const m = parseOklch(mix(a, b, 0.5));
-	assert(m !== null && Math.abs(m.L - (A.L + B.L) / 2) < 0.001, "mix averages lightness");
-	assert(mix(a, b, 0) === a && mix(a, b, 1) === b, "mix endpoints are exact");
-}
 
 const check = process.argv.includes("--check");
 let drifted = 0;

@@ -34,7 +34,7 @@
 		"selectedBg": "oklch(31% 0.05 200)",
 		"scrollbarTrack": "fgFaint",
 		"scrollbarThumb": "accentSoft",
-		"searchMatchBg": "oklch(39% 0.064 95)",
+		"searchMatchBg": "oklch(38% 0.078 95)",
 		"searchMatchText": "fg",
 		"userMessageBg": "surfaceMsg",
 		"userMessageText": "fg",
