@@ -47,7 +47,7 @@
 		"toolTitle": "fg",
 
 		"toolOutput": "fgMuted",
-		"mdHeading": "oklch(76% 0.16 300)",
+		"mdHeading": "primary",
 		"mdLink": "secondary",
 		"mdLinkUrl": "fgDim",
 		"mdCode": "secondary",
