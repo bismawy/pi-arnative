@@ -17,7 +17,7 @@
 		"error": "oklch(76% 0.035 25)",
 		"warning": "oklch(86% 0.035 85)",
 		"tone": "oklch(80% 0.03 197)",
-		"surfaceMsg": "oklch(25% 0.006 197)"
+		"surfaceMsg": "oklch(19% 0.006 197)"
 	},
 	"colors": {
 		"accent": "accent",
