@@ -162,6 +162,29 @@ const THEMES = {
 			keyword: 26, func: 85, variable: 26, string: 145, number: 45, type: 237,
 		},
 	},
+	"arnative-matrix": {
+		// Medium-jungle green focus (#09a129, accent), spring-green headings & model (#27fb6b, primary),
+		// phosphor mint links/code (#60ddc0, tone), and jet-black teal panels (#0a2e36, surfaceMsg).
+		// AccentSoft provides the bright, soft matrix pastel green for footer labels.
+		accent: "oklch(74% 0.19 145)",
+		chroma: 0.18,
+		canvasL: 0.24,
+		neutralHue: 215,
+		neutralChroma: 0.015,
+		primary: "oklch(88% 0.22 148)",
+		secondary: "oklch(76% 0.13 145)",
+		tone: "oklch(82% 0.12 175)",
+		surfaceMsg: "oklch(24% 0.04 215)",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "primary",
+		hues: {
+			heading: 148, label: 145, link: 175, code: 175, bullet: 148, border: 175, selected: 175, searchMatch: 148,
+			keyword: 145, func: 148, variable: 175, string: 145, number: 85, type: 175,
+		},
+	},
 };
 
 // --- role order (matches the pi theme schema) ------------------------------
@@ -352,7 +375,7 @@ const hueGap = (a, b) => {
 /** How far the label tier must sit from the accent. Every theme draws the footer, the
  *  selected row and the detail line on `borderAccent`; when that shares the accent's hue
  *  the whole UI reads as one colour, which is how six themes ended up mono-tone. */
-const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0 };
+const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0, "arnative-matrix": 0 };
 
 function assertDualTone(name, { vars, roles, exp }) {
 	const accent = parseOklch(vars.accent);
