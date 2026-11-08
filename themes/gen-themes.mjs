@@ -129,7 +129,7 @@ const THEMES = {
 		surfaceMsg: "oklch(24% 0.035 200)",
 		borderAccent: "accentBorder",
 		headingColor: "headingTone",
-		linkColor: "primary",
+		linkColor: "headingTone",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {

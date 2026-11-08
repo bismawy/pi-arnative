@@ -50,7 +50,7 @@
 
 		"toolOutput": "fgMuted",
 		"mdHeading": "headingTone",
-		"mdLink": "primary",
+		"mdLink": "headingTone",
 		"mdLinkUrl": "fgDim",
 		"mdCode": "tone",
 		"mdCodeBlock": "success",

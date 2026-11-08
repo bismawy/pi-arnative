@@ -30,6 +30,8 @@
 - Root cause fixed: the runtime label painter (`softSecondaryOf`) had its own fixed 0.18 chroma scale, so the earlier generator-only scale bumps never reached the screen. The scale is now a single shared constant — 0.5 — in lib/ansi.ts, gen-themes.mjs and the self-checks, so footer labels (and all soft tiers) render at the declared saturation (themes/gen-themes.mjs, lib/ansi.ts, extensions/ui-render-tweaks.ts, test/footer-minimal.test.ts).
 - The theme family is trimmed to two: `arnative` and `arnative-cyberpunk`; the other thirteen variants are removed. Cyberpunk is rebuilt in arnative's var-based format — labels follow the accent (`borderAccent: accentBorder`), headings and links take `primary`, code takes a new electric-purple `tone` var, bullets take the accent — while keeping its own neon pink/lime/cyan palette (themes/gen-themes.mjs, extensions/arnative.ts, test/todo-box.test.ts).
 - Cyberpunk swaps its purple tone for orange: code/links now take `vars.tone` (orange, `oklch(82% 0.18 45)`) and the footer model name/headings take a new `vars.headingTone` (purple, `oklch(78% 0.20 300)`) — both var-backed, no role literals (themes/gen-themes.mjs).
+- Cyberpunk links now join headings on `vars.headingTone` (purple); code keeps the orange `vars.tone`, and labels stay pink-soft (themes/gen-themes.mjs).
+
 
 
 
