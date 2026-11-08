@@ -477,10 +477,10 @@ if (isMain(import.meta.url)) {
 	// Non-text keys (backgrounds/borders/scrollbar) — contrast is not measured.
 	const nonText = new Set([
 		"selectedBg", "userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
-		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder",
+		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder", "mdHr",
 		"scrollbarTrack", "scrollbarThumb",
 	]);
-	const secondary = new Set(["muted", "dim", "mdQuote", "mdHr", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
+	const secondary = new Set(["muted", "dim", "mdQuote", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
 	// Thinking ramp: the higher the more readable; thinkingMax = accent (measured on the pill path).
 	const ramp: Record<string, number> = {
 		thinkingOff: 1.3, thinkingMinimal: 1.3, thinkingLow: 2.0,

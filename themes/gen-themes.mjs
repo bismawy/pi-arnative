@@ -13,7 +13,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { contrast, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
+import { contrast, hexToOklch, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
 import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -49,6 +49,16 @@ function soften(value) {
 	return `oklch(82% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
 }
 
+/** Normalize a spec color to an oklch literal: hex is converted, oklch passes through. */
+function colorLiteral(value) {
+	const s = String(value).trim();
+	if (s.startsWith("#")) {
+		const o = hexToOklch(s);
+		return oklch(o.L, o.C, o.H);
+	}
+	return s;
+}
+
 // --- shared ramps ----------------------------------------------------------
 
 const NEUTRAL = { fg: 0.88, fgMuted: 0.72, fgDim: 0.61, fgFaint: 0.49 };
@@ -79,22 +89,25 @@ const ACCENT_OFFSET = {
  */
 const THEMES = {
 	arnative: {
-		accent: "oklch(81% 0.11 217)",
-		chroma: 0.11,
+		// Cyan & gold: strong-cyan focus, bright-gold signature (primary), school-bus
+		// yellow labels, icy-aqua links/code (tone), deep teal message panels.
+		accent: "oklch(77% 0.13 193)",
+		chroma: 0.13,
 		canvasL: 0.27,
-		neutralHue: 215,
+		neutralHue: 205,
 		neutralChroma: 0.012,
-		// Teal family (16697a-82c0cc) with an amber counterpoint (ffa62b) and
-		// warm-white headings (ede7e3): the Coolors-style palette the user picked.
-		primary: "oklch(82% 0.10 212)",
-		secondary: "oklch(78% 0.15 69)",
-		surfaceMsg: "oklch(24% 0.03 216)",
+		primary: "oklch(88.8% 0.181 96)",
+		secondary: "oklch(84.2% 0.172 86)",
+		tone: "oklch(95.1% 0.073 196)",
+		// Teal panel, deepened until the strictest token floors pass on it (thinkingOff
+		// at 1.3:1 is the tightest; the decorative rule mdHr is not text).
+		surfaceMsg: "oklch(33% 0.05 191)",
 		borderAccent: "secondary",
-		headingColor: "oklch(93% 0.008 56)",
-		linkColor: "oklch(77% 0.06 211)",
-		codeColor: "oklch(77% 0.06 211)",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
 		bulletColor: "accent",
-		hues: { heading: 56, label: 69, link: 211, code: 211, bullet: 217, border: 69, selected: 69 },
+		hues: { heading: 96, label: 86, link: 196, code: 196, bullet: 193, border: 86, selected: 86 },
 	},
 	"arnative-sun": {
 		accent: "oklch(82.4% 0.1408 70.170730)",
@@ -399,6 +412,8 @@ function derive(spec) {
 		warning: oklch(0.86, Math.min(c, 0.14), sem("warning")),
 		surfaceMsg: spec.surfaceMsg ?? oklch(base, nc * 0.5, nh),
 	};
+	// Optional third signature tone (a color of its own, reused by roles via its var).
+	if (spec.tone) vars.tone = colorLiteral(spec.tone);
 
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
 	const roles = {
@@ -439,7 +454,7 @@ function derive(spec) {
 		mdCodeBlockBorder: "fgMuted",
 		mdQuote: "fgMuted",
 		mdQuoteBorder: "fgMuted",
-		mdHr: "fgFaint",
+		mdHr: spec.hrColor ?? "fgFaint",
 		mdListBullet: spec.bulletColor ?? accentLiteral,
 
 		toolDiffAdded: "success",
@@ -456,7 +471,7 @@ function derive(spec) {
 		syntaxOperator: "fg",
 		syntaxPunctuation: "fgMuted",
 
-		thinkingOff: oklch(THINKING.off, nc, nh),
+		thinkingOff: oklch(spec.thinkingOff ?? THINKING.off, nc, nh),
 		thinkingMinimal: oklch(THINKING.minimal, c * 0.25, h),
 		thinkingLow: oklch(THINKING.low, c * 0.4, h),
 		thinkingMedium: oklch(THINKING.medium, c * 0.6, h),
