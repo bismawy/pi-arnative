@@ -27,12 +27,13 @@ import {
 	parseModelMeta,
 	probeEffort,
 	suggestCompat,
+	THINKING_LEVELS,
 	type Compat,
 	type CompatModel,
 	type ModelMeta,
 } from "./compat.ts";
 import { loadChoice, saveChoice } from "./preset-store.ts";
-import { loadModelsConfig, looseJsonParse, readAuthKey, saveModelsConfig } from "./provider.ts";
+import { levelToWire, loadModelsConfig, looseJsonParse, readAuthKey, saveModelsConfig, wireToLevel } from "./provider.ts";
 
 // ------------------------------------------------------------- setting
 
@@ -134,6 +135,16 @@ function edit(mutate: (cfg: Obj) => string[]): HealResult {
 	return { changed: true, detail, errors: [] };
 }
 
+/** The pre-0.9.2 wizard pin: all seven levels present, one non-off level mapped to itself,
+ *  the other six null. */
+const isSinglePin = (map: unknown): boolean => {
+	if (!isObj(map)) return false;
+	const values = THINKING_LEVELS.map((l) => map[l]);
+	if (values.some((v) => v === undefined)) return false;
+	const live = THINKING_LEVELS.filter((l) => map[l] !== null);
+	return live.length === 1 && live[0] !== "off" && map[live[0]!] === live[0];
+};
+
 const providersOf = (cfg: Obj): Record<string, Obj> => cfg.providers as Record<string, Obj>;
 
 function providerEntry(cfg: Obj, provider: string): Obj {
@@ -195,6 +206,14 @@ export function healFlags(deps: HealDeps, only?: RtModel[], active?: RtModel): H
 			if (!isObj(entry) || !Array.isArray(entry.models)) continue;
 			for (const m of entry.models) {
 				if (!isObj(m) || m.reasoning !== true) continue;
+				// Before 0.9.2 the wizard pinned a level by nulling all six others, which pi reads as
+				// unsupported: the model was stuck on that one level. Rewrite that exact shape as the
+				// ceiling map the wizard writes now; any other map is the user's and stays.
+				if (isSinglePin(m.thinkingLevelMap)) {
+					m.thinkingLevelMap = levelToWire(wireToLevel(true, m.thinkingLevelMap)).thinkingLevelMap;
+					detail.push(`${provider} models[${String(m.id)}]: thinkingLevelMap ceiling`);
+					continue;
+				}
 				if (isObj(m.thinkingLevelMap) && Object.keys(m.thinkingLevelMap).length > 0) continue;
 				m.thinkingLevelMap = { ...DEFAULT_THINKING_MAP };
 				detail.push(`${provider} models[${String(m.id)}]: thinkingLevelMap`);
@@ -237,7 +256,7 @@ interface HealState {
 	schema: 1;
 	providers: Record<string, { signature: string; fetchedAt: number }>;
 	sources: Record<string, { contextWindow?: number; maxTokens?: number; at: number }>;
-	efforts: Record<string, { at: number; map: Record<string, string | null>; failed?: boolean }>;
+	efforts: Record<string, { at: number; map: Record<string, string | null>; failed?: boolean; exact?: boolean }>;
 }
 
 const statePath = (): string => join(getAgentDir(), "arnative", "model-heal.json");
@@ -435,6 +454,9 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 
 let effortInFlight = false;
 
+const sameMap = (a: Record<string, string | null> | undefined, b: Record<string, string | null> | undefined): boolean =>
+	THINKING_LEVELS.every((l) => a?.[l] === b?.[l]);
+
 const mapOf = (m: RtModel): Record<string, string | null> | undefined => (isObj(m.thinkingLevelMap) ? (m.thinkingLevelMap as Record<string, string | null>) : undefined);
 
 /** Probe the reasoning efforts each relay accepts and remap rejected levels. A map the user
@@ -456,10 +478,13 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 		const now = Date.now();
 		const pending = (only ?? deps.models()).filter((m) => {
 			const channel = m?.provider ? channels.get(lower(m.provider)) : undefined;
-			if (!channel || !isEffortProbeable(m, channel.compat) || carriesRemap(mapOf(m))) return false;
-			if (force) return true;
+			if (!channel || !isEffortProbeable(m, channel.compat)) return false;
 			const prev = state.efforts[modelKey(m.provider, m.id)];
-			if (!prev) return true;
+			// A shaped map (a null or a remap) is the user's unless the probe wrote it. A map an
+			// older probe wrote (nearest-effort remaps) is redone now, not after the TTL.
+			const probeWrote = prev !== undefined && sameMap(mapOf(m), prev.map);
+			if (carriesRemap(mapOf(m)) && !probeWrote) return false;
+			if (force || !prev || (probeWrote && prev.exact !== true)) return true;
 			if (now - prev.at >= (prev.failed ? EFFORT_FAILURE_TTL_MS : EFFORT_TTL_MS)) return true;
 			return JSON.stringify(mapOf(m) ?? {}) !== JSON.stringify(prev.map); // edited since: respect it
 		});
@@ -491,8 +516,9 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 			const detail: string[] = [];
 			for (const { model, supported } of answered) {
 				const current = mapOf(model);
-				const next = buildEffortMap(current, supported);
-				state.efforts[modelKey(model.provider, model.id)] = { at: Date.now(), map: next ?? current ?? {} };
+				const exact = buildEffortMap(supported)!;
+				const next = sameMap(current, exact) ? undefined : exact;
+				state.efforts[modelKey(model.provider, model.id)] = { at: Date.now(), map: exact, exact: true };
 				if (!next) continue;
 				const { slot, label } = modelSlot(providerEntry(fresh, model.provider), model.id, deps.ownsModels(model.provider));
 				slot.thinkingLevelMap = next;
@@ -506,6 +532,26 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 	} finally {
 		effortInFlight = false;
 	}
+}
+
+/** A turn the relay rejected for its effort: that one level becomes null in the model's map,
+ *  so pi stops offering it and the other levels stay. The map is stamped as probe-written, so
+ *  the shaped-map guard does not lock it as the user's and a later rejection can drop more. */
+export function markRejectedLevel(deps: HealDeps, model: RtModel, level: string): HealResult {
+	if (level === "off" || !(THINKING_LEVELS as readonly string[]).includes(level)) return none();
+	const state = loadState();
+	const result = edit((fresh) => {
+		const { slot, label } = modelSlot(providerEntry(fresh, model.provider), model.id, deps.ownsModels(model.provider));
+		const stored = isObj(slot.thinkingLevelMap) ? (slot.thinkingLevelMap as Record<string, string | null>) : mapOf(model);
+		const base: Record<string, string | null> = { ...(stored ?? DEFAULT_THINKING_MAP) };
+		if (base[level] === null) return [];
+		const next = { ...base, [level]: null };
+		slot.thinkingLevelMap = next;
+		state.efforts[modelKey(model.provider, model.id)] = { at: Date.now(), map: next, exact: true };
+		return [model.provider + " " + label + ": thinkingLevelMap " + level + "=unsupported (rejected by the relay)"];
+	});
+	if (result.changed) saveState({ efforts: state.efforts });
+	return result;
 }
 
 // ----------------------------------------------------------- self-check
@@ -524,7 +570,7 @@ if (isMain(import.meta.url)) {
 			file,
 			JSON.stringify({
 				providers: {
-					relay: { ...relay, apiKey: "k", models: [{ id: "gpt-x" }, { id: "claude-sonnet-4-5" }, { id: "r1", reasoning: true }] },
+					relay: { ...relay, apiKey: "k", models: [{ id: "gpt-x" }, { id: "claude-sonnet-4-5" }, { id: "r1", reasoning: true }, { id: "pinned", reasoning: true, thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: null, xhigh: "xhigh", max: null } }] },
 					owned: { ...relay },
 				},
 			}),
@@ -547,6 +593,8 @@ if (isMain(import.meta.url)) {
 		assert(isObj(r1.thinkingLevelMap) && (r1.compat as Obj).supportsDeveloperRole === false, "a reasoning model gets a map and the developer-role opt-out");
 		assert(read().owned!.compat === undefined && isObj((read().owned!.modelOverrides as Obj).o1), "an extension-owned provider is fixed through modelOverrides");
 		assert(existsSync(`${file}.bak-model-heal`), "the first write keeps a backup");
+		const pinned = modelIn("relay", "pinned").thinkingLevelMap as Obj;
+		assert(pinned.minimal === "minimal" && pinned.medium === "medium" && pinned.xhigh === "xhigh" && pinned.max === null && !("off" in pinned), "an old single-pin map becomes a ceiling map");
 
 		// The registry stays stale until refresh; a repeat must find nothing left to write.
 		assert(!healFlags(deps).changed, "a repeated pass is a no-op");
@@ -603,9 +651,15 @@ if (isMain(import.meta.url)) {
 		}) as unknown as typeof fetch;
 		const r1Model: RtModel = { provider: "relay", id: "r1", reasoning: true, ...relay, thinkingLevelMap: { ...DEFAULT_THINKING_MAP } };
 		const effort = await healEffort({ ...deps, fetchImpl: effortFetch }, true, [r1Model]);
-		assert(effort.changed && (modelIn("relay", "r1").thinkingLevelMap as Obj).medium === "high", "a rejected effort is remapped to the nearest accepted one");
+		assert(effort.changed && (modelIn("relay", "r1").thinkingLevelMap as Obj).medium === null, "a rejected effort is marked unsupported, not remapped");
 		const shaped = await healEffort({ ...deps, fetchImpl: effortFetch }, true, [{ ...r1Model, thinkingLevelMap: { medium: "high" } }]);
 		assert(!shaped.changed, "a user-shaped map is never probed");
+		const runtime = markRejectedLevel(deps, r1Model, "low");
+		const afterRuntime = modelIn("relay", "r1").thinkingLevelMap as Obj;
+		assert(runtime.changed && afterRuntime.low === null && afterRuntime.medium === null && afterRuntime.high === "high", "a level rejected at runtime is dropped and the rest stay");
+		assert(!markRejectedLevel(deps, r1Model, "low").changed, "a level already dropped is a no-op");
+		assert(!markRejectedLevel(deps, r1Model, "off").changed, "off is never dropped");
+		assert((await healEffort({ ...deps, fetchImpl: effortFetch }, false, [{ ...r1Model, thinkingLevelMap: afterRuntime as Record<string, string | null> }])).errors.length === 0, "a runtime-dropped map stays probe-owned");
 		assert(existsSync(join(dir, "arnative", "model-heal.json")), "state lives in the arnative folder");
 		// The trigger runs meta and effort at once; neither save may drop the other's stamps.
 		await Promise.all([healMeta(metaDeps, true), healEffort({ ...deps, fetchImpl: effortFetch }, true, [r1Model])]);

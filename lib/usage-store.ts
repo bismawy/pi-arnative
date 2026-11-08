@@ -6,7 +6,7 @@
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -17,6 +17,33 @@ interface UsageEntry {
 	output: number;
 	cacheRead: number;
 	cost: number;
+	/** Local day (YYYY-MM-DD) the message was written, so a range view can skip it. */
+	day: string;
+}
+
+/** A time window the dashboard can show. `all` is the whole history. */
+export type UsageRange = "all" | "today" | "7d" | "30d" | "3m";
+
+/** Tab order of the range bar. */
+export const USAGE_RANGES: readonly UsageRange[] = ["all", "today", "7d", "30d", "3m"];
+
+/** Local calendar day of a timestamp, the unit day buckets and ranges are compared in. */
+export function dayKey(ms: number): string {
+	const d = new Date(ms);
+	const pad = (n: number): string => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Local midnight where `range` starts: today, 7 or 30 calendar days back, 3 months back.
+ *  `undefined` for `all`, which has no floor. */
+export function rangeStart(range: UsageRange, now = Date.now()): number | undefined {
+	if (range === "all") return undefined;
+	const d = new Date(now);
+	d.setHours(0, 0, 0, 0);
+	if (range === "today") return d.getTime();
+	if (range === "3m") d.setMonth(d.getMonth() - 3);
+	else d.setDate(d.getDate() - (range === "7d" ? 6 : 29));
+	return d.getTime();
 }
 
 interface FileCacheItem {
@@ -36,7 +63,13 @@ interface FileCacheItem {
 /** Usage totals for one session file, per provider and per provider+model. */
 interface FileRollup {
 	providers: Record<string, Rollup>;
+	/** provider\0model key -> day -> totals. Absent on an item cached before ranges
+	 *  existed; that item is re-parsed once so a range view never reads a wrong number. */
+	days?: Record<string, Record<string, Buckets>>;
 }
+
+/** One day's totals for one provider\0model key. */
+type Buckets = { msgs: number; input: number; output: number; cacheRead: number; cost: number };
 
 interface Rollup {
 	sessions: number;
@@ -57,15 +90,26 @@ function addToRollup(r: Rollup, e: UsageEntry): void {
 	r.cost += e.cost;
 }
 
+const emptyBuckets = (): Buckets => ({ msgs: 0, input: 0, output: 0, cacheRead: 0, cost: 0 });
+
 /** Fold entries into an existing file rollup, updating provider and provider+model keys together. */
 function foldInto(rollup: FileRollup, entries: UsageEntry[]): void {
 	if (entries.length === 0) return;
 	for (const e of entries) {
 		const key = `${e.provider}\u0000${e.model}`;
-		(rollup.providers[e.provider] ??= emptyRollup());
-		addToRollup(rollup.providers[e.provider]!, e);
-		(rollup.providers[key] ??= emptyRollup());
-		addToRollup(rollup.providers[key]!, e);
+		for (const k of [e.provider, key]) {
+			(rollup.providers[k] ??= emptyRollup());
+			addToRollup(rollup.providers[k]!, e);
+		}
+		// Day buckets are stored on the model key only: the provider row is their sum, so a
+		// long history is not written twice to disk.
+		const perDay = ((rollup.days ??= {})[key] ??= {});
+		const day = (perDay[e.day] ??= emptyBuckets());
+		day.msgs++;
+		day.input += e.input;
+		day.output += e.output;
+		day.cacheRead += e.cacheRead;
+		day.cost += e.cost;
 	}
 	// `sessions` counts the file, not the messages, so it is 1 once the file has any use.
 	for (const key of Object.keys(rollup.providers)) rollup.providers[key]!.sessions = 1;
@@ -85,6 +129,7 @@ interface UsageModelStats {
 	input: number;
 	output: number;
 	cacheRead: number;
+	/** Prompt + completion + cache reads: the same total a vendor dashboard reports. */
 	totalTokens: number;
 	cost: number;
 	/** Cost reconstructed from the price table, only when `cost` is 0. Never folded into `cost`. */
@@ -220,7 +265,15 @@ const CACHE_VERSION = 4; // v4: per-file rollup (was raw entries in v3)
 /** The v5 disk shape: one-char keys, and only provider\0model rows — provider-level
  *  rollups are derived on load, so every number is stored once. Keys on disk are
  *  paths relative to the sessions dir (the absolute path dominated the old size). */
-type DiskItem = { m: number; s: number; c?: number; r: Record<string, [number, number, number, number, number]> };
+type DiskItem = {
+	m: number;
+	s: number;
+	c?: number;
+	r: Record<string, [number, number, number, number, number]>;
+	/** provider\0model -> day -> the same five numbers. Optional: an item cached before
+	 *  ranges existed has none, and is re-parsed whole when a range is first asked for. */
+	d?: Record<string, Record<string, [number, number, number, number, number]>>;
+};
 
 /** Decode one disk item (v5 compact or v4 full) into the in-memory shape. */
 function decodeDiskItem(raw: unknown): FileCacheItem | null {
@@ -244,7 +297,22 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 		p.cacheRead += cacheRead;
 		p.cost += cost;
 	}
-	return { mtimeMs: d.m, size: d.s, v: CACHE_VERSION, consumed: typeof d.c === "number" ? d.c : d.s, rollup };
+	return { mtimeMs: d.m, size: d.s, v: CACHE_VERSION, consumed: typeof d.c === "number" ? d.c : d.s, rollup: { providers: rollup.providers, ...(decodeDays(d.d) ?? {}) } };
+}
+
+/** Decode the optional day map; a missing or malformed one stays absent on purpose. */
+function decodeDays(raw: unknown): { days: NonNullable<FileRollup["days"]> } | null {
+	if (!raw || typeof raw !== "object") return null;
+	const days: NonNullable<FileRollup["days"]> = {};
+	for (const [pm, perDay] of Object.entries(raw as Record<string, unknown>)) {
+		if (!perDay || typeof perDay !== "object") continue;
+		for (const [day, a] of Object.entries(perDay as Record<string, unknown>)) {
+			if (!Array.isArray(a) || a.length < 5) continue;
+			const [msgs, input, output, cacheRead, cost] = a as [number, number, number, number, number];
+			(days[pm] ??= {})[day] = { msgs, input, output, cacheRead, cost };
+		}
+	}
+	return Object.keys(days).length > 0 ? { days } : null;
 }
 
 /** Encode an in-memory item as v5: model rows only (see DiskItem). */
@@ -253,7 +321,13 @@ function encodeDiskItem(item: FileCacheItem): DiskItem {
 	for (const [pm, roll] of Object.entries(item.rollup.providers)) {
 		if (pm.includes("\u0000")) r[pm] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cost];
 	}
-	return { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r };
+	const d: NonNullable<DiskItem["d"]> = {};
+	for (const [pm, perDay] of Object.entries(item.rollup.days ?? {})) {
+		const out: Record<string, [number, number, number, number, number]> = {};
+		for (const [day, b] of Object.entries(perDay)) out[day] = [b.msgs, b.input, b.output, b.cacheRead, b.cost];
+		if (Object.keys(out).length > 0) d[pm] = out;
+	}
+	return { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r, ...(Object.keys(d).length > 0 ? { d } : {}) };
 }
 
 // Disk cache is memoized; save writes memory + disk together.
@@ -339,15 +413,18 @@ function scanSessionFiles(dir: string): string[] {
 	return files;
 }
 
-/** Extract a usage entry from one line, or null when it is not an assistant message. */
-function entryOfLine(line: string): UsageEntry | null {
+/** Extract a usage entry from one line, or null when it is not an assistant message.
+ *  `fallbackDay` dates a line that carries no timestamp of its own (older records). */
+function entryOfLine(line: string, fallbackDay: string): UsageEntry | null {
 	// Loose prefilter (fast path only): exact key would break on JSON formatting changes
 	// and silently drop usage. The role is re-checked on the parsed object below.
 	if (!line || !line.includes('"role"')) return null;
 	try {
-		const m = JSON.parse(line)?.message;
+		const rec = JSON.parse(line) as { timestamp?: unknown; message?: { role?: string; provider?: string; model?: string; usage?: Record<string, unknown> } };
+		const m = rec?.message;
 		if (m?.role !== "assistant") return null;
-		const u = m.usage || {};
+		const u = (m.usage ?? {}) as { input?: unknown; output?: unknown; cacheRead?: unknown; cost?: { total?: unknown } };
+		const written = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : Number.NaN;
 		return {
 			provider: String(m.provider || "unknown"),
 			model: String(m.model || "unknown"),
@@ -355,6 +432,7 @@ function entryOfLine(line: string): UsageEntry | null {
 			output: Number(u.output) || 0,
 			cacheRead: Number(u.cacheRead) || 0,
 			cost: Number(u.cost?.total) || 0,
+			day: Number.isFinite(written) ? dayKey(written) : fallbackDay,
 		};
 	} catch {
 		return null;
@@ -366,21 +444,21 @@ function entryOfLine(line: string): UsageEntry | null {
  * be fed back to `readSync`; a trailing segment without a newline counts only when it parses, so
  * a write caught mid-flight is left for the next scan rather than dropped.
  */
-function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number } {
+function parseBuffer(buf: Buffer, fallbackDay: string): { entries: UsageEntry[]; consumed: number } {
 	const entries: UsageEntry[] = [];
 	let start = 0;
 	let consumed = 0;
 	for (;;) {
 		const nl = buf.indexOf(10, start);
 		if (nl === -1) break;
-		const entry = entryOfLine(buf.toString("utf8", start, nl));
+		const entry = entryOfLine(buf.toString("utf8", start, nl), fallbackDay);
 		if (entry) entries.push(entry);
 		start = nl + 1;
 		consumed = start;
 	}
 	if (start < buf.length) {
 		const tail = buf.toString("utf8", start);
-		const entry = entryOfLine(tail);
+		const entry = entryOfLine(tail, fallbackDay);
 		if (entry) {
 			entries.push(entry);
 			consumed = buf.length;
@@ -423,6 +501,7 @@ function readTail(filePath: string, fromByte: number): Buffer | null {
 }
 
 let cachedSummary: UsageSummary | null = null;
+let cachedRange: UsageRange | null = null;
 let lastScanMs = 0;
 
 /** Drop every in-memory memo so the next scan reads the cache file and the session files
@@ -432,14 +511,135 @@ let lastScanMs = 0;
 export function resetUsageCache(): void {
 	diskMemo = null;
 	cachedSummary = null;
+	cachedRange = null;
 	lastScanMs = 0;
 }
 
-export function collectUsageSummary(forceScan = false): UsageSummary {
+// =============================================================================
+// Reset: move the history aside, never destroy it
+// =============================================================================
+//
+// The numbers on the dashboard are not a counter we own: they are a fold over Pi's
+// session files. Deleting the cache changes nothing, so a real reset has to move those
+// files. They go to `arnative/usage-trash/<stamp>/` with their folder structure intact,
+// which is what makes the reset undoable; Pi simply stops seeing them, and `/resume`
+// forgets those sessions until they are moved back.
+
+/** Where a reset parks the history: one folder per reset, so two resets never collide. */
+export function usageTrashRoot(): string {
+	return join(cacheDir(), "usage-trash");
+}
+
+/** What a reset would move: used by the confirmation line, before anything is touched. */
+export function usageHistorySize(keep: readonly string[] = []): { files: number; bytes: number } {
+	const sessionsDir = join(getAgentDir(), "sessions");
+	const kept = new Set(keep.map((p) => p.toLowerCase()));
+	let files = 0;
+	let bytes = 0;
+	for (const file of scanSessionFiles(sessionsDir)) {
+		if (kept.has(file.toLowerCase())) continue;
+		try {
+			bytes += statSync(file).size;
+			files++;
+		} catch {
+			// Vanished between the scan and the stat: it is gone, so it is not part of the total.
+		}
+	}
+	return { files, bytes };
+}
+
+/** Move every session file except `keep` (the one in use) into the trash, and drop the
+ *  cache. Returns the folder to pass to {@link restoreUsageHistory}. */
+export function resetUsageHistory(keep: readonly string[] = []): { moved: number; bytes: number; dir: string } {
+	const sessionsDir = join(getAgentDir(), "sessions");
+	const kept = new Set(keep.map((p) => p.toLowerCase()));
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+	const dir = join(usageTrashRoot(), stamp);
+	let moved = 0;
+	let bytes = 0;
+	for (const file of scanSessionFiles(sessionsDir)) {
+		if (kept.has(file.toLowerCase())) continue;
+		const rel = relative(sessionsDir, file);
+		const dest = join(dir, rel);
+		try {
+			bytes += statSync(file).size;
+			mkdirSync(join(dest, ".."), { recursive: true });
+			try {
+				renameSync(file, dest);
+			} catch {
+				// Different volume: copy, then drop the original.
+				copyFileSync(file, dest);
+				unlinkSync(file);
+			}
+			moved++;
+		} catch {
+			// A locked file (Windows, session still open elsewhere) stays where it is: the reset
+			// moved what it could, and the confirmation line reports the count it actually moved.
+		}
+	}
+	resetUsageCache();
+	return { moved, bytes, dir };
+}
+
+/** The undo of {@link resetUsageHistory}: move the parked files back into place. */
+export function restoreUsageHistory(dir: string): { restored: number } {
+	const sessionsDir = join(getAgentDir(), "sessions");
+	let restored = 0;
+	for (const file of scanSessionFiles(dir)) {
+		const dest = join(sessionsDir, relative(dir, file));
+		try {
+			mkdirSync(join(dest, ".."), { recursive: true });
+			if (existsSync(dest)) continue; // A new session took that name: keep both.
+			try {
+				renameSync(file, dest);
+			} catch {
+				copyFileSync(file, dest);
+				unlinkSync(file);
+			}
+			restored++;
+		} catch {
+			// Locked: leave it in the trash, the rest still comes back.
+		}
+	}
+	resetUsageCache();
+	return { restored };
+}
+
+/** One file's rollup, narrowed to the days a range covers. Same shape the `all` path reads
+ *  straight from `providers`, so the aggregation below runs once for both. */
+function rollupSince(rollup: FileRollup, sinceDay: string): Record<string, Rollup> {
+	const out: Record<string, Rollup> = {};
+	for (const [pm, perDay] of Object.entries(rollup.days ?? {})) {
+		const sep = pm.indexOf("\u0000");
+		if (sep === -1) continue;
+		const pname = pm.slice(0, sep);
+		for (const [day, b] of Object.entries(perDay)) {
+			if (day < sinceDay) continue;
+			for (const key of [pm, pname]) {
+				const r = (out[key] ??= emptyRollup());
+				r.msgs += b.msgs;
+				r.input += b.input;
+				r.output += b.output;
+				r.cacheRead += b.cacheRead;
+				r.cost += b.cost;
+			}
+		}
+	}
+	for (const r of Object.values(out)) r.sessions = 1;
+	return out;
+}
+
+export function collectUsageSummary(forceScan = false, range: UsageRange = "all"): UsageSummary {
 	const now = Date.now();
-	if (!forceScan && cachedSummary && now - lastScanMs < 5000) {
+	if (!forceScan && cachedSummary && cachedRange === range && now - lastScanMs < 5000) {
 		return cachedSummary;
 	}
+
+	// A range reads day buckets, so a file cached before they existed is parsed once more.
+	// `all` never needs them, which keeps the first open of the dashboard as cheap as before.
+	const start = rangeStart(range, now);
+	const sinceDay = start === undefined ? "" : dayKey(start);
+	const needDays = start !== undefined;
 
 	const sessionsDir = join(getAgentDir(), "sessions");
 	const files = scanSessionFiles(sessionsDir);
@@ -469,6 +669,8 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 
 		let cached = diskCache.get(file);
 		if (!(cached && cached.v === CACHE_VERSION && cached.rollup)) cached = undefined;
+		if (cached && needDays && !cached.rollup.days) cached = undefined;
+		const fallbackDay = dayKey(stat.mtimeMs);
 
 		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
 			// Unchanged since the last scan: its rollup already holds everything.
@@ -477,7 +679,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			// the existing rollup. (A shrunk file, or one whose size is below the offset,
 			// re-parses whole — see the final branch.)
 			const tail = readTail(file, cached.consumed!);
-			const parsed = tail ? parseBuffer(tail) : null;
+			const parsed = tail ? parseBuffer(tail, fallbackDay) : null;
 			if (parsed) {
 				foldInto(cached.rollup, parsed.entries);
 				cached.consumed = cached.consumed! + parsed.consumed;
@@ -485,19 +687,19 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 				cached.size = stat.size;
 			} else {
 				// Unreadable: fall back to whole-file.
-				const full = parseBuffer(readFileSync(file));
+				const full = parseBuffer(readFileSync(file), fallbackDay);
 				cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
 				diskCache.set(file, cached);
 			}
 			cacheDirty = true;
 		} else {
-			const full = parseBuffer(readFileSync(file));
+			const full = parseBuffer(readFileSync(file), fallbackDay);
 			cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
 			diskCache.set(file, cached);
 			cacheDirty = true;
 		}
 
-		for (const [key, r] of Object.entries(cached.rollup.providers)) {
+		for (const [key, r] of Object.entries(needDays ? rollupSince(cached.rollup, sinceDay) : cached.rollup.providers)) {
 			const sep = key.indexOf("\u0000");
 			const pname = sep === -1 ? key : key.slice(0, sep);
 			if (!providerMap.has(pname)) {
@@ -570,7 +772,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 				input: mData.input,
 				output: mData.output,
 				cacheRead: mData.cacheRead,
-				totalTokens: mData.input + mData.output,
+				totalTokens: mData.input + mData.output + mData.cacheRead,
 				cost: mData.cost,
 			});
 		}
@@ -583,7 +785,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			input: pData.input,
 			output: pData.output,
 			cacheRead: pData.cacheRead,
-			totalTokens: pData.input + pData.output,
+			totalTokens: pData.input + pData.output + pData.cacheRead,
 			cost: pData.cost,
 			models,
 		});
@@ -613,13 +815,14 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			input: totalInp,
 			output: totalOut,
 			cacheRead: totalCache,
-			totalTokens: totalInp + totalOut,
+			totalTokens: totalInp + totalOut + totalCache,
 			cost: totalCost,
 			reportedCost: totalCost,
 			estimatedCost,
 		},
 	};
 	lastScanMs = now;
+	cachedRange = range;
 	return cachedSummary;
 }
 

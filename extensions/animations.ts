@@ -127,7 +127,7 @@ export function animationsPickerText(): { title: string; description: string; le
 	return {
 		title: "Animations - Arnative\u2819",
 		description: "The working spinner — applies on the next tool call.",
-		legend: `[↑↓] Preview  [g] Gradient ${activeSpinnerGradient() ? "on" : "off"}  [Enter] Select  [Esc] Close`,
+		legend: `[↑↓] Preview  [g] Gradient ${activeSpinnerGradient() ? "on" : "off"}  [Enter] Select  [Esc] Back`,
 	};
 }
 

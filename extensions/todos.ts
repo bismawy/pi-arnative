@@ -10,7 +10,6 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { assert, isMain } from "../lib/check.ts";
 import { inSpans, screenTitle, type TextSpan, textSpans } from "../lib/box.ts";
@@ -115,21 +114,50 @@ function saveState(ctx: ExtensionContext): void {
 	}
 }
 
-const PARAMS = Type.Object({
-	action: StringEnum(["create", "update", "delete", "clear", "list"], {
-		description: "create adds tasks, update changes one, delete removes one, clear empties the list, list reads it back",
-	}),
-	id: Type.Optional(Type.Number({ description: "Task id: required by update and delete, ignored by the other actions" })),
-	subject: Type.Optional(Type.String({ description: "Task title: the new task on create, the new title on update" })),
-	status: Type.Optional(StringEnum([...LIST_STATUSES], { description: "New status of the task named by id" })),
-	note: Type.Optional(Type.String({ description: "One short line about what is happening now; shown while the task is in progress" })),
-	activeForm: Type.Optional(Type.String({ description: "Alias for note, kept for existing sessions" })),
-	tasks: Type.Optional(
-		Type.Array(Type.Object({ subject: Type.String(), note: Type.Optional(Type.String()) }), {
+const PARAMS = {
+	type: "object",
+	required: ["action"],
+	properties: {
+		action: {
+			type: "string",
+			enum: ["create", "update", "delete", "clear", "list"],
+			description: "create adds tasks, update changes one, delete removes one, clear empties the list, list reads it back",
+		},
+		id: {
+			type: "number",
+			description: "Task id: required by update and delete, ignored by the other actions",
+		},
+		subject: {
+			type: "string",
+			description: "Task title: the new task on create, the new title on update",
+		},
+		status: {
+			type: "string",
+			enum: [...LIST_STATUSES],
+			description: "New status of the task named by id",
+		},
+		note: {
+			type: "string",
+			description: "One short line about what is happening now; shown while the task is in progress",
+		},
+		activeForm: {
+			type: "string",
+			description: "Alias for note, kept for existing sessions",
+		},
+		tasks: {
+			type: "array",
 			description: "Several tasks to add at once",
-		}),
-	),
-});
+			items: {
+				type: "object",
+				required: ["subject"],
+				properties: {
+					subject: { type: "string" },
+					note: { type: "string" },
+				},
+			},
+		},
+	},
+} as never;
 
 const SUMMARY = (state: TaskState): string => {
 	const { done, total, doing, queued } = countTodos(state);

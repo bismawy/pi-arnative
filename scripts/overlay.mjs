@@ -92,6 +92,19 @@ for (const rel of [...added, ...changed]) {
 }
 for (const rel of removed) rmSync(pair(rel)[1], { force: true });
 
+// Also keep the custom themes directory in sync if ~/.pi/agent/themes exists
+const customThemesDir = join(agentDir, "themes");
+if (existsSync(customThemesDir)) {
+	const themesSrc = join(root, "themes");
+	if (existsSync(themesSrc)) {
+		for (const file of readdirSync(themesSrc)) {
+			if (file.endsWith(".json")) {
+				writeFileSync(join(customThemesDir, file), readFileSync(join(themesSrc, file)));
+			}
+		}
+	}
+}
+
 // Report the outcome from disk, not from the plan: the copy is what the next `/reload` loads.
 const drifted = [...added, ...changed].filter((rel) => {
 	const [source, target] = pair(rel);

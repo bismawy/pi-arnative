@@ -9,13 +9,17 @@
  * only, Off = nothing. While pi-auto-compat is installed this module defers to it and says so
  * once, so two healers never write models.json at the same time.
  */
+import { reloadCurrentModel } from "../lib/provider.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
 import { REJECTION_RE } from "../lib/compat.ts";
-import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../lib/model-heal.ts";
+import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../lib/model-heal.ts";
+
+// Nerd Font md-shield-sync (U+F06DE), written as a code point so the source stays ASCII.
+const HEAL_ICON = String.fromCodePoint(0xf06de);
 
 interface RegistryLike {
 	getAll?: () => unknown[];
@@ -59,6 +63,12 @@ export function isRejectedParam(message: AssistantMessage | undefined): boolean 
 	return REJECTION_RE.test(message.errorMessage ?? "");
 }
 
+/** A rejection that names the effort itself, so dropping the level is the fix. A plain
+ *  400 (context too long, bad tool schema) leaves the map alone and only re-probes. */
+export function isEffortRejection(message: AssistantMessage | undefined): boolean {
+	return isRejectedParam(message) && /reasoning.?effort|thinking|effort/i.test(message!.errorMessage ?? "");
+}
+
 /** Whether a pass may run: Off runs nothing, Flags runs only the offline flags pass, Full runs
  *  everything, and an installed pi-auto-compat owns models.json in every mode. */
 export function healAllowed(need: "Flags" | "Full", mode: ModelHealChoice, autoCompat: boolean): boolean {
@@ -81,7 +91,7 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		let ui: ExtensionContext["ui"] | undefined;
 		try {
 			ui = ctx.ui;
-			ui?.setWidget?.("model-heal", lines.map((line) => "model-heal: " + line));
+			ui?.setWidget?.("model-heal", lines.map((line) => HEAL_ICON + " model-heal: " + line));
 		} catch {
 			return;
 		}
@@ -100,11 +110,12 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		if (!result.changed) return;
 		let refreshed = true;
 		try {
-			await registryOf(ctx)?.refresh?.({ allowNetwork: false });
+			refreshed = await reloadCurrentModel(ctx as never, (m) => pi.setModel(m as never));
 		} catch {
 			refreshed = false;
 		}
-		notify(ctx, [label + " (" + result.detail.length + " change(s))" + (refreshed ? "" : " - run /reload to load it")]);
+		const count = result.detail.length;
+		notify(ctx, [label + " (" + count + (count === 1 ? " change)" : " changes)") + (refreshed ? "" : " - run /reload to load it")]);
 	}
 
 	const enabled = (need: "Flags" | "Full"): boolean => healAllowed(need, activeModelHeal(), autoCompatInstalled());
@@ -183,6 +194,20 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 			const deps = depsFor(ctx);
 			const target = deps.models().find((m) => m.provider.toLowerCase() === message!.provider!.toLowerCase() && m.id === message!.model);
 			if (!target) return;
+			const level = pi.getThinkingLevel();
+			if (isEffortRejection(message) && level !== "off") {
+				const marked = markRejectedLevel(deps, target, level);
+				if (marked.changed) {
+					void reloadCurrentModel(ctx as never, (m) => pi.setModel(m as never))
+						.then((loaded) => {
+							// pi clamps to the nearest level the map still offers.
+							if (loaded) pi.setThinkingLevel(level);
+							notify(ctx, [target.id + " rejected thinking " + level + "; removed it" + (loaded ? ", now " + pi.getThinkingLevel() : " - run /reload to load it")]);
+						})
+						.catch(() => undefined);
+					return;
+				}
+			}
 			void healEffort(deps, true, [target]).then((r) => apply(ctx, "thinking levels re-probed", r)).catch(() => undefined);
 		} catch {
 			// stale ctx
@@ -211,7 +236,7 @@ export async function healNow(ctx: ExtensionContext): Promise<void> {
 	const detail = [...flags.detail, ...meta.detail, ...effort.detail];
 	const errors = [...flags.errors, ...meta.errors, ...effort.errors];
 	if (detail.length > 0) {
-		await registryOf(ctx)?.refresh?.({ allowNetwork: false }).catch(() => undefined);
+		await reloadCurrentModel(ctx as never, (m) => pi.setModel(m as never)).catch(() => undefined);
 		ctx.ui.notify("[arnative] Model heal fixed:\n  - " + detail.join("\n  - "), "info");
 		return;
 	}
@@ -233,6 +258,8 @@ if (isMain(import.meta.url)) {
 	assert(!isRejectedParam({ role: "assistant", provider: "r", model: "m", errorMessage: "401 unauthorized" }), "an auth failure costs no probe");
 	assert(!isRejectedParam({ role: "user", provider: "r", model: "m", errorMessage: "bad request" }), "only assistant messages count");
 	assert(!isRejectedParam(undefined), "no message, no probe");
+	assert(isEffortRejection({ role: "assistant", provider: "r", model: "m", errorMessage: "400 invalid reasoning_effort: medium" }), "an effort rejection drops the level");
+	assert(!isEffortRejection({ role: "assistant", provider: "r", model: "m", errorMessage: "400 bad request: context too long" }), "a plain 400 keeps the map");
 	assert(healAllowed("Flags", "Full", false) && healAllowed("Full", "Full", false), "Full runs every pass");
 	assert(healAllowed("Flags", "Flags", false) && !healAllowed("Full", "Flags", false), "Flags runs only the offline pass");
 	assert(!healAllowed("Flags", "Off", false) && !healAllowed("Full", "Off", false), "Off runs nothing");

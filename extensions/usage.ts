@@ -12,8 +12,24 @@ import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
 import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
-import { legendUsage, matchesBack } from "../lib/shortcuts.ts";
-import { collectUsageSummary, estimateCost, formatTokens, getModelAllTimeUsage, hasPrice, loadPriceTable, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
+import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../lib/shortcuts.ts";
+import {
+	collectUsageSummary,
+	estimateCost,
+	formatTokens,
+	getModelAllTimeUsage,
+	hasPrice,
+	loadPriceTable,
+	dayKey,
+	rangeStart,
+	resetUsageCache,
+	resetUsageHistory,
+	restoreUsageHistory,
+	usageHistorySize,
+	USAGE_RANGES,
+	type UsageRange,
+	type UsageSummary,
+} from "../lib/usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -24,6 +40,26 @@ export function formatCost(n: number): string {
 		return s === "1000.00" ? "$1.0k" : `$${s}`;
 	}
 	return `$${(n / 1000).toFixed(1)}k`;
+}
+
+/** File size in the unit a person reads: 281 MB, 1.4 GB. */
+/** `1 session`, `312 sessions`: a count that reads as prose, because the notice is prose. */
+function countOf(n: number, noun: string): string {
+	return n + " " + noun + (n === 1 ? "" : "s");
+}
+
+/** The trash path without the home prefix: the tail is what a person can type. */
+function shortTrash(dir: string): string {
+	const at = dir.replaceAll("\\", "/").indexOf("arnative/usage-trash/");
+	return at >= 0 ? dir.replaceAll("\\", "/").slice(at) : dir;
+}
+
+export function formatBytes(n: number): string {
+	if (!n || n <= 0) return "0 B";
+	if (n < 1024) return n + " B";
+	if (n < 1024 * 1024) return Math.round(n / 1024) + " kB";
+	if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(0) + " MB";
+	return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
 }
 
 export function formatCount(n: number): string {
@@ -50,10 +86,19 @@ export interface RowItem {
 	expanded?: boolean;
 }
 
+/** Labels on the range bar, in tab order. */
+const RANGE_LABELS: Record<UsageRange, string> = { all: "All", today: "Today", "7d": "7 day", "30d": "30 day", "3m": "3 month" };
+/** Data rows on screen at once: five reads as a table, sixteen pushed the Total row off. */
+const USAGE_VIEWPORT = 5;
+
 export class UsageModalComponent implements Component {
 	private expandedProviders = new Set<string>();
 	private selectedIndex = 0;
 	private summary: UsageSummary;
+	/** Which window the numbers cover. `all` keeps the old dashboard's meaning. */
+	private range: UsageRange = "all";
+	/** Tab hitboxes of the last render: column span of each range on the bar line. */
+	private tabHitboxes: { line: number; start: number; end: number; range: UsageRange }[] = [];
 
 	private theme: { fg(c: string, t: string): string; bold?(t: string): string };
 	private onDone: (back: boolean) => void;
@@ -63,6 +108,14 @@ export class UsageModalComponent implements Component {
 	private edgeOf: (s: string) => string;
 	/** Row layout of the last render: which table row sits on which screen line. */
 	private rowHitboxes: { line: number; index: number }[] = [];
+	/** A destructive step waits here until the user answers it. Nothing is touched before. */
+	private confirmStep: "reset" | "undo" | null = null;
+	/** One line under the table, stating what the last reset moved. */
+	private notice: string | null = null;
+	/** The folder the last reset parked the history in, so U can put it back. */
+	private trashDir: string | null = null;
+	/** The file pi is writing right now. Moving it would break the running session. */
+	private activeFile: string | undefined;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -70,12 +123,15 @@ export class UsageModalComponent implements Component {
 		onDone: (back: boolean) => void,
 		requestRender: () => void,
 		thinkingLevel?: string,
+		/** The session file in use. Excluded from a reset: pi keeps appending to it. */
+		activeFile?: string,
 	) {
 		this.theme = theme;
+		this.activeFile = activeFile;
 		this.onDone = onDone;
 		this.requestRender = requestRender;
 		this.edgeOf = thinkingColorOf(theme, thinkingLevel);
-		this.summary = collectUsageSummary(true);
+		this.summary = collectUsageSummary(true, this.range);
 		// Default: expand the first provider when there is one
 		if (this.summary.providers.length > 0) {
 			this.expandedProviders.add(this.summary.providers[0]!.name);
@@ -137,14 +193,76 @@ export class UsageModalComponent implements Component {
 		return true;
 	}
 
+	/** Do the step the user just confirmed, then re-read whatever is left on disk. */
+	private runConfirm(step: "reset" | "undo"): void {
+		if (step === "reset") {
+			const kept = this.activeFile ? [this.activeFile] : [];
+			const result = resetUsageHistory(kept);
+			this.trashDir = result.moved > 0 ? result.dir : null;
+			this.notice = "Moved " + countOf(result.moved, "session") + " (" + formatBytes(result.bytes) + ") to " + shortTrash(result.dir);
+		} else if (this.trashDir) {
+			const result = restoreUsageHistory(this.trashDir);
+			this.notice = "Restored " + countOf(result.restored, "session");
+			this.trashDir = null;
+		}
+		this.summary = collectUsageSummary(true, this.range);
+		this.selectedIndex = 0;
+		this.expandedProviders.clear();
+		const first = this.summary.providers[0];
+		if (first) this.expandedProviders.add(first.name);
+		this.requestRender();
+	}
+
+	/** Switch the window and re-read the numbers for it. Selection returns to the first row:
+	 *  a provider that carried the last 3 months can be absent from today. */
+	private setRange(range: UsageRange): void {
+		if (range === this.range) return;
+		this.range = range;
+		this.summary = collectUsageSummary(true, range);
+		this.selectedIndex = 0;
+		this.expandedProviders.clear();
+		const first = this.summary.providers[0];
+		if (first) this.expandedProviders.add(first.name);
+		this.requestRender();
+	}
+
 	handleInput(keyData: string): void {
 		const rows = this.buildFlatRows();
-		if (matchesBack(keyData)) {
+		// A pending question owns the keyboard: any key but y answers no, so a stray press
+		// can neither delete anything nor navigate.
+		if (this.confirmStep) {
+			const yes = matchesKey(keyData, "y") || matchesKey(keyData, "Y");
+			const step = this.confirmStep;
+			this.confirmStep = null;
+			if (yes) this.runConfirm(step);
+			else this.requestRender();
+			return;
+		}
+		// Esc and ← both step out one level: the dashboard reports it upward so the /arnative
+		// menu reopens. q closes outright, for a dashboard opened by /usage on its own.
+		if (matchesBack(keyData) || matchesKey(keyData, "escape")) {
 			this.onDone(true);
 			return;
 		}
-		if (matchesKey(keyData, "q") || matchesKey(keyData, "Q") || matchesKey(keyData, "escape")) {
+		if (matchesKey(keyData, "q") || matchesKey(keyData, "shift+q")) {
 			this.onDone(false);
+			return;
+		}
+		if (RESET_USAGE.matches(keyData)) {
+			this.confirmStep = "reset";
+			this.notice = null;
+			this.requestRender();
+			return;
+		}
+		if (UNDO_USAGE.matches(keyData) && this.trashDir) {
+			this.confirmStep = "undo";
+			this.requestRender();
+			return;
+		}
+		if (matchesKey(keyData, "tab") || matchesKey(keyData, "shift+tab")) {
+			const at = USAGE_RANGES.indexOf(this.range);
+			const step = matchesKey(keyData, "shift+tab") ? -1 : 1;
+			this.setRange(USAGE_RANGES[(at + step + USAGE_RANGES.length) % USAGE_RANGES.length]!);
 			return;
 		}
 		if (matchesKey(keyData, "up") || matchesKey(keyData, "k")) {
@@ -173,6 +291,12 @@ export class UsageModalComponent implements Component {
 	handleMouse(event: TuiMouseEvent): { handled: boolean; render?: boolean } | undefined {
 		if (event.type === "wheel" || event.type === "move" || event.type === "drag" || event.type === "release") {
 			return undefined;
+		}
+		// A click on the range bar picks that window, so the bar is a control, not a label.
+		const tab = this.tabHitboxes.find((h) => h.line === event.y && event.x >= h.start && event.x <= h.end);
+		if (tab) {
+			if (event.type === "click") this.setRange(tab.range);
+			return { handled: true, render: event.type === "click" };
 		}
 		const hit = this.rowHitboxes.find((h) => h.line === event.y);
 		if (!hit) {
@@ -245,15 +369,44 @@ export class UsageModalComponent implements Component {
 		/** Rows the chrome draws above the body: top edge, title, description, blank. */
 		const CHROME_ROWS = 4;
 		this.rowHitboxes = [];
+		this.tabHitboxes = [];
+
+		// Row 1: the window bar. The active range is the only accented word, so the numbers
+		// below are read with the window they cover; the counter on the same line says how many
+		// rows exist beyond the viewport.
+		const bar: string[] = [];
+		let barCol = 0;
+		for (const r of USAGE_RANGES) {
+			if (bar.length > 0) {
+				bar.push(dim(" · "));
+				barCol += 3;
+			}
+			const label = RANGE_LABELS[r];
+			const text = r === this.range ? acc(bold(label)) : th.fg("muted", label);
+			this.tabHitboxes.push({ line: CHROME_ROWS + 2, start: barCol + 2, end: barCol + label.length + 1, range: r });
+			bar.push(text);
+			barCol += label.length;
+		}
+		const counter = `${Math.min(rows.length, USAGE_VIEWPORT)}/${rows.length}`;
+		const rule = th.fg("borderMuted", "\u2500".repeat(Math.max(0, contentW)));
+		const barLine = bar.join("");
+		const counterFits = contentW - barCol - counter.length - 1 >= 0;
+		// The bar is a control between two rules, so the eye reads it as a switch over the table
+		// below it, not as a line of the table itself.
+		body.push(rule);
+		body.push(counterFits ? barLine + " ".repeat(contentW - barCol - counter.length) + dim(counter) : barLine);
+		body.push(rule);
 		body.push(headerText);
 
-		// Data rows (with a display height cap so it cannot overflow)
-		const maxVisibleRows = 16;
+		// Row 2 onward: the table, windowed so the box keeps one height however long the list
+		// of providers and models grows. The line above and below say what is out of sight.
+		const maxVisibleRows = USAGE_VIEWPORT;
 		let startIdx = 0;
 		if (rows.length > maxVisibleRows) {
 			startIdx = Math.max(0, Math.min(this.selectedIndex - Math.floor(maxVisibleRows / 2), rows.length - maxVisibleRows));
 		}
 		const visibleRows = rows.slice(startIdx, startIdx + maxVisibleRows);
+		if (startIdx > 0) body.push(dim(`↑ ${startIdx} more`));
 
 		for (let i = 0; i < visibleRows.length; i++) {
 			const item = visibleRows[i]!;
@@ -279,14 +432,17 @@ export class UsageModalComponent implements Component {
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
 		}
+		const hiddenBelow = rows.length - (startIdx + visibleRows.length);
+		if (hiddenBelow > 0) body.push(dim(`↓ ${hiddenBelow} more`));
 
 		// The selected row's detail sits under the table, where the eye lands after scanning it.
 		body.push("");
 		body.push(this.selectedDetail(rows[this.selectedIndex], acc, soft));
+		if (this.notice) body.push(th.fg("muted", this.notice));
 
 		// Table-width separator above Total band (skill arnative-pi §6 rule 7).
 		const tableW = colW.name + sessionW + messagesW + colW.tokens + colW.cost;
-		body.push(th.fg("dim", "─".repeat(Math.max(0, tableW))));
+		body.push(th.fg("borderMuted", "─".repeat(Math.max(0, tableW))));
 
 		// Total row
 		const t = this.summary.totals;
@@ -309,11 +465,30 @@ export class UsageModalComponent implements Component {
 			{
 				title: screenTitle("Usage"),
 				description: width >= 70 ? "Token, message & cache usage across all local Pi sessions." : "Usage across all local sessions.",
-				legend: legendUsage(width),
+				legend: this.footer(width, th),
 			},
 			body,
 			edge,
 		);
+	}
+
+	/** The last row of the box: a pending question, or the keys that are live right now. */
+	private footer(width: number, th: { fg(c: string, t: string): string }): string {
+		if (this.confirmStep === "reset") {
+			const size = usageHistorySize(this.activeFile ? [this.activeFile] : []);
+			const what = countOf(size.files, "session") + " (" + formatBytes(size.bytes) + ")";
+			return th.fg("accent", "Delete " + what + "?") + " " + th.fg("muted", "moves to the trash") + "  " + th.fg("text", "[y] Yes  [Esc] Cancel");
+		}
+		if (this.confirmStep === "undo") {
+			return (
+				th.fg("accent", "Put the history back?") +
+				" " +
+				th.fg("muted", "the trash folder stays") +
+				"  " +
+				th.fg("text", "[y] Yes  [Esc] Cancel")
+			);
+		}
+		return legendUsage(width, { reset: true, undo: this.trashDir !== null });
 	}
 
 	/** Detail for the selected row: icon in `accent`, text and `·` dividers in `accentSoft`. */
@@ -342,7 +517,13 @@ export async function openUsage(ctx: ExtensionCommandContext): Promise<boolean> 
 	// The thinking level colors the box, so read it when the dashboard opens.
 	const thinkingLevel = ctx.thinkingLevel;
 	const back = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-		return new UsageModalComponent(theme, (wantsBack) => done(wantsBack), () => tui.requestRender(), thinkingLevel);
+		return new UsageModalComponent(
+			theme,
+			(wantsBack) => done(wantsBack),
+			() => tui.requestRender(),
+			thinkingLevel,
+			ctx.sessionManager.getSessionFile() ?? undefined,
+		);
 	});
 	return back === true;
 }
@@ -390,6 +571,14 @@ if (isMain(import.meta.url)) {
 	assert(summary.totals.sessions === 1, "collectUsageSummary detects total sessions");
 	assert(summary.totals.msgs === 3, "collectUsageSummary counts assistant messages only");
 	assert(Math.abs(summary.totals.cost - 0.06) < 1e-9, "collectUsageSummary counts cost");
+	// Tokens is everything the model moved, cache reads included: a vendor dashboard counts
+	// the same three numbers, so 240M cached tokens cannot vanish from the headline.
+	assert(
+		summary.totals.totalTokens === summary.totals.input + summary.totals.output + summary.totals.cacheRead,
+		"the Tokens total is prompt + completion + cache reads",
+	);
+	assert(summary.totals.totalTokens === 175, `the fixture moves 175 tokens in total, got ${summary.totals.totalTokens}`);
+	assert(summary.providers[0]!.models[0]!.totalTokens === 162, "a model row counts its cache reads too");
 
 	const modelUsage = getModelAllTimeUsage("gemini-3.8-flash");
 	assert(modelUsage.input === 150 && modelUsage.output === 10 && modelUsage.cacheRead === 2, "getModelAllTimeUsage sums one model across messages");
@@ -613,7 +802,7 @@ if (isMain(import.meta.url)) {
 		!lines.slice(headerAt + 1, firstRow).some((l) => l.includes("├")),
 		"no rule sits between the header and the first row",
 	);
-	assert(plain(lines[headerAt - 1]!).slice(1, -1).trim() === "", "a blank row separates the description from the header");
+	assert(/^─+$/.test(plain(lines[headerAt - 1]!).slice(1, -1).trim()), "a rule closes the window bar above the header");
 	// The header is content: it sits flush with the title, and each column title ends on the
 	// same cell its own numbers end on.
 	const headerLine = plain(lines[headerAt]!);
@@ -758,17 +947,17 @@ if (isMain(import.meta.url)) {
 		} as never) === undefined,
 		"a wheel event is left to the terminal",
 	);
-	// `←` is the arnative-wide "go back" key: the dashboard reports it upward instead of
-	// closing, so the /arnative menu can reopen. Esc/q still close it outright.
+	// `←` and Esc are the arnative-wide "go back" keys: the dashboard reports them upward
+	// instead of closing, so the /arnative menu can reopen. q still closes it outright.
 	const doneArgs: boolean[] = [];
 	const nav = new UsageModalComponent(fakeTheme, (back) => doneArgs.push(back), () => {}, "high");
 	nav.handleInput("\x1b[D"); // ←
 	nav.handleInput("\x1b"); // Esc
 	nav.handleInput("q");
-	assert(doneArgs.length === 3 && doneArgs[0] === true && doneArgs[1] === false && doneArgs[2] === false, "← reports back, Esc/q close");
+	assert(doneArgs.length === 3 && doneArgs[0] === true && doneArgs[1] === true && doneArgs[2] === false, "← and Esc report back, q closes");
 	assert(
-		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => l.includes("[←] Back")),
-		"the dashboard legend advertises the back key",
+		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => l.includes("[Esc] Back")),
+		"the dashboard legend advertises Esc Back",
 	);
 
 	// models.json rates price the provider and models directly.
@@ -801,8 +990,8 @@ if (isMain(import.meta.url)) {
 		providers: [
 			{
 				name: "alpha", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000,
-				totalTokens: 1_500_000, cost: 0, estimatedCost: 0.546,
-				models: [{ name: "deepseek-v4.1-flash", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000, totalTokens: 1_500_000, cost: 0, estimatedCost: 0.546 }],
+				totalTokens: 3_500_000, cost: 0, estimatedCost: 0.546,
+				models: [{ name: "deepseek-v4.1-flash", sessions: 1, msgs: 2, input: 1_000_000, output: 500_000, cacheRead: 2_000_000, totalTokens: 3_500_000, cost: 0, estimatedCost: 0.546 }],
 			},
 			{
 				name: "antigravity", sessions: 1, msgs: 1, input: 2_200_000, output: 626_000, cacheRead: 0,
@@ -810,7 +999,7 @@ if (isMain(import.meta.url)) {
 				models: [{ name: "gemini-3.8-flash", sessions: 1, msgs: 1, input: 2_200_000, output: 626_000, cacheRead: 0, totalTokens: 2_826_000, cost: 0.65, estimatedCost: 0 }],
 			},
 		],
-		totals: { sessions: 2, msgs: 3, input: 3_200_000, output: 1_126_000, cacheRead: 2_000_000, totalTokens: 4_326_000, cost: 0.65, reportedCost: 0.65, estimatedCost: 0.546 },
+		totals: { sessions: 2, msgs: 3, input: 3_200_000, output: 1_126_000, cacheRead: 2_000_000, totalTokens: 6_326_000, cost: 0.65, reportedCost: 0.65, estimatedCost: 0.546 },
 	};
 	(estModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set(["alpha"]);
 	const estLines = estModal.render(90);
@@ -832,5 +1021,106 @@ if (isMain(import.meta.url)) {
 		);
 	}
 
+	// Ranges: three dated files — today, 10 days back, 45 days back — so each window has a
+	// number only it can produce.
+	const dayMs = 86_400_000;
+	const nowMs = Date.now();
+	const stampOf = (offsetDays: number): string => new Date(nowMs - offsetDays * dayMs).toISOString();
+	const datedAsst = (provider: string, model: string, input: number, offsetDays: number) =>
+		JSON.stringify({ timestamp: stampOf(offsetDays), message: { role: "assistant", provider, model, usage: { input, output: 1, cacheRead: 0, cost: { total: 0 } } } });
+	writeFileSync(
+		join(fixture, "sessions", "ui", "dated.jsonl"),
+		[datedAsst("rangely", "m-today", 10, 0), datedAsst("rangely", "m-ten", 20, 10), datedAsst("rangely", "m-old", 40, 45)].join(String.fromCharCode(10)),
+	);
+	resetUsageCache();
+	const msgIn = (range: UsageRange): number => {
+		const found = collectUsageSummary(true, range).providers.find((p) => p.name === "rangely");
+		return found?.msgs ?? 0;
+	};
+	assert(msgIn("all") === 3, "the all window keeps every dated message");
+	assert(msgIn("today") === 1, "today counts only the message written today");
+	assert(msgIn("7d") === 1, "7 day stops before the ten-day record, so only today counts");
+	assert(msgIn("30d") === 2, "30 day covers today and ten days back, not forty-five");
+	assert(msgIn("3m") === 3, "3 month covers all three");
+	// A window with nothing in it is empty, not an error: the bar can be pressed on a quiet day.
+	assert(collectUsageSummary(true, "today").totals.msgs >= 1, "today still reports the rows it has");
+
+	// The backfill: a cache item written before ranges existed has totals but no day buckets.
+	// Asking for a range must re-parse that file rather than report a wrong window.
+	const cacheFile = join(fixture, "arnative", "usage-cache.json");
+	resetUsageCache();
+	const legacy = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, Record<string, unknown>>;
+	for (const item of Object.values(legacy)) delete item.d;
+	writeFileSync(cacheFile, JSON.stringify(legacy), "utf8");
+	resetUsageCache();
+	assert(msgIn("today") === 1, "an item without day buckets is re-parsed once a range is asked for");
+	const reloaded = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, { d?: unknown }>;
+	assert(Object.values(reloaded).some((item) => item.d !== undefined), "the re-parse writes the day buckets back");
+
+	// The range bar: five windows, the active one accented, and the counter states how many
+	// rows exist past the viewport. Tab moves the window and the numbers follow it.
+	const barModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high");
+	const barOnce = barModal.render(100).map(plain);
+	const barLine = barOnce.find((l) => l.includes("All") && l.includes("Today") && l.includes("3 month"));
+	assert(barLine !== undefined, "the range bar names every window on one line");
+	assert(USAGE_RANGES.every((r) => barLine!.includes(RANGE_LABELS[r])), "every range label is on the bar");
+	assert(barLine!.indexOf("All") < barLine!.indexOf("Today"), "the bar keeps tab order");
+	const beforeRange = barModal.render(100).map(plain).join("\n");
+	barModal.handleInput("\t");
+	const afterRange = barModal.render(100).map(plain).join("\n");
+	assert(beforeRange !== afterRange, "Tab switches the window and repaints");
+	barModal.handleInput("\x1b[Z");
+	assert(barModal.render(100).map(plain).join("\n") === beforeRange, "Shift+Tab walks the bar back to where it started");
+
+	// The viewport: five rows on screen with a count and an arrow for what is out of sight.
+	const manyModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "medium");
+	const provider = (n: number) => ({
+		name: `p${n}`, sessions: 1, msgs: 1, input: 1000, output: 10, cacheRead: 0, totalTokens: 1010, cost: 0.01, estimatedCost: 0,
+		models: [{ name: "m", sessions: 1, msgs: 1, input: 1000, output: 10, cacheRead: 0, totalTokens: 1010, cost: 0.01, estimatedCost: 0 }],
+	});
+	(manyModal as unknown as { summary: unknown }).summary = {
+		providers: [1, 2, 3, 4, 5, 6, 7].map(provider),
+		totals: { sessions: 7, msgs: 7, input: 7000, output: 70, cacheRead: 0, totalTokens: 7070, cost: 0.07, reportedCost: 0.07, estimatedCost: 0 },
+	};
+	const many = manyModal.render(96).map(plain);
+	assert(many.some((l) => l.includes("5/7")), "the counter reads 5/7 with five rows shown of seven");
+	assert(many.some((l) => l.includes("↓ 2 more")), "rows below the window are counted");
+	assert(!many.some((l) => l.includes("↑ ")), "nothing is announced above the top of the list");
+	const dataRows = many.filter((l) => /^[│|] [▾▸ ] P[0-9]/.test(l));
+	assert(dataRows.length === 5, `exactly five data rows are drawn (got ${dataRows.length})`);
+	for (let i = 0; i < 6; i++) manyModal.handleInput("\x1b[B");
+	const scrolled = manyModal.render(96).map(plain);
+	assert(scrolled.some((l) => l.includes("↑ 2 more")), "moving down announces the rows now above the window");
+	assert(!scrolled.some((l) => l.includes("↓ ")), "the bottom of the list announces only what is above");
+
+
+	// --- Reset: history moves to the trash, never into oblivion ----------------
+	assert(formatBytes(0) === "0 B" && formatBytes(1536) === "2 kB" && formatBytes(281 * 1024 * 1024) === "281 MB", "formatBytes picks the readable unit");
+	const resetDir = mkdtempSync(join(tmpdir(), "arnative-reset-"));
+	process.env.PI_CODING_AGENT_DIR = resetDir;
+	const resetSessions = join(resetDir, "sessions", "proj");
+	mkdirSync(resetSessions, { recursive: true });
+	const resetLine = JSON.stringify({ message: { role: "assistant", provider: "google", model: "gemini-3.8-flash", usage: { input: 1000, output: 10, cacheRead: 0, cost: { total: 0.01 } } } });
+	const livePath = join(resetSessions, "live.jsonl");
+	writeFileSync(livePath, resetLine + String.fromCharCode(10));
+	writeFileSync(join(resetSessions, "old.jsonl"), resetLine + String.fromCharCode(10));
+	resetUsageCache();
+	const resetModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high", livePath);
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("[R] Reset")), "the footer advertises R Reset");
+	resetModal.handleInput("R");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Delete 1 session (151 B)?")), "R states the size and asks before anything is touched");
+	resetModal.handleInput("");
+	assert(existsSync(join(resetSessions, "old.jsonl")), "any other key cancels and no file moves");
+	resetModal.handleInput("R");
+	resetModal.handleInput("y");
+	assert(!existsSync(join(resetSessions, "old.jsonl")), "confirming moves the other sessions out");
+	assert(existsSync(livePath), "the session in use is never moved");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Moved 1 session")), "the notice states what moved");
+	assert(collectUsageSummary(true).totals.msgs === 1, "only the live session is still counted");
+	resetModal.handleInput("U");
+	resetModal.handleInput("y");
+	assert(existsSync(join(resetSessions, "old.jsonl")), "U puts the history back");
+	assert(collectUsageSummary(true).totals.msgs === 2, "both sessions count again");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Restored 1 session")), "the notice states what came back");
 	console.log("usage.ts self-check OK");
 }
