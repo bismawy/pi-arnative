@@ -39,16 +39,18 @@ export function setActiveTheme<T>(th: T | null): void {
 }
 
 /**
- * Soft tier of a resolved theme color: clone at L 0.82 with `SOFT_CHROMA_SCALE` of
- * its chroma and the hue kept. The generator's `soften()` (themes/gen-themes.mjs)
- * applies the identical recipe, so a declared `vars.*Soft` and this derived value
- * agree. A single constant drives all soft tiers (accent and label); it is tuned
- * high enough that a soft tone reads as a tinted second color, not grey.
+ * Soft tiers of a resolved theme color: clone at L 0.82 with a share of the
+ * chroma and the hue kept. The generator's `soften()` (themes/gen-themes.mjs)
+ * applies the identical recipes, so declared `vars.*Soft` values and these
+ * derived ones agree. The accent tier is tuned lower than the label tier: a
+ * soft accent should read as a quiet tint, while footer labels stay a visible
+ * second color.
  */
 const SOFT_L = 0.82;
 const SOFT_CHROMA_SCALE = 0.5;
-function softenColor(c: { c?: number; h?: number }): { kind: "oklch"; l: number; c: number; h: number } {
-	return { kind: "oklch", l: SOFT_L, c: (c.c ?? 0) * SOFT_CHROMA_SCALE, h: c.h ?? 0 };
+const SOFT_CHROMA_SCALE_ACCENT = 0.35;
+function softenColor(c: { c?: number; h?: number }, scale = SOFT_CHROMA_SCALE): { kind: "oklch"; l: number; c: number; h: number } {
+	return { kind: "oklch", l: SOFT_L, c: (c.c ?? 0) * scale, h: c.h ?? 0 };
 }
 
 /**
@@ -78,7 +80,7 @@ export function softOf(th: {
 	const accent = th?.colors?.accent;
 	const style = th?.style?.bind(th);
 	if (accent?.kind === "oklch" && style) {
-		const soft = softenColor(accent);
+		const soft = softenColor(accent, SOFT_CHROMA_SCALE_ACCENT);
 		return (s) => style(s, { fg: soft });
 	}
 	return (s) => fg("muted", s);
@@ -174,7 +176,7 @@ if (isMain(import.meta.url)) {
 		colors: { accent: { kind: "oklch", c: 0.2, h: 355 }, borderAccent: { kind: "oklch", c: 0.1, h: 200 } },
 	};
 	const modernOut = softOf(modern)("x");
-	assert(modernOut.includes('"l":0.82') && modernOut.includes('"c":0.1'), "softOf derives the soft tint from accent (l=0.82, c=accent*0.5)");
+	assert(modernOut.includes('"l":0.82') && /0\.0699+/.test(modernOut), "softOf derives the soft tint from accent (l=0.82, c=accent*0.35)");
 	assert(modernOut.includes("x"), "softOf keeps the text");
 	// The label tier softens `borderAccent`, NOT `accent`: that is what keeps footer text
 	// on the blue tier instead of inheriting the pink accent hue.

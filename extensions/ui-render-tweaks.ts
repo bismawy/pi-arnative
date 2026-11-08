@@ -555,7 +555,7 @@ if (isMain(import.meta.url)) {
 		for (const [softName, baseName] of [["accentSoft", "accent"], ["secondarySoft", "borderAccent"]] as const) {
 			const base = d.vars[d.colors[baseName] ?? baseName]!;
 			const declared = toHex(d.vars[softName]!);
-			const derived = softenToHex(base);
+			const derived = softenToHex(base, softName === "secondarySoft" ? 0.5 : 0.35);
 			assert(declared === derived, `theme ${f}: vars.${softName} ${declared} != runtime ${derived} (derived from ${baseName})`);
 		}
 		const canvas = hex("userMessageBg");
