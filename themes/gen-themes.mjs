@@ -79,19 +79,22 @@ const ACCENT_OFFSET = {
  */
 const THEMES = {
 	arnative: {
-		accent: "oklch(81.1% 0.1455 217.709375)",
-		chroma: 0.13,
+		accent: "oklch(81% 0.11 217)",
+		chroma: 0.11,
 		canvasL: 0.27,
-		neutralHue: 232,
+		neutralHue: 215,
 		neutralChroma: 0.012,
-		primary: "oklch(82% 0.14 218)",
-		secondary: "oklch(78% 0.11 282)",
-		// Violet labels are the second tone; amber headings the third.
+		// Teal family (16697a-82c0cc) with an amber counterpoint (ffa62b) and
+		// warm-white headings (ede7e3): the Coolors-style palette the user picked.
+		primary: "oklch(82% 0.10 212)",
+		secondary: "oklch(78% 0.15 69)",
+		surfaceMsg: "oklch(24% 0.03 216)",
 		borderAccent: "secondary",
-		linkColor: "secondary",
-		codeColor: "secondary",
+		headingColor: "oklch(93% 0.008 56)",
+		linkColor: "oklch(77% 0.06 211)",
+		codeColor: "oklch(77% 0.06 211)",
 		bulletColor: "accent",
-		hues: { heading: 75, label: 282, link: 282, code: 282, bullet: 218, border: 282, selected: 282 },
+		hues: { heading: 56, label: 69, link: 211, code: 211, bullet: 217, border: 69, selected: 69 },
 	},
 	"arnative-sun": {
 		accent: "oklch(82.4% 0.1408 70.170730)",
