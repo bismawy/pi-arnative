@@ -113,10 +113,10 @@ const THEMES = {
 		hues: { heading: 96, label: 86, link: 196, code: 196, bullet: 193, border: 86, selected: 86 },
 	},
 	"arnative-cyberpunk": {
-		// Neon pink focus, lime signature, electric-purple links/code (tone), deep cyan
-		// panels. Same var-based structure as arnative: label tier follows the accent,
-		// headings and links take `primary`, code takes the `tone` var — the palette
-		// stays cyberpunk (pink/lima/cyan), not arnative's.
+		// Neon pink focus, lime signature, orange links/code (tone), deep cyan panels.
+		// Same var-based structure as arnative: label tier follows the accent, headings
+		// and the footer model name take the purple signature, links/code take the
+		// orange `tone` var — the palette stays cyberpunk (pink/lima/cyan/orange).
 		accent: "oklch(76% 0.22 355)",
 		chroma: 0.2,
 		canvasL: 0.24,
@@ -124,15 +124,16 @@ const THEMES = {
 		neutralChroma: 0.02,
 		primary: "oklch(88% 0.18 95)",
 		secondary: "oklch(82% 0.16 200)",
-		tone: "oklch(78% 0.20 300)",
+		tone: "oklch(82% 0.18 45)",
+		headingTone: "oklch(78% 0.20 300)",
 		surfaceMsg: "oklch(24% 0.035 200)",
 		borderAccent: "accentBorder",
-		headingColor: "primary",
+		headingColor: "headingTone",
 		linkColor: "primary",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 95, label: 200, link: 95, code: 300, bullet: 355, border: 200, selected: 200, searchMatch: 355,
+			heading: 300, label: 200, link: 95, code: 45, bullet: 355, border: 200, selected: 200, searchMatch: 355,
 			keyword: 200, func: 95, variable: 355, string: 140, number: 45, type: 200,
 		},
 	},
@@ -205,6 +206,8 @@ function derive(spec) {
 	};
 	// Optional third signature tone (a color of its own, reused by roles via its var).
 	if (spec.tone) vars.tone = colorLiteral(spec.tone);
+	// Optional heading/model signature tone (e.g. cyberpunk's purple), also a var.
+	if (spec.headingTone) vars.headingTone = colorLiteral(spec.headingTone);
 
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
 	const roles = {

@@ -17,7 +17,8 @@
 		"error": "oklch(76% 0.143 25)",
 		"warning": "oklch(86% 0.14 85)",
 		"surfaceMsg": "oklch(24% 0.035 200)",
-		"tone": "oklch(78% 0.20 300)"
+		"tone": "oklch(82% 0.18 45)",
+		"headingTone": "oklch(78% 0.20 300)"
 	},
 	"colors": {
 		"accent": "accent",
@@ -48,7 +49,7 @@
 		"toolTitle": "fg",
 
 		"toolOutput": "fgMuted",
-		"mdHeading": "primary",
+		"mdHeading": "headingTone",
 		"mdLink": "primary",
 		"mdLinkUrl": "fgDim",
 		"mdCode": "tone",
