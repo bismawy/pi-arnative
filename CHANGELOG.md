@@ -38,6 +38,8 @@
 - `accentSoft` now approaches white: lightness 0.86 → 0.94, chroma scale 0.25 → 0.15, so it reads as a near-white tint (lib/ansi.ts, themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
 - All soft tiers (`secondarySoft` and `accentSoft`) now sit at lightness 0.94 and chroma scale 0.15, so footer labels and soft text render near-white with only a delicate hue whisper across both themes (themes/gen-themes.mjs, lib/ansi.ts, extensions/ui-render-tweaks.ts, test/footer-minimal.test.ts).
 - `borderAccent` in both themes now points directly to `accentSoft` (L 0.90, chroma scale 0.25): footer labels and status lines take the soft accent tint directly, rendering as bright, readable pastel tints of the accent hue (pink in cyberpunk, cyan in arnative) without intermediate layers (themes/gen-themes.mjs, lib/ansi.ts, extensions/ui-render-tweaks.ts, test/footer-minimal.test.ts).
+- Added `arnative-crimson` based on the user's palette: brick-red accent (`#c1121f`), molten-lava secondary (`#780000`), warm papaya-whip cream headings (`#fdf0d5`), steel-blue links/code (`#669bbc`), and deep-space-blue panels (`#003049`). Footer labels take soft brick-red pastel via `accentSoft` (themes/gen-themes.mjs, themes/arnative-crimson.json).
+
 
 
 
