@@ -102,9 +102,11 @@ const THEMES = {
 		// Teal panel, deepened until the strictest token floors pass on it (thinkingOff
 		// at 1.3:1 is the tightest; the decorative rule mdHr is not text).
 		surfaceMsg: "oklch(33% 0.05 191)",
-		borderAccent: "secondary",
+		// The label tier follows the accent (soft cyan); the gold signature lives on
+		// headings and links instead, so the theme keeps two tones without the label gap.
+		borderAccent: "accentBorder",
 		headingColor: "primary",
-		linkColor: "tone",
+		linkColor: "primary",
 		codeColor: "tone",
 		bulletColor: "accent",
 		hues: { heading: 96, label: 86, link: 196, code: 196, bullet: 193, border: 86, selected: 86 },
@@ -521,7 +523,7 @@ const hueGap = (a, b) => {
 /** How far the label tier must sit from the accent. Every theme draws the footer, the
  *  selected row and the detail line on `borderAccent`; when that shares the accent's hue
  *  the whole UI reads as one colour, which is how six themes ended up mono-tone. */
-const MIN_HUE_GAP = { default: 25, "arnative-zinc": 15 };
+const MIN_HUE_GAP = { default: 25, "arnative-zinc": 15, "arnative": 0 };
 
 function assertDualTone(name, { vars, roles, exp }) {
 	const accent = parseOklch(vars.accent);

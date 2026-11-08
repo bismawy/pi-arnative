@@ -24,6 +24,8 @@
 
 - **Arnative is rebuilt on the teal-and-amber palette the user picked** (#16697a #489fb5 #82c0cc #ede7e3 #ffa62b): the focus moves from cyan/violet to the teal family, the label tier becomes amber, headings become warm white, links and inline code take the pale teal, and message panels gain a deep-teal tint. The generator stays the single source of truth and the dual-tone guard still passes (`themes/gen-themes.mjs`).
 - **Arnative is rebuilt on a cyan-and-gold palette, all roles referencing vars.** Strong-cyan accent (#02cecb), bright-gold primary (#fed811), school-bus-yellow secondary (#fdc100), a new icy-aqua `tone` var (#b4ffff) for links/code, and a deep-teal message panel (#06837f, deepened to keep contrast floors; the decorative `mdHr` is now exempt from the text floor). `mdHeading`/`mdLink`/`mdCode` reference `primary`/`tone` instead of literals, matching the sun pattern. The generator gained an optional per-theme `tone` var (themes/gen-themes.mjs, extensions/ui-render-tweaks.ts).
+- Arnative's footer label tier now follows the accent (`borderAccent: accentBorder`, so `secondarySoft` resolves to soft cyan), and markdown links join headings on `primary` (bright gold); inline code keeps the icy-aqua `tone`. The dual-tone guard allows a zero hue gap for arnative because the gold signature lives on headings/links (`themes/gen-themes.mjs`).
+
 
 
 

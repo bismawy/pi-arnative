@@ -9,7 +9,7 @@
 		"fgFaint": "oklch(49% 0.012 205)",
 		"primary": "oklch(88.8% 0.181 96)",
 		"secondary": "oklch(84.2% 0.172 86)",
-		"secondarySoft": "oklch(82% 0.03096 86)",
+		"secondarySoft": "oklch(82% 0.01404 193)",
 		"accent": "oklch(78% 0.13 193)",
 		"accentSoft": "oklch(82% 0.0234 193)",
 		"accentBorder": "oklch(82% 0.078 193)",
@@ -22,7 +22,7 @@
 	"colors": {
 		"accent": "accent",
 		"border": "oklch(55% 0.045 86)",
-		"borderAccent": "secondary",
+		"borderAccent": "accentBorder",
 		"borderMuted": "fgFaint",
 		"success": "success",
 		"error": "error",
@@ -49,7 +49,7 @@
 
 		"toolOutput": "fgMuted",
 		"mdHeading": "primary",
-		"mdLink": "tone",
+		"mdLink": "primary",
 		"mdLinkUrl": "fgDim",
 		"mdCode": "tone",
 		"mdCodeBlock": "success",
