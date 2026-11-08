@@ -20,6 +20,8 @@
 - **Two pink-red themes from coolors trending palettes.** Blossom pairs a hot-fuchsia focus with royal-blue labels and purple headings (trending magenta ramp: f72585-7209b7-4361ee), and Crimson is a vivid-red focus with navy labels and cream headings (trending red: c1121f-fdf0d5-003049). Both pass the dual-tone guard; no extension code changed (`themes/gen-themes.mjs`).
 - Blossom and Crimson now draw the footer model name in their accent tone (pink and red), so the right side of the status bar carries the theme's focus color; headings keep their own hue on a literal instead of aliasing the model tone.
 - Correction: the footer paints the model name with the `mdHeading` token, not `vars.primary` directly (extensions/footer.ts `colorOr("mdHeading", acc)`), so the earlier Blossom/Crimson fix missed the carrier. `mdHeading` now references the pink/red `primary` var, so the model name (and headings) visibly carry the accent tone.
+- Theme generator: `mix(a, b, t)` blends two colors in OKLab space, the stand-in for alpha compositing in a solid terminal theme (no alpha channel exists). Highlighter backgrounds (`searchMatchBg`) now derive from the accent mixed toward the page canvas at 65% instead of a bespoke lightness formula, so a hint can be tuned from one number (`themes/gen-themes.mjs`).
+
 
 - **Arnative is rebuilt on the teal-and-amber palette the user picked** (#16697a #489fb5 #82c0cc #ede7e3 #ffa62b): the focus moves from cyan/violet to the teal family, the label tier becomes amber, headings become warm white, links and inline code take the pale teal, and message panels gain a deep-teal tint. The generator stays the single source of truth and the dual-tone guard still passes (`themes/gen-themes.mjs`).
 
