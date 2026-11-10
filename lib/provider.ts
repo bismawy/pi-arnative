@@ -753,11 +753,13 @@ export const bindSetModel = (fn: SetModel): void => {
 /** Load models.json into the running session. A registry refresh alone is not enough: pi keeps
  *  the session model object (and its thinkingLevelMap) until the model is picked again, so
  *  /thinking kept offering the old levels even after /reload. */
-export async function reloadCurrentModel(ctx: { modelRegistry?: RegistryRef; model?: ModelRef }, setModel: SetModel | undefined = setSessionModel): Promise<boolean> {
+export async function reloadCurrentModel(ctx: { modelRegistry?: RegistryRef; model?: ModelRef }, setModel: SetModel | undefined = setSessionModel, signal?: AbortSignal): Promise<boolean> {
+	signal?.throwIfAborted();
 	const registry = ctx.modelRegistry;
 	if (!registry) return false;
-	await registry.refresh({ allowNetwork: false });
 	const current = ctx.model;
+	await registry.refresh({ allowNetwork: false });
+	signal?.throwIfAborted();
 	if (!current) return true;
 	const fresh = registry.find(current.provider, current.id);
 	if (!fresh || fresh === current) return true;

@@ -69,6 +69,7 @@ export interface HealDeps {
 	 *  models.json, so only `modelOverrides` reaches the merged model. */
 	ownsModels: (provider: string) => boolean;
 	fetchImpl?: typeof fetch;
+	signal?: AbortSignal;
 }
 
 export interface HealResult {
@@ -386,12 +387,16 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 		const errors: string[] = [];
 		const fetched = new Map<string, { meta: Map<string, ModelMeta>; signature: string }>();
 		for (const channel of channelsOf(cfg, deps)) {
+			deps.signal?.throwIfAborted();
 			const signature = JSON.stringify({ baseUrl: channel.baseUrl, ids: channel.ids });
 			const prev = state.providers[channel.provider];
 			if (!force && prev?.signature === signature && now - prev.fetchedAt < (prev.failed ? META_FAILURE_TTL_MS : META_TTL_MS)) continue;
 			try {
-				fetched.set(channel.provider, { meta: await fetchMeta(channel, deps.fetchImpl ?? fetch), signature });
+				const meta = await fetchMeta(channel, deps.fetchImpl ?? fetch);
+				deps.signal?.throwIfAborted();
+				fetched.set(channel.provider, { meta, signature });
 			} catch (error) {
+				deps.signal?.throwIfAborted();
 				errors.push(`${channel.provider}: ${errText(error)}`);
 				state.providers[channel.provider] = { signature, fetchedAt: Date.now(), failed: true };
 			}
@@ -498,6 +503,7 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 		const answered: { model: RtModel; supported: string[] }[] = [];
 		const deadline = now + EFFORT_BUDGET_MS;
 		for (const model of pending) {
+			deps.signal?.throwIfAborted();
 			if (Date.now() >= deadline) {
 				errors.push(`${model.provider}: probe budget exhausted`);
 				break;
@@ -507,6 +513,7 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 				{ ...model, compat: { ...channel.compat, ...(model.compat ?? {}) } },
 				{ baseUrl: channel.baseUrl, key: channel.key(), headers: channel.headers, fetchImpl: deps.fetchImpl },
 			);
+			deps.signal?.throwIfAborted();
 			if (supported.length === 0) {
 				// Stamped as failed so the next run waits the short TTL instead of re-sending.
 				errors.push(`${model.provider}/${model.id}: no level answered (not patched)`);
