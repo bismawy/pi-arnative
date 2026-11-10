@@ -78,6 +78,7 @@ test("manual lifecycle: reload during catalog sync stops without reading a stale
 	h.runner.invalidate();
 	response.resolve(catalog());
 	await assert.doesNotReject(pending);
+	assert.equal(h.widgets.at(-1), undefined, "shutdown clears the progress while its UI is still live");
 	assert.equal(chats, 0, "a replaced session must not start the thinking pass");
 	const stateFile = join(dir, "arnative", "model-heal.json");
 	if (existsSync(stateFile)) assert.equal(JSON.parse(readFileSync(stateFile, "utf8")).providers.relay?.failed, undefined);
@@ -89,6 +90,7 @@ test("manual lifecycle: a changed model is selected with the bound extension API
 	await h.run();
 	assert.equal(h.selections(), 1, "the refresh must not call an unbound pi identifier and silently swallow it");
 	assert.ok(h.notifications.some((n) => n.message.includes("Model heal fixed")));
+	assert.ok(h.notifications.some((n) => n.type === "warning" && n.message.includes("no level answered")), "a partial failure remains visible even when limits were fixed");
 });
 
 test("manual lifecycle: model refresh captures the current model before awaiting", async () => {
@@ -164,6 +166,46 @@ test("manual force: Flags still forces metadata and seven eligible effort reques
 	await h.run();
 	assert.equal(gets, 2);
 	assert.equal(posts, 14);
+});
+
+test("manual progress: status appears before a slow catalog finishes", async (t) => {
+	const started = deferred<void>();
+	const response = deferred<Response>();
+	t.mock.method(globalThis, "fetch", async (_input, init) => {
+		if (init?.method === "POST") return new Response("unauthorized", { status: 401 });
+		started.resolve();
+		return response.promise;
+	});
+	const h = harness();
+	const pending = h.run();
+	await started.promise;
+	const visible = h.widgets.filter((lines) => lines !== undefined);
+	response.resolve(catalog());
+	await pending;
+	assert.ok(visible.some((lines) => lines?.some((line) => line.includes("2/3"))), "catalog stage must be visible while its request is pending");
+	assert.ok(h.notifications.some((n) => /started|running/i.test(n.message)));
+	assert.ok(h.widgets.some((lines) => lines?.some((line) => line.includes("3/3") && /token|inference/i.test(line))));
+	assert.equal(h.widgets.at(-1), undefined, "progress leaves the screen when the command finishes");
+});
+
+test("manual progress: another command does not start a duplicate forced run", async (t) => {
+	const started = deferred<void>();
+	const response = deferred<Response>();
+	let gets = 0;
+	t.mock.method(globalThis, "fetch", async (_input, init) => {
+		if (init?.method === "POST") return new Response("unauthorized", { status: 401 });
+		gets++;
+		started.resolve();
+		return response.promise;
+	});
+	const h = harness();
+	const pending = h.run();
+	await started.promise;
+	await h.run();
+	response.resolve(catalog());
+	await pending;
+	assert.equal(gets, 1);
+	assert.ok(h.notifications.some((n) => n.type === "warning" && /already running/i.test(n.message)));
 });
 
 test("manual lifecycle: an unexpected refresh failure reaches the boundary", async (t) => {

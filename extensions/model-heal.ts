@@ -225,12 +225,15 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 	registerCommands(pi, (_args, ctx) => healNow(ctx));
 }
 
-let manualHeal: AbortController | undefined;
+let manualHeal: { controller: AbortController; ui: ExtensionContext["ui"] } | undefined;
 
 /** Both the command extension and the settings extension cancel their own imported runner. */
 export function cancelManualHeal(): void {
-	manualHeal?.abort();
+	const run = manualHeal;
 	manualHeal = undefined;
+	if (!run) return;
+	run.controller.abort();
+	run.ui.setWidget("model-heal-progress", undefined);
 }
 
 /** Every pass now, ignoring TTLs: the /model-heal command and the /arnative Run now row. */
@@ -244,11 +247,13 @@ export async function healNow(ctx: ExtensionContext): Promise<void> {
 		ui.notify("[arnative] Model heal is already running.", "warning");
 		return;
 	}
-	const registry = registryOf(ctx);
+	const registry = ctx.modelRegistry;
 	const current = ctx.model as RtModel | undefined;
 	const controller = new AbortController();
-	manualHeal = controller;
+	manualHeal = { controller, ui };
 	try {
+		ui.notify("[arnative] Model heal started (forced). Thinking probes can use paid tokens.", "info");
+		ui.setWidget("model-heal-progress", [HEAL_ICON + " model-heal: [1/3] Offline compat flags"]);
 		const deps: HealDeps = {
 			...depsFor({ modelRegistry: registry }),
 			signal: controller.signal,
@@ -258,26 +263,34 @@ export async function healNow(ctx: ExtensionContext): Promise<void> {
 			},
 		};
 		const flags = healFlags(deps, undefined, current);
+		ui.setWidget("model-heal-progress", [HEAL_ICON + " model-heal: [2/3] Fetching /models catalogs"]);
 		const meta = await healMeta(deps, true);
 		controller.signal.throwIfAborted();
+		ui.setWidget("model-heal-progress", [HEAL_ICON + " model-heal: [3/3] Probing thinking levels (may use paid tokens)"]);
 		const effort = await healEffort(deps, true);
 		controller.signal.throwIfAborted();
 		const detail = [...flags.detail, ...meta.detail, ...effort.detail];
 		const errors = [...flags.errors, ...meta.errors, ...effort.errors];
 		if (detail.length > 0) {
-			await reloadCurrentModel({ modelRegistry: registry, model: current } as never, undefined, controller.signal);
+			ui.setWidget("model-heal-progress", [HEAL_ICON + " model-heal: Refreshing current model"]);
+			const loaded = await reloadCurrentModel({ modelRegistry: registry, model: current }, undefined, controller.signal);
 			controller.signal.throwIfAborted();
-			ui.notify("[arnative] Model heal fixed:\n  - " + detail.join("\n  - "), "info");
+			ui.notify("[arnative] Model heal fixed:\n  - " + detail.join("\n  - ")
+				+ (errors.length ? "\nWarnings:\n  - " + errors.join("\n  - ") : "")
+				+ (loaded ? "" : "\nRun /reload to load these changes."), errors.length || !loaded ? "warning" : "info");
 			return;
 		}
 		ui.notify(
-			errors.length ? "[arnative] Model heal: nothing to fix; " + errors.length + " endpoint(s) unreachable: " + errors.join("; ") : "[arnative] Model heal: nothing to fix.",
+			errors.length ? "[arnative] Model heal: nothing to fix; " + errors.length + " issue(s): " + errors.join("; ") : "[arnative] Model heal: nothing to fix.",
 			errors.length ? "warning" : "info",
 		);
 	} catch (error) {
 		if (!controller.signal.aborted || error !== controller.signal.reason) throw error;
 	} finally {
-		if (manualHeal === controller) manualHeal = undefined;
+		if (manualHeal?.controller === controller) {
+			manualHeal = undefined;
+			ui.setWidget("model-heal-progress", undefined);
+		}
 	}
 }
 
