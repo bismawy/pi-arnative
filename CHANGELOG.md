@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Model heal now respects the one-hour cooldown after a failed effort probe. Reordering thinking map keys no longer triggers another probe.
+- Failed model catalogs now wait one hour before an automatic retry. Successful catalogs keep their six-hour TTL; forced heals and endpoint changes bypass the cooldown.
+
 ## [0.10.0] - 2026-11-08
 
 ### Added
