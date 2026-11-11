@@ -88,6 +88,7 @@ export const DEFAULT_THINKING_MAP = { low: "low", medium: "medium", high: "high"
 
 const HOUR_MS = 60 * 60 * 1000;
 const META_TTL_MS = 6 * HOUR_MS;
+const META_FAILURE_TTL_MS = HOUR_MS;
 const META_TIMEOUT_MS = 8000;
 const META_MAX_BYTES = 2 * 1024 * 1024;
 const EFFORT_TTL_MS = 24 * HOUR_MS;
@@ -254,7 +255,7 @@ export function healFlags(deps: HealDeps, only?: RtModel[], active?: RtModel): H
 
 interface HealState {
 	schema: 1;
-	providers: Record<string, { signature: string; fetchedAt: number }>;
+	providers: Record<string, { signature: string; fetchedAt: number; failed?: boolean }>;
 	sources: Record<string, { contextWindow?: number; maxTokens?: number; at: number }>;
 	efforts: Record<string, { at: number; map: Record<string, string | null>; failed?: boolean; exact?: boolean }>;
 }
@@ -387,13 +388,16 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 		for (const channel of channelsOf(cfg, deps)) {
 			const signature = JSON.stringify({ baseUrl: channel.baseUrl, ids: channel.ids });
 			const prev = state.providers[channel.provider];
-			if (!force && prev?.signature === signature && now - prev.fetchedAt < META_TTL_MS) continue;
+			if (!force && prev?.signature === signature && now - prev.fetchedAt < (prev.failed ? META_FAILURE_TTL_MS : META_TTL_MS)) continue;
 			try {
 				fetched.set(channel.provider, { meta: await fetchMeta(channel, deps.fetchImpl ?? fetch), signature });
 			} catch (error) {
 				errors.push(`${channel.provider}: ${errText(error)}`);
+				state.providers[channel.provider] = { signature, fetchedAt: Date.now(), failed: true };
 			}
 		}
+		// A failed endpoint needs a cooldown even when no catalog answered.
+		if (errors.length > 0) saveState({ providers: state.providers });
 		if (fetched.size === 0) return { changed: false, detail: [], errors };
 
 		const byProvider = groupByProvider(deps.models());
@@ -484,9 +488,9 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 			// older probe wrote (nearest-effort remaps) is redone now, not after the TTL.
 			const probeWrote = prev !== undefined && sameMap(mapOf(m), prev.map);
 			if (carriesRemap(mapOf(m)) && !probeWrote) return false;
-			if (force || !prev || (probeWrote && prev.exact !== true)) return true;
+			if (force || !prev || (probeWrote && !prev.failed && prev.exact !== true)) return true;
 			if (now - prev.at >= (prev.failed ? EFFORT_FAILURE_TTL_MS : EFFORT_TTL_MS)) return true;
-			return JSON.stringify(mapOf(m) ?? {}) !== JSON.stringify(prev.map); // edited since: respect it
+			return !sameMap(mapOf(m), prev.map);
 		});
 		if (pending.length === 0) return none();
 
