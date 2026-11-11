@@ -32,7 +32,7 @@ Saved to `~/.pi/agent/arnative/config.json` via `/arnative`:
 - **Headers & Footers:** `Arnative (Full)` (default), `Arnative (Minimal)` (footer only; click head text or press `ctrl+alt+m` to toggle), or `Pi (system)`.
 - **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle the Google gradient sweep.
 - **Auto-compact:** Off by default. **Smart** tiers trigger near ~200k tokens (`≥768k→20%`, `≥384k→40%`, `≥192k→80%`, `<192k→pi core`), or pick a fixed budget (`100k` to `400k`).
-- **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with 6h TTL, reasoning effort probe with 24h TTL), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten.
+- **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with a 6h TTL, reasoning effort probe with a 24h TTL, and a failed fetch of either retried after 1h), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten. `/model-heal` forces every pass, warns that thinking probes can use paid tokens, and shows the stage it is in.
 - **Task list (`todo`):** Stored per session in `~/.pi/agent/arnative/todos/<session-id>.json` (uninstall `@juicesharp/rpiv-todo` first to avoid tool name conflict). Click `[click to expand]` / `[click to collapse]` or press `ctrl+alt+o` (`alt+o`) to toggle; click `↑`/`↓` counters or press `ctrl+alt+j`/`k` (`alt+j`/`k`) to scroll. Auto-hides 30s after completion (set `PI_ARNATIVE_TODO_HIDE_MS` to override, `0` for immediate hide; expanding pauses the timer).
 
 </details>
