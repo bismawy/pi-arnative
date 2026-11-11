@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Fixed
+- Manual Model heal shows a start notice and live progress for flags, catalogs, and thinking probes. Final results now include partial failures.
+- Manual Model heal now cancels on session reload or replacement. Model refresh captures the current model before awaiting and uses the bound extension API.
 - Model heal now respects the one-hour cooldown after a failed effort probe. Reordering thinking map keys no longer triggers another probe.
 - Failed model catalogs now wait one hour before an automatic retry. Successful catalogs keep their six-hour TTL; forced heals and endpoint changes bypass the cooldown.
 
