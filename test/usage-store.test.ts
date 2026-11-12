@@ -69,7 +69,7 @@ test("day buckets, cwd and projects roll up per file", () => {
 		assert.equal(disk[relA]!.w, "/repo/alpha");
 		assert.equal(msgsOf(disk[relA]!.d!), msgsOf(disk[relA]!.r));
 		assert.ok(disk[relA]!.d![`${today}\u0000google\u0000m1`] !== undefined);
-		assert.equal(disk[join("b", "b.jsonl")]!.w, undefined);
+		assert.equal(disk[join("b", "b.jsonl")]!.w, "", "a file with no cwd stores the empty marker");
 	});
 });
 
@@ -192,7 +192,7 @@ test("a tool result's usage is not read, and a child session is counted once", (
 	});
 });
 
-test("a v7 cache item (no `t`) is re-parsed once and re-saved as v8", () => {
+test("a v7 cache item (no `t`) is re-parsed once and re-saved as the current version", () => {
 	withFixture((dir) => {
 		mkdirSync(join(dir, "sessions", "a"), { recursive: true });
 		const ts = Date.now();
@@ -216,6 +216,6 @@ test("a v7 cache item (no `t`) is re-parsed once and re-saved as v8", () => {
 		assert.equal(reparsed.totals.msgs, cold.totals.msgs);
 		assert.equal(reparsed.totals.input, 100, "the stale 99 is not counted");
 		const disk = cacheOf(dir)[join("a", "a.jsonl")]!;
-		assert.equal(disk.t, 9, "the re-parsed item is re-saved as the current version");
+		assert.equal(disk.t, 10, "the re-parsed item is re-saved as the current version");
 	});
 });

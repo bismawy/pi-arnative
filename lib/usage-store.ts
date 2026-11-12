@@ -345,7 +345,7 @@ const legacyCachePath = (): string => join(getAgentDir(), "arnative-usage-cache.
 /** Dead since pricing moved into `cost` fields in models.json: nothing reads it, so the
  *  first load after the update removes it (layout "1" — see lib/preset-store.ts). */
 const legacyPricesPath = (): string => join(getAgentDir(), "arnative-prices.json");
-const CACHE_VERSION = 9; // v9: no tool-result rows (v8: cacheWrite + the billed split, v7: day buckets + cwd, v6: the compact rows, v5: model rows only, v4: full rollup)
+const CACHE_VERSION = 10; // v10: the session cwd (`w`) joined v9, which a build without it already wrote; v9: no tool-result rows (v8: cacheWrite + the billed split, v7: day buckets, v6: the compact rows, v5: model rows only, v4: full rollup)
 
 /** Where pi-subagents keeps a run's transcript, inside the session's own project dir. */
 const SUBAGENT_ARTIFACTS_DIR = "subagent-artifacts";
@@ -451,10 +451,11 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	return {
 		mtimeMs: d.m,
 		size: d.s,
-		// Only an item carrying `t` AND the day map is current: a v9 writer always emits `d`
-		// (empty or not), so a `t` without `d` is a tampered or truncated item, not a v9 one.
-		v: d.t === CACHE_VERSION && d.d !== undefined ? CACHE_VERSION : hasDays ? (wide ? 7 : 6) : 5,
-		cwd: typeof d.w === "string" ? d.w : undefined,
+		// Only an item carrying `t`, the day map AND the cwd field is current: a v10 writer always
+		// emits `d` and `w` (empty string when the file has no header), so a missing `w` is a
+		// cache written before this shape and must be re-read.
+		v: d.t === CACHE_VERSION && d.d !== undefined && d.w !== undefined ? CACHE_VERSION : hasDays ? (wide ? 7 : 6) : 5,
+		cwd: typeof d.w === "string" && d.w !== "" ? d.w : undefined,
 		consumed: typeof d.c === "number" ? d.c : d.s,
 		rollup,
 	};
@@ -472,7 +473,9 @@ function encodeDiskItem(item: FileCacheItem): DiskItem {
 		d[dk] = [roll.msgs, roll.input, roll.output, roll.cacheRead, roll.cacheWrite, roll.cost, roll.billed];
 	}
 	const out: DiskItem = { m: item.mtimeMs, s: item.size, c: item.consumed ?? item.size, r, d, t: CACHE_VERSION };
-	if (item.cwd !== undefined) out.w = item.cwd;
+	// Always emitted: an empty string says "this file carries no cwd", which is what lets the
+	// reader trust a current item without re-reading the head on every scan.
+	out.w = item.cwd ?? "";
 	return out;
 }
 
@@ -631,6 +634,26 @@ function sessionCwdOf(line: string): string | undefined {
 	try {
 		const o = JSON.parse(line) as { type?: unknown; cwd?: unknown };
 		return o?.type === "session" && typeof o.cwd === "string" ? o.cwd : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The cwd from the file's first line, without reading the whole file. A re-parse that starts
+ * at the baseline offset skips the header, so the cwd would be lost exactly when the cache
+ * shape changes. One 64 KB read covers a session header.
+ */
+function headCwd(filePath: string): string | undefined {
+	try {
+		const fd = openSync(filePath, "r");
+		try {
+			const buf = Buffer.alloc(64 * 1024);
+			const n = readSync(fd, buf, 0, buf.length, 0);
+			return sessionCwdOf(buf.subarray(0, n).toString("utf8").split("\n", 1)[0] ?? "");
+		} finally {
+			closeSync(fd);
+		}
 	} catch {
 		return undefined;
 	}
@@ -1002,7 +1025,7 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 				mtimeMs: stat.mtimeMs,
 				size: stat.size,
 				v: CACHE_VERSION,
-				cwd: parsed.cwd ?? (offset > 0 ? baselineItem!.cwd : undefined) ?? cached?.cwd,
+				cwd: parsed.cwd ?? (offset > 0 ? baselineItem!.cwd ?? headCwd(file) : undefined) ?? cached?.cwd,
 				consumed: offset + parsed.consumed,
 				rollup,
 			};
@@ -1275,7 +1298,7 @@ if (isMain(import.meta.url)) {
 		Object.keys(disk[relA]!.d!).every((k) => k.startsWith(`${today}\u0000`) || k.startsWith(`${yesterday}\u0000`)) && disk[relA]!.d![`${today}\u0000google\u0000m1`] !== undefined,
 		"day keys are the UTC day + provider + model",
 	);
-	assert(disk[join("proj-b", "b.jsonl")]!.w === undefined, "a file with no cwd stores none (it reads as unknown)");
+	assert(disk[join("proj-b", "b.jsonl")]!.w === "", "a file with no cwd stores the empty marker (it reads as unknown)");
 
 	// A grown file tail-folds: the cwd stays the cached one (the head is not re-read) and the
 	// new entry lands in its day bucket.
