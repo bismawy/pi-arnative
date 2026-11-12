@@ -1658,7 +1658,9 @@ if (isMain(import.meta.url)) {
 	assert(usageWindow.inp === 2000 && usageWindow.read === 2000, "the windowed rate ignores the first two assistant messages: " + JSON.stringify(usageWindow));
 	assert(piCacheHit() === "pi 33.3%", "the pi …% text stays session-wide while the colour is windowed: " + piCacheHit());
 	const scanAtWin = usageScanAt;
-	winBranch[3] = asstMsg(1000, 0); // the last message mutates in place (stream tick)
+	// A stream tick mutates the last entry in place; replacing it would be a new leaf, and the
+	// i7 identity check would (correctly) rescan instead of taking the delta.
+	(winBranch[3] as { message: { usage: { cacheRead: number } } }).message.usage.cacheRead = 0;
 	getUsage(winCtx, id, id, false);
 	assert(usageWindow.inp === 2000 && usageWindow.read === 1000, "a stream tick moves the window through the delta: " + JSON.stringify(usageWindow));
 	assert(usageScanAt === scanAtWin, "the windowed delta took the cached path, not a rescan");
