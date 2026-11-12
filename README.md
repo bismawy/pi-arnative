@@ -77,6 +77,8 @@ module deleted here is pruned from the installed copy (a stale entry point would
 | `/providers` | Custom provider manager |
 | `/model-heal` | Run `models.json` heal passes now |
 
+In Usage, `R` resets all model/provider statistics after confirmation. Session files stay unchanged and remain available through `/resume`. New messages count from the reset, including messages in existing sessions. The baseline persists in `~/.pi/agent/arnative/usage-baseline.json`; `U` undoes the latest reset while that dashboard remains open. Files from earlier resets in `usage-trash` stay untouched.
+
 <details>
 <summary><b>Keybindings & Platform Notes</b></summary>
 

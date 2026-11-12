@@ -7,6 +7,7 @@
  * Two things ride along with the same probe: the real `contextWindow`/`maxTokens`, and
  * (on demand) which `reasoning_effort` names the channel accepts.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { assert, isMain } from "./check.ts";
 
 export type Compat = Record<string, unknown>;
@@ -254,6 +255,8 @@ export interface EffortProbeOptions {
 	key?: string;
 	headers?: Record<string, string>;
 	fetchImpl?: typeof fetch;
+	signal?: AbortSignal;
+	deadline?: number;
 	/** Called after each level, for a progress row. */
 	onLevel?: (level: string, accepted: boolean | undefined, index: number) => void;
 }
@@ -265,47 +268,70 @@ function isParamRejection(status: number, body: string): boolean {
 	return REJECTION_RE.test(body);
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 /** Every effort name the channel accepts, found with one tiny completion per level.
  *  `[]` means nothing answered — never call that "nothing supported". */
 export async function probeEffort(model: CompatModel, options: EffortProbeOptions): Promise<string[]> {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const url = `${options.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+	const responses = lower(model.api) === "openai-responses";
+	const url = `${options.baseUrl.replace(/\/+$/, "")}/${responses ? "responses" : "chat/completions"}`;
 	const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json", ...options.headers };
 	if (options.key) headers.authorization = `Bearer ${options.key}`;
 	const accepted: string[] = [];
-
+	const signal = AbortSignal.any([
+		...(options.signal ? [options.signal] : []),
+		...(options.deadline !== undefined ? [AbortSignal.timeout(Math.max(1, options.deadline - Date.now()))] : []),
+	]);
+	const checkStopped = (): void => {
+		signal.throwIfAborted();
+		if (options.deadline !== undefined && Date.now() >= options.deadline) {
+			throw new DOMException("Effort probe budget exhausted", "TimeoutError");
+		}
+	};
 	for (const [index, level] of EFFORT_RANK.entries()) {
-		const body = JSON.stringify({
+		checkStopped();
+		const body = JSON.stringify(responses ? {
+			model: model.id,
+			input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
+			...(model.compat?.supportsMaxOutputTokens === false ? {} : { max_output_tokens: PROBE_TOKENS }),
+			stream: false,
+			store: false,
+			reasoning: { effort: level },
+		} : {
 			model: model.id,
 			messages: [{ role: "user", content: "ping" }],
-			max_tokens: PROBE_TOKENS,
+			[model.compat?.maxTokensField === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens"]: PROBE_TOKENS,
 			stream: false,
 			...(thinkingPayload(model.compat ?? {}, true) ?? {}),
 			reasoning_effort: level,
 		});
 		let verdict: boolean | undefined;
-		// Two attempts per level: a first 400 can be an upstream flake, a second confirms it.
 		for (let attempt = 0; attempt < 2 && verdict === undefined; attempt++) {
+			checkStopped();
 			let status: number;
 			let text: string;
 			try {
-				const response = await fetchImpl(url, { method: "POST", headers, body, signal: AbortSignal.timeout(LEVEL_TIMEOUT_MS) });
+				const response = await fetchImpl(url, { method: "POST", headers, body, signal: AbortSignal.any([signal, AbortSignal.timeout(LEVEL_TIMEOUT_MS)]) });
 				status = response.status;
 				text = (await response.text()).slice(0, 4000);
 			} catch {
+				checkStopped();
 				break; // network/timeout: inconclusive
 			}
+			checkStopped();
 			if (status < 300) {
 				verdict = true;
 				break;
 			}
 			if (status === 429) {
-				await sleep(RETRY_PAUSE_MS);
+				try {
+					await sleep(RETRY_PAUSE_MS, undefined, { signal });
+				} catch (error) {
+					checkStopped();
+					throw error;
+				}
 				continue;
 			}
-			if (!isParamRejection(status, text)) break; // 401/403/5xx without a hint: unknown
+			if (!isParamRejection(status, text)) break;
 			verdict = false;
 		}
 		if (verdict) accepted.push(level);

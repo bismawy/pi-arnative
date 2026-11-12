@@ -87,9 +87,15 @@ function ordered(record: Record<string, unknown>): Record<string, unknown> {
 
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
 export function saveChoice(key: string, value: string, rename: (from: string, to: string) => void = renameSync): void {
-	if (readConfig()[key] === value) return;
-	// Re-read: another pi session may have written its own key since this one loaded.
-	memo = { ...readDisk().record, [key]: value };
+	readConfig();
+	const { parsed, record } = readDisk();
+	if (!parsed && existsSync(configPath())) {
+		process.emitWarning("Arnative settings were not saved: config.json is unreadable or invalid.", { code: "ARNATIVE_PRESET_SAVE" });
+		return;
+	}
+	memo = record;
+	if (record[key] === value) return;
+	memo = { ...record, [key]: value };
 	try {
 		const path = configPath();
 		const tmp = `${path}.${process.pid}.tmp`;
@@ -108,7 +114,7 @@ export function saveChoice(key: string, value: string, rename: (from: string, to
 			rmSync(tmp, { force: true });
 		}
 	} catch {
-		// ignore: the choice still applies for this session
+		process.emitWarning("Arnative settings were not saved; the choice applies only to this session.", { code: "ARNATIVE_PRESET_SAVE" });
 	}
 }
 

@@ -10,6 +10,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- Footer usage caching now separates session managers and branch leaves. Switching equal-length branches shows their own totals while streaming updates retain the cached prefix.
+- Effort probes use the declared Responses or Chat Completions protocol, including its reasoning payload and token-limit fields. Responses-only providers can now report accepted thinking levels.
+- Effort probes stop pending requests, remaining levels, and retry waits on cancellation. Model heal enforces its probe deadline without recording cancellation or budget exhaustion as model failures.
+- Preset saves now compare against the current disk value and preserve invalid profiles. Unsaved choices emit a warning.
+- Usage Reset now clears model/provider statistics without moving session files or removing them from `/resume`. A persistent baseline excludes earlier messages, counts new messages in existing sessions, and supports Undo while the dashboard remains open. Existing `usage-trash` files stay untouched.
+
 ## [0.10.0] - 2026-11-08
 
 ### Added

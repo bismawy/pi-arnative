@@ -23,9 +23,8 @@ import {
 	dayKey,
 	rangeStart,
 	resetUsageCache,
-	resetUsageHistory,
-	restoreUsageHistory,
-	usageHistorySize,
+	resetUsageStats,
+	restoreUsageStats,
 	USAGE_RANGES,
 	type UsageRange,
 	type UsageSummary,
@@ -40,26 +39,6 @@ export function formatCost(n: number): string {
 		return s === "1000.00" ? "$1.0k" : `$${s}`;
 	}
 	return `$${(n / 1000).toFixed(1)}k`;
-}
-
-/** File size in the unit a person reads: 281 MB, 1.4 GB. */
-/** `1 session`, `312 sessions`: a count that reads as prose, because the notice is prose. */
-function countOf(n: number, noun: string): string {
-	return n + " " + noun + (n === 1 ? "" : "s");
-}
-
-/** The trash path without the home prefix: the tail is what a person can type. */
-function shortTrash(dir: string): string {
-	const at = dir.replaceAll("\\", "/").indexOf("arnative/usage-trash/");
-	return at >= 0 ? dir.replaceAll("\\", "/").slice(at) : dir;
-}
-
-export function formatBytes(n: number): string {
-	if (!n || n <= 0) return "0 B";
-	if (n < 1024) return n + " B";
-	if (n < 1024 * 1024) return Math.round(n / 1024) + " kB";
-	if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(0) + " MB";
-	return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
 }
 
 export function formatCount(n: number): string {
@@ -110,12 +89,10 @@ export class UsageModalComponent implements Component {
 	private rowHitboxes: { line: number; index: number }[] = [];
 	/** A destructive step waits here until the user answers it. Nothing is touched before. */
 	private confirmStep: "reset" | "undo" | null = null;
-	/** One line under the table, stating what the last reset moved. */
+	/** One line under the table, stating what the last reset changed. */
 	private notice: string | null = null;
-	/** The folder the last reset parked the history in, so U can put it back. */
-	private trashDir: string | null = null;
-	/** The file pi is writing right now. Moving it would break the running session. */
-	private activeFile: string | undefined;
+	/** A wrapper keeps the first reset undoable when no previous baseline existed. */
+	private undoBaseline: { previous: string | null } | null = null;
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -123,11 +100,8 @@ export class UsageModalComponent implements Component {
 		onDone: (back: boolean) => void,
 		requestRender: () => void,
 		thinkingLevel?: string,
-		/** The session file in use. Excluded from a reset: pi keeps appending to it. */
-		activeFile?: string,
 	) {
 		this.theme = theme;
-		this.activeFile = activeFile;
 		this.onDone = onDone;
 		this.requestRender = requestRender;
 		this.edgeOf = thinkingColorOf(theme, thinkingLevel);
@@ -193,17 +167,15 @@ export class UsageModalComponent implements Component {
 		return true;
 	}
 
-	/** Do the step the user just confirmed, then re-read whatever is left on disk. */
+	/** Refresh every row after a baseline change; the selected provider may disappear. */
 	private runConfirm(step: "reset" | "undo"): void {
 		if (step === "reset") {
-			const kept = this.activeFile ? [this.activeFile] : [];
-			const result = resetUsageHistory(kept);
-			this.trashDir = result.moved > 0 ? result.dir : null;
-			this.notice = "Moved " + countOf(result.moved, "session") + " (" + formatBytes(result.bytes) + ") to " + shortTrash(result.dir);
-		} else if (this.trashDir) {
-			const result = restoreUsageHistory(this.trashDir);
-			this.notice = "Restored " + countOf(result.restored, "session");
-			this.trashDir = null;
+			this.undoBaseline = { previous: resetUsageStats() };
+			this.notice = "Usage statistics reset. Sessions kept.";
+		} else if (this.undoBaseline) {
+			restoreUsageStats(this.undoBaseline.previous);
+			this.notice = "Previous statistics restored. Sessions kept.";
+			this.undoBaseline = null;
 		}
 		this.summary = collectUsageSummary(true, this.range);
 		this.selectedIndex = 0;
@@ -254,7 +226,7 @@ export class UsageModalComponent implements Component {
 			this.requestRender();
 			return;
 		}
-		if (UNDO_USAGE.matches(keyData) && this.trashDir) {
+		if (UNDO_USAGE.matches(keyData) && this.undoBaseline) {
 			this.confirmStep = "undo";
 			this.requestRender();
 			return;
@@ -475,20 +447,18 @@ export class UsageModalComponent implements Component {
 	/** The last row of the box: a pending question, or the keys that are live right now. */
 	private footer(width: number, th: { fg(c: string, t: string): string }): string {
 		if (this.confirmStep === "reset") {
-			const size = usageHistorySize(this.activeFile ? [this.activeFile] : []);
-			const what = countOf(size.files, "session") + " (" + formatBytes(size.bytes) + ")";
-			return th.fg("accent", "Delete " + what + "?") + " " + th.fg("muted", "moves to the trash") + "  " + th.fg("text", "[y] Yes  [Esc] Cancel");
+			return th.fg("accent", "Reset all usage statistics?") + " " + th.fg("muted", "sessions stay") + "  " + th.fg("text", "[y] Yes  [Esc] Cancel");
 		}
 		if (this.confirmStep === "undo") {
 			return (
-				th.fg("accent", "Put the history back?") +
+				th.fg("accent", "Undo the statistics reset?") +
 				" " +
-				th.fg("muted", "the trash folder stays") +
+				th.fg("muted", "sessions stay") +
 				"  " +
 				th.fg("text", "[y] Yes  [Esc] Cancel")
 			);
 		}
-		return legendUsage(width, { reset: true, undo: this.trashDir !== null });
+		return legendUsage(width, { reset: true, undo: this.undoBaseline !== null });
 	}
 
 	/** Detail for the selected row: icon in `accent`, text and `·` dividers in `accentSoft`. */
@@ -522,7 +492,6 @@ export async function openUsage(ctx: ExtensionCommandContext): Promise<boolean> 
 			(wantsBack) => done(wantsBack),
 			() => tui.requestRender(),
 			thinkingLevel,
-			ctx.sessionManager.getSessionFile() ?? undefined,
 		);
 	});
 	return back === true;
@@ -1094,33 +1063,32 @@ if (isMain(import.meta.url)) {
 	assert(!scrolled.some((l) => l.includes("↓ ")), "the bottom of the list announces only what is above");
 
 
-	// --- Reset: history moves to the trash, never into oblivion ----------------
-	assert(formatBytes(0) === "0 B" && formatBytes(1536) === "2 kB" && formatBytes(281 * 1024 * 1024) === "281 MB", "formatBytes picks the readable unit");
+	// --- Reset: statistics change, session files stay intact -------------------
 	const resetDir = mkdtempSync(join(tmpdir(), "arnative-reset-"));
 	process.env.PI_CODING_AGENT_DIR = resetDir;
 	const resetSessions = join(resetDir, "sessions", "proj");
 	mkdirSync(resetSessions, { recursive: true });
-	const resetLine = JSON.stringify({ message: { role: "assistant", provider: "google", model: "gemini-3.8-flash", usage: { input: 1000, output: 10, cacheRead: 0, cost: { total: 0.01 } } } });
+	const resetLine = JSON.stringify({ message: { role: "assistant", provider: "google", model: "gemini-3.8-flash", usage: { input: 1000, output: 10, cacheRead: 0, cost: { total: 0.01 } } } }) + String.fromCharCode(10);
 	const livePath = join(resetSessions, "live.jsonl");
-	writeFileSync(livePath, resetLine + String.fromCharCode(10));
-	writeFileSync(join(resetSessions, "old.jsonl"), resetLine + String.fromCharCode(10));
+	const oldPath = join(resetSessions, "old.jsonl");
+	writeFileSync(livePath, resetLine);
+	writeFileSync(oldPath, resetLine);
 	resetUsageCache();
-	const resetModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high", livePath);
+	const resetModal = new UsageModalComponent(fakeTheme, () => undefined, () => undefined, "high");
 	assert(resetModal.render(120).map(plain).some((l) => l.includes("[R] Reset")), "the footer advertises R Reset");
 	resetModal.handleInput("R");
-	assert(resetModal.render(120).map(plain).some((l) => l.includes("Delete 1 session (151 B)?")), "R states the size and asks before anything is touched");
-	resetModal.handleInput("");
-	assert(existsSync(join(resetSessions, "old.jsonl")), "any other key cancels and no file moves");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Reset all usage statistics?") && l.includes("sessions stay")), "R confirms a statistics-only reset");
+	resetModal.handleInput("\x1b");
+	assert(collectUsageSummary(true).totals.msgs === 2, "cancel keeps the statistics");
 	resetModal.handleInput("R");
 	resetModal.handleInput("y");
-	assert(!existsSync(join(resetSessions, "old.jsonl")), "confirming moves the other sessions out");
-	assert(existsSync(livePath), "the session in use is never moved");
-	assert(resetModal.render(120).map(plain).some((l) => l.includes("Moved 1 session")), "the notice states what moved");
-	assert(collectUsageSummary(true).totals.msgs === 1, "only the live session is still counted");
+	assert(readFileSync(oldPath, "utf8") === resetLine && readFileSync(livePath, "utf8") === resetLine, "reset leaves every session unchanged");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Usage statistics reset. Sessions kept.")), "the notice states what changed");
+	assert(collectUsageSummary(true).totals.msgs === 0, "the reset excludes previous messages, including the active session");
 	resetModal.handleInput("U");
 	resetModal.handleInput("y");
-	assert(existsSync(join(resetSessions, "old.jsonl")), "U puts the history back");
-	assert(collectUsageSummary(true).totals.msgs === 2, "both sessions count again");
-	assert(resetModal.render(120).map(plain).some((l) => l.includes("Restored 1 session")), "the notice states what came back");
+	assert(collectUsageSummary(true).totals.msgs === 2, "undo restores the previous counting baseline");
+	assert(resetModal.render(120).map(plain).some((l) => l.includes("Previous statistics restored.")), "the notice states what came back");
+	rmSync(resetDir, { recursive: true, force: true });
 	console.log("usage.ts self-check OK");
 }
