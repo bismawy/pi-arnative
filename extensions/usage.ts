@@ -563,19 +563,21 @@ export class UsageModalComponent implements Component {
 			}
 		}
 
+		const viewName = this.view === "prices" ? "Prices" : this.view === "project" ? "Project" : "Provider";
 		return renderScreen(
 			th,
 			width,
 			{
 				title: screenTitle("Usage"),
-				description:
+				description: `${viewName} · ${
 					this.view === "prices"
 						? width >= 70
 							? "Rates per 1M tokens from models.json; `unpriced` marks a used model with no rate."
 							: "Rates per 1M tokens (models.json)."
 						: width >= 70
 							? "Token, message & cache usage across all local Pi sessions."
-							: "Usage across all local sessions.",
+							: "Usage across all local sessions."
+				}}`,
 				legend: this.footer(width, th),
 			},
 			body,
@@ -1025,7 +1027,7 @@ if (isMain(import.meta.url)) {
 	// `taggedTheme.bold` is identity, so only the accent wrapper shows here; the bold half is
 	// pinned in lib/box.ts.
 	assert(highLines[1]!.includes("<accent>Usage - Arnative"), "the dashboard title is accent-colored");
-	assert(highLines[2]!.includes("<muted>Token, message"), "the dashboard description is muted");
+	assert(highLines[2]!.includes("<muted>Provider · Token, message"), "the dashboard description names the view and is muted");
 	assert(highLines[highLines.length - 2]!.includes("<dim>["), "the dashboard legend is dim");
 	assert(!highLines.some((l) => /[├┤]/.test(l)), "the dashboard draws no inner rule");
 
