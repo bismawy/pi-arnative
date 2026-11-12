@@ -101,7 +101,7 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void>
 			},
 			done: () => {
 				const applied = ctx.ui.theme.name;
-				announce(ctx.ui, applied ? `${applied} theme applied.` : "Theme applied.");
+				announce(ctx.ui, applied ? `Theme: ${applied}.` : "Theme changed.");
 				done(false);
 			},
 			back: () => {

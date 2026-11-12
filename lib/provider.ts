@@ -749,7 +749,7 @@ const deleteProviderFlow = async (ctx: ExtensionCommandContext, name: string): P
 	if (confirmed !== true) return;
 	try {
 		ctx.ui.notify(deleteProviderNamed(name) ? `[arnative] Deleted ${name}.` : `[arnative] ${name} was already gone.`, "info");
-		announce(ctx.ui, `Deleted ${name}.`);
+		announce(ctx.ui, `Provider deleted: ${name}.`);
 	} catch (error) {
 		ctx.ui.notify(`[arnative] Not deleted: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
 	}
@@ -1125,7 +1125,7 @@ const editNameFlow = async (ctx: ExtensionCommandContext, name: string): Promise
 		return name;
 	}
 	ctx.ui.notify(`[arnative] Renamed ${name} → ${value}. Open /model to refresh.`, "info");
-	announce(ctx.ui, `Renamed ${name} → ${value}.`);
+	announce(ctx.ui, `Provider renamed: ${name} → ${value}.`);
 	return value;
 };
 
@@ -1143,7 +1143,7 @@ const editKeyFlow = async (ctx: ExtensionCommandContext, name: string, entry: Pr
 		return;
 	}
 	ctx.ui.notify(`[arnative] ${name}: API key replaced (${keyHint(value)}). Open /model to refresh.`, "info");
-	announce(ctx.ui, `${name}: API key replaced (${keyHint(value)}).`);
+	announce(ctx.ui, `API key replaced: ${name} (${keyHint(value)}).`);
 };
 
 /** The Edit menu: one field per row, each write immediate. Returns the provider id to keep
