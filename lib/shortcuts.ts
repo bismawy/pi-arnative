@@ -88,9 +88,10 @@ export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Selec
 export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
 /** The usage dashboard. `reset` adds the key that deletes history, so a screen without
  *  that key never advertises it; `undo` appears only while a reset can be undone. `v` cycles
- *  the Provider → Project → Prices views, handled on every view. */
-export function legendUsage(width: number, opts: { reset?: boolean; undo?: boolean } = {}): string {
-	const pairs: [string, string][] = [[MOVE.label, "Move"], [RANGE.label, "Range"], ["Space/Click", "Show/Hide"], ["v", "View"]];
+ *  the Provider → Project → Prices views, handled on every view; `next` names the view that
+ *  key would show, so the legend states the destination instead of the generic word View. */
+export function legendUsage(width: number, opts: { reset?: boolean; undo?: boolean; next?: string } = {}): string {
+	const pairs: [string, string][] = [[MOVE.label, "Move"], [RANGE.label, "Range"], ["Space/Click", "Show/Hide"], ["v", opts.next ? `Next: ${opts.next}` : "View"]];
 	if (opts.reset) pairs.push([CANCEL.label, "Back"], [RESET_USAGE.label, "Reset"]);
 	if (opts.undo) pairs.push([UNDO_USAGE.label, "Undo"]);
 	if (!opts.reset) pairs.push([CANCEL.label, "Back"]);
@@ -145,6 +146,7 @@ if (isMain(import.meta.url)) {
 	assert(legendUsage(120).includes("[Esc] Back"), "a wide usage legend advertises Esc Back");
 	assert(legendUsage(140).includes("[Space/Click] Show/Hide"), "a wide usage legend advertises Space and the mouse");
 	assert(legendUsage(120).includes("[v] View"), "a wide usage legend advertises the view key the dashboard handles");
+	assert(legendUsage(120, { next: "Project" }).includes("[v] Next: Project"), "the legend names the view the key would show");
 	assert(legendUsage(20) === "[Esc] Back", "a narrow usage legend degrades to the one key that still fits");
 	assert(!legendUsage(20).includes("[v]"), "the narrow usage legend drops the view key with the rest");
 	assert(legendUsage(160, { reset: true }).includes("[R] Reset"), "a reset-capable dashboard advertises R Reset");

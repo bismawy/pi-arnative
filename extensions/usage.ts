@@ -89,6 +89,9 @@ type UsageView = "provider" | "project" | "prices";
 
 /** Labels on the range bar, in tab order. */
 const RANGE_LABELS: Record<UsageRange, string> = { all: "All", today: "Today", "7d": "7 day", "30d": "30 day", "3m": "3 month" };
+/** The three views `v` cycles, in that order, and the view a press would show next. */
+const VIEW_LABELS: Record<UsageView, string> = { provider: "Provider", project: "Project", prices: "Prices" };
+const NEXT_VIEW: Record<UsageView, UsageView> = { provider: "project", project: "prices", prices: "provider" };
 /** Data rows on screen at once: five reads as a table, sixteen pushed the Total row off. */
 const USAGE_VIEWPORT = 5;
 
@@ -563,7 +566,7 @@ export class UsageModalComponent implements Component {
 			}
 		}
 
-		const viewName = this.view === "prices" ? "Prices" : this.view === "project" ? "Project" : "Provider";
+		const viewName = VIEW_LABELS[this.view];
 		return renderScreen(
 			th,
 			width,
@@ -599,7 +602,7 @@ export class UsageModalComponent implements Component {
 				th.fg("text", "[y] Yes  [Esc] Cancel")
 			);
 		}
-		return legendUsage(width, { reset: true, undo: this.undoBaseline !== null });
+		return legendUsage(width, { reset: true, undo: this.undoBaseline !== null, next: VIEW_LABELS[NEXT_VIEW[this.view]] });
 	}
 
 	/** Detail for the selected row: icon in `accent`, text and `·` dividers in `accentSoft`. */
@@ -1181,8 +1184,8 @@ if (isMain(import.meta.url)) {
 	// The day-bucket line under the Total band appears only when the summary carries buckets.
 	assert(!estBody.includes("today $"), "no day-bucket line when the cache holds no buckets");
 	assert(
-		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => plain(l).includes("[v] View")),
-		"the rendered legend advertises the view key",
+		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => plain(l).includes("[v] Next: Project")),
+		"the rendered legend names the next view",
 	);
 
 	// View cycle (`v`): Provider → Project → Provider. The Project view keeps the one column
