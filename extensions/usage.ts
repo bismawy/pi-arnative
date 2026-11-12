@@ -146,17 +146,23 @@ export class UsageModalComponent implements Component {
 	private buildFlatRows(): RowItem[] {
 		const rows: RowItem[] = [];
 		if (this.view === "prices") {
-			// Every provider+model declared in models.json, with its $/1M rates, cheapest input
-			// first; a model the sessions used but the table does not price gets a row marked
-			// `unpriced` after the priced ones — that is the model whose Cost cell reads `-`.
+			// Every models.json pair, grouped under its provider like the Provider view: a tree
+			// opened one provider at a time. Inside a group the cheapest input rate comes first,
+			// and a used model the table does not price ends its group marked `unpriced`.
 			const table = loadPriceTable();
+			const groups = new Map<string, RowItem[]>();
+			const addTo = (provider: string, row: RowItem): void => {
+				const list = groups.get(provider) ?? [];
+				list.push(row);
+				groups.set(provider, list);
+			};
 			for (const [provider, models] of Object.entries(table)) {
 				for (const [model, r] of Object.entries(models)) {
-					rows.push({
+					addTo(provider, {
 						type: "price",
 						providerName: provider,
 						modelName: model,
-						label: `${provider}/${model}`,
+						label: model,
 						sessions: 0,
 						msgs: 0,
 						tokens: 0,
@@ -169,22 +175,43 @@ export class UsageModalComponent implements Component {
 					});
 				}
 			}
-			rows.sort((a, b) => a.rates!.in - b.rates!.in);
 			for (const p of this.summary.providers) {
 				for (const m of p.models) {
 					// `models.json` holds the user's custom rates only: a built-in model has no entry
 					// yet still reports a cost, so it is priced, not unpriced. Only a model that
 					// shows `-` in the table (no rate, no cost) belongs here.
 					if (hasPrice(p.name, m.name, table) || m.cost > 0 || m.estimatedCost > 0) continue;
-					rows.push({
+					addTo(p.name, {
 						type: "price",
 						providerName: p.name,
 						modelName: m.name,
-						label: `${p.name}/${m.name}`,
+						label: m.name,
 						...statsOf(m),
 						unpriced: true,
 					});
 				}
+			}
+			const cheapest = (list: RowItem[]): number => Math.min(...list.map((r) => r.rates?.in ?? Number.POSITIVE_INFINITY));
+			const ordered = [...groups.entries()].sort((a, b) => cheapest(a[1]) - cheapest(b[1]) || a[0].localeCompare(b[0]));
+			for (const [provider, models] of ordered) {
+				const isExpanded = this.expandedProviders.has(provider);
+				rows.push({
+					type: "provider",
+					providerName: provider,
+					label: capitalize(provider),
+					sessions: 0,
+					msgs: 0,
+					tokens: 0,
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cost: 0,
+					estimatedCost: 0,
+					expanded: isExpanded,
+				});
+				if (!isExpanded) continue;
+				models.sort((a, b) => (a.rates?.in ?? Number.POSITIVE_INFINITY) - (b.rates?.in ?? Number.POSITIVE_INFINITY) || a.label.localeCompare(b.label));
+				for (const row of models) rows.push(row);
 			}
 			return rows;
 		}
@@ -410,7 +437,7 @@ export class UsageModalComponent implements Component {
 		// shorter and the numeric columns still start on the header's grid.
 		const gutter = 2;
 		const contentW = boxW - 4;
-		const colW = { name: 30, session: 9, messages: 10, tokens: 9, cost: 10 };
+		const colW = { name: 30, session: 10, messages: 11, tokens: 10, cost: 11 };
 		const allNumeric = colW.session + colW.messages + colW.tokens + colW.cost;
 		// A very narrow terminal drops Session/Messages rather than truncating Tokens or Cost.
 		const narrow = contentW - allNumeric < 18;
@@ -494,11 +521,15 @@ export class UsageModalComponent implements Component {
 			const paintName = isSelected ? acc : item.type === "provider" ? soft : plain;
 			const paintVal = isSelected ? acc : dim;
 			const isPrice = item.type === "price";
+			// A Prices group row names the provider; its rate columns stay blank, so the tree
+			// reads as a heading instead of a provider with $0.00 rates.
+			const isPriceGroup = this.view === "prices" && item.type === "provider";
+			const blank = (w: number) => " ".repeat(w);
 
 			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), rowNameW, false);
-			const cSess = formatCol(paintVal(isPrice ? formatCost(item.rates?.in ?? 0) : formatCount(item.sessions)), sessionW);
-			const cMsgs = formatCol(paintVal(isPrice ? formatCost(item.rates?.out ?? 0) : formatCount(item.msgs)), messagesW);
-			const cToks = formatCol(paintVal(isPrice ? formatCost(item.rates?.cacheRead ?? 0) : formatTokens(item.tokens)), colW.tokens);
+			const cSess = isPriceGroup ? blank(sessionW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.in ?? 0) : formatCount(item.sessions)), sessionW);
+			const cMsgs = isPriceGroup ? blank(messagesW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.out ?? 0) : formatCount(item.msgs)), messagesW);
+			const cToks = isPriceGroup ? blank(colW.tokens) : formatCol(paintVal(isPrice ? formatCost(item.rates?.cacheRead ?? 0) : formatTokens(item.tokens)), colW.tokens);
 			// A row with no billed cost but a rate shows `~$x` in place of `-`, so the guess is
 			// visible exactly where it is one; the report line still keeps it out of the headline.
 			// The Prices view puts the cache-write rate here, or `unpriced` for a used model the
@@ -512,7 +543,7 @@ export class UsageModalComponent implements Component {
 					: item.estimatedCost > 0
 						? `~${formatCost(item.estimatedCost)}`
 						: "-";
-			const cCost = formatCol(paintVal(costCell), colW.cost);
+			const cCost = isPriceGroup ? blank(colW.cost) : formatCol(paintVal(costCell), colW.cost);
 
 			// Gutter: expand arrow on the tree's top level (provider in Provider view, project
 			// in Project view), blank indent for the rows beneath it.
@@ -539,7 +570,8 @@ export class UsageModalComponent implements Component {
 			// No Total band for rates: a count of what the table prices, and of the used models
 			// it does not, is the honest summary of this view.
 			const unpriced = rows.filter((r) => r.unpriced).length;
-			body.push(dim(`${rows.length - unpriced} priced · ${unpriced} unpriced (models.json)`));
+			const priced = rows.filter((r) => r.type === "price" && !r.unpriced).length;
+			body.push(dim(`${priced} priced · ${unpriced} unpriced (models.json)`));
 		} else {
 			// Total row. Its cost column is the billed total only.
 			const t = this.summary.totals;
@@ -547,23 +579,13 @@ export class UsageModalComponent implements Component {
 			const totalSess = formatCol(soft(bold(formatCount(t.sessions))), sessionW);
 			const totalMsgs = formatCol(soft(bold(formatCount(t.msgs))), messagesW);
 			const totalToks = formatCol(soft(bold(formatTokens(t.totalTokens))), colW.tokens);
-			const totalCost = formatCol(soft(bold(formatCost(t.cost))), colW.cost);
+			// Billed when a provider reported one; otherwise the catalog estimate, marked `~` so
+			// the Total row never claims a billed number it does not have.
+			const totalValue = t.cost > 0 ? formatCost(t.cost) : t.estimatedCost > 0 ? `~${formatCost(t.estimatedCost)}` : "-";
+			const totalCost = formatCol(soft(bold(totalValue)), colW.cost);
 
 			// Same left edge as the header: one table, three bands, one column grid.
 			body.push(totalName + totalSess + totalMsgs + totalToks + totalCost);
-
-			// Day buckets, when the cache holds them: one dim line under the Total band.
-			if (t.today && t.last7d && t.last30d) {
-				body.push(dim(`today ${formatCost(t.today.cost)} · 7d ${formatCost(t.last7d.cost)} · 30d ${formatCost(t.last30d.cost)}`));
-			}
-
-			// Billed vs estimated, never blended: the Total band above carries the billed cost
-			// only, and this line names both sources when an estimate exists.
-			const est = t.estimatedCost;
-			if (est > 0) {
-				const parts = [t.cost > 0 ? `${formatCost(t.cost)} billed` : "", `~${formatCost(est)} estimated (models.json)`];
-				body.push(th.fg("muted", parts.filter(Boolean).join(" + ")));
-			}
 		}
 
 		const viewName = VIEW_LABELS[this.view];
@@ -580,7 +602,7 @@ export class UsageModalComponent implements Component {
 						: width >= 70
 							? "Token, message & cache usage across all local Pi sessions."
 							: "Usage across all local sessions."
-				}}`,
+				}`,
 				legend: this.footer(width, th),
 			},
 			body,
@@ -623,7 +645,7 @@ export class UsageModalComponent implements Component {
 						`cache read ${formatCost(row.rates!.cacheRead)}`,
 						`cache write ${formatCost(row.rates!.cacheWrite)}`,
 					];
-			if (row.unpriced && row.estimatedCost > 0) parts.push(`~${formatCost(row.estimatedCost)} est.`);
+			if (row.unpriced && row.estimatedCost > 0) parts.push(`${formatCost(row.estimatedCost)} est.`);
 			const divider = soft(" · ");
 			return `${icon}${soft(capitalize(title))}${divider}${soft(parts.join(" · "))}`;
 		}
@@ -634,7 +656,7 @@ export class UsageModalComponent implements Component {
 			`↓${formatTokens(row.output)}`,
 			`cache ${formatTokens(row.cacheRead)}`,
 		];
-		if (row.estimatedCost > 0) parts.push(`~${formatCost(row.estimatedCost)} est.`);
+		if (row.estimatedCost > 0) parts.push(`${formatCost(row.estimatedCost)} est.`);
 		const divider = soft(" · ");
 		return `${icon}${soft(capitalize(title))}${divider}${soft(parts.join(" · "))}`;
 	}
@@ -918,14 +940,15 @@ if (isMain(import.meta.url)) {
 	const priceModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high");
 	priceModal.handleInput("v");
 	priceModal.handleInput("v");
+	// Group rows are collapsed by default; the check opens both providers to read their children.
+	(priceModal as unknown as { expandedProviders: Set<string> }).expandedProviders = new Set(["alpha", "beta"]);
 	const priceLines = priceModal.render(120);
 	const priceBody = priceLines.map(plain).join("\n");
 	assert(priceBody.includes("In $/M") && priceBody.includes("Write $/M"), "the Prices view header names the rate columns");
-	assert(priceBody.includes("alpha/gemini-3.8-flash") && priceBody.includes("beta/gemini-3.8-flash"), "the Prices view lists every models.json pair");
-	assert(priceBody.includes("$1.00") && priceBody.includes("$10.00"), "input rates render as $/1M");
-	assert(priceBody.indexOf("alpha/gemini-3.8-flash") < priceBody.indexOf("beta/gemini-3.8-flash"), "priced rows are sorted by input rate");
-	assert(priceBody.includes("unpriced") && priceBody.includes("alpha/other-model"), "a used model absent from models.json is marked unpriced");
-	assert(priceBody.includes("2 priced · 3 unpriced (models.json)"), "the Prices view counts priced and unpriced rows");
+	assert(priceBody.includes("Alpha") && priceBody.includes("gemini-3.8-flash"), "the Prices view nests models under their provider");
+	assert(priceBody.includes("$1.00"), "input rates render as $/1M");
+	assert(priceBody.includes("unpriced") && priceBody.includes("other-model"), "a used model absent from models.json is marked unpriced");
+	assert(priceBody.includes("2 priced · 2 unpriced (models.json)"), "the Prices view counts priced and unpriced rows");
 	priceModal.handleInput("v");
 	assert(priceModal.render(120).some((l) => plain(l).includes("Provider / Model")), "`v` cycles back to the Provider view");
 
@@ -1166,7 +1189,7 @@ if (isMain(import.meta.url)) {
 	const estBody = estLines.map(plain).join("\n");
 	assert(estBody.includes("~$0.55"), "a row with a rate but no reported cost shows the estimate with `~`");
 	assert(estBody.includes("$0.65") && !estBody.includes("~$0.65"), "a reported cost is shown as-is, never with `~`");
-	assert(estBody.includes("estimated (models.json)"), "the estimate line names models.json");
+	assert(!estBody.includes("estimated (models.json)"), "the separate estimate line is gone; the Total row carries the number");
 	// Only the two table rows — the detail line also carries the estimate.
 	const estRows = estLines.map(plain).filter((l) => /^\u2502 [\u25be\u25b8 ] (Alpha|deepseek)/.test(l));
 	assert(estRows.length === 2 && estRows.every((l) => l.includes("~$0.55")), `the estimate shows on the provider row and its model row, got ${JSON.stringify(estRows)}`);
@@ -1181,8 +1204,9 @@ if (isMain(import.meta.url)) {
 		);
 	}
 
-	// The day-bucket line under the Total band appears only when the summary carries buckets.
-	assert(!estBody.includes("today $"), "no day-bucket line when the cache holds no buckets");
+	// The two sub-lines under the Total band are gone: the table and the Total row carry the
+	// numbers, and a smaller window is not worth a second line under every view.
+	assert(!estBody.includes("today $"), "no day-bucket line under the Total band");
 	assert(
 		new UsageModalComponent(fakeTheme, () => {}, () => {}, "high").render(120).some((l) => plain(l).includes("[v] Next: Project")),
 		"the rendered legend names the next view",
@@ -1235,8 +1259,7 @@ if (isMain(import.meta.url)) {
 		Math.abs(projRows.reduce((n, l) => n + num(costCell(l)), 0) - num(totalCell)) < 1e-9,
 		`the project rows sum to the Total row, got ${projRows.map(costCell)} vs ${totalCell}`,
 	);
-	assert(projBody.includes("today $0.07 · 7d $0.07 · 30d $0.07"), "the day-bucket line renders under the Total band");
-	assert(projLines.findIndex((l) => plain(l).includes("today $0.07")) > projLines.findIndex((l) => plain(l).includes("Total")), "the day line sits under the Total row");
+	assert(!projBody.includes("today $") && !projBody.includes("estimated (models.json)"), "no summary sub-lines under the Total band");
 	viewModal.handleInput("v");
 	assert(viewModal.render(100).some((l) => plain(l).includes("Provider / Model")), "`v` cycles back to the Provider view");
 
