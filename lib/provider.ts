@@ -16,7 +16,7 @@ import { assert, isMain } from "../lib/check.ts";
 import { buildEffortMap, isEffortProbeable, mergeMeta, parseModelMeta, probeEffort, suggestCompat, type Compat, type ModelMeta } from "./compat.ts";
 import { screenTitle, type ScreenText } from "../lib/box.ts";
 import { stripAnsi } from "../lib/ansi.ts";
-import { statusRows } from "./status-widget.ts";
+import { announce, statusRows } from "./status-widget.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_MOVE, ListPicker, rowText, type ListRow } from "./list-picker.ts";
 
 // ---------------------------------------------------------------- flavors
@@ -720,12 +720,36 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		return;
 	}
 	ctx.ui.notify(`[arnative] Provider saved: ${name} (${FLAVOR_LABELS[flavor]}, ${picked.length} models, ${levelsSummary(entry.models)}). Open /model to pick one.`, "info");
+	announce(ctx.ui, `Provider saved: ${name} (${picked.length} models).`);
 };
 
 const deleteProviderFlow = async (ctx: ExtensionCommandContext, name: string): Promise<void> => {
-	if (!(await ctx.ui.confirm("Delete provider", `${name}? The stored key goes with it.`))) return;
+	const confirmed =
+		ctx.mode === "tui"
+			? await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+				let picker: ListPicker;
+				picker = new ListPicker(
+					theme,
+					[{ label: "No" }, { label: "Yes" }],
+					"No",
+					{
+						preview: () => {},
+						revert: () => {},
+						done: () => done(picker.index === 1),
+						cancel: () => done(false),
+						requestRender: () => tui.requestRender(),
+					},
+					{ title: screenTitle("Delete provider"), description: `${name}? The stored key goes with it.`, legend: LIST_LEGEND_MOVE },
+					false,
+					ctx.thinkingLevel,
+				);
+				return picker;
+			})
+			: await ctx.ui.confirm("Delete provider", `${name}? The stored key goes with it.`);
+	if (confirmed !== true) return;
 	try {
 		ctx.ui.notify(deleteProviderNamed(name) ? `[arnative] Deleted ${name}.` : `[arnative] ${name} was already gone.`, "info");
+		announce(ctx.ui, `Deleted ${name}.`);
 	} catch (error) {
 		ctx.ui.notify(`[arnative] Not deleted: ${error instanceof Error ? error.message : "config file unreadable"}.`, "error");
 	}
@@ -822,7 +846,7 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
 };
 
-const THINKING_LEGEND = "[/] Filter  [Space] Off/auto  [0-6] Levels  [p] Probe  [a/r] All auto/off  [Enter] Save  [Esc] Back";
+const THINKING_LEGEND = "[/] Filter  [Space] Off/auto  [0-6] Set level  [p] Probe  [a/r] All auto/off  [Enter] Save  [Esc] Back";
 // minimal … max: the efforts a map can offer; off is pi's own switch, not an effort.
 const EFFORT_LEVELS = THINKING_LEVELS.slice(1);
 
@@ -1101,6 +1125,7 @@ const editNameFlow = async (ctx: ExtensionCommandContext, name: string): Promise
 		return name;
 	}
 	ctx.ui.notify(`[arnative] Renamed ${name} → ${value}. Open /model to refresh.`, "info");
+	announce(ctx.ui, `Renamed ${name} → ${value}.`);
 	return value;
 };
 
@@ -1118,6 +1143,7 @@ const editKeyFlow = async (ctx: ExtensionCommandContext, name: string, entry: Pr
 		return;
 	}
 	ctx.ui.notify(`[arnative] ${name}: API key replaced (${keyHint(value)}). Open /model to refresh.`, "info");
+	announce(ctx.ui, `${name}: API key replaced (${keyHint(value)}).`);
 };
 
 /** The Edit menu: one field per row, each write immediate. Returns the provider id to keep
