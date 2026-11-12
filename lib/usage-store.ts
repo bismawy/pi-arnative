@@ -6,7 +6,7 @@
  * - No double counting: the active session is already in its own file, so it is
  *   NOT re-added from sessionManager (that inflated the ↑↓ totals).
  */
-import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -113,13 +113,6 @@ function foldInto(rollup: FileRollup, entries: UsageEntry[]): void {
 	}
 	// `sessions` counts the file, not the messages, so it is 1 once the file has any use.
 	for (const key of Object.keys(rollup.providers)) rollup.providers[key]!.sessions = 1;
-}
-
-/** The rollup of a freshly parsed file (a foldInto that starts from nothing). */
-function rollupOfFile(entries: UsageEntry[]): FileRollup {
-	const rollup: FileRollup = { providers: {} };
-	foldInto(rollup, entries);
-	return rollup;
 }
 
 interface UsageModelStats {
@@ -510,99 +503,69 @@ let lastScanMs = 0;
  *  against itself and can never fail. */
 export function resetUsageCache(): void {
 	diskMemo = null;
+	baselineMemo = null;
 	cachedSummary = null;
 	cachedRange = null;
 	lastScanMs = 0;
 }
 
 // =============================================================================
-// Reset: move the history aside, never destroy it
+// Reset statistics without changing the session history
 // =============================================================================
-//
-// The numbers on the dashboard are not a counter we own: they are a fold over Pi's
-// session files. Deleting the cache changes nothing, so a real reset has to move those
-// files. They go to `arnative/usage-trash/<stamp>/` with their folder structure intact,
-// which is what makes the reset undoable; Pi simply stops seeing them, and `/resume`
-// forgets those sessions until they are moved back.
 
-/** Where a reset parks the history: one folder per reset, so two resets never collide. */
-export function usageTrashRoot(): string {
-	return join(cacheDir(), "usage-trash");
-}
+const baselinePath = (): string => join(cacheDir(), "usage-baseline.json");
+let baselineMemo: { path: string; mtimeMs: number; size: number; items: Map<string, FileCacheItem> } | null = null;
 
-/** What a reset would move: used by the confirmation line, before anything is touched. */
-export function usageHistorySize(keep: readonly string[] = []): { files: number; bytes: number } {
-	const sessionsDir = join(getAgentDir(), "sessions");
-	const kept = new Set(keep.map((p) => p.toLowerCase()));
-	let files = 0;
-	let bytes = 0;
-	for (const file of scanSessionFiles(sessionsDir)) {
-		if (kept.has(file.toLowerCase())) continue;
-		try {
-			bytes += statSync(file).size;
-			files++;
-		} catch {
-			// Vanished between the scan and the stat: it is gone, so it is not part of the total.
-		}
+function loadUsageBaseline(): Map<string, FileCacheItem> {
+	const path = baselinePath();
+	if (!existsSync(path)) {
+		baselineMemo = null;
+		return new Map();
 	}
-	return { files, bytes };
+	const stat = statSync(path);
+	if (baselineMemo?.path === path && baselineMemo.mtimeMs === stat.mtimeMs && baselineMemo.size === stat.size) return baselineMemo.items;
+	const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid usage baseline");
+	const items = new Map<string, FileCacheItem>();
+	for (const [key, value] of Object.entries(raw)) {
+		const item = decodeDiskItem(value);
+		if (!item) throw new Error("Invalid usage baseline entry");
+		items.set(join(getAgentDir(), "sessions", key), item);
+	}
+	baselineMemo = { path, mtimeMs: stat.mtimeMs, size: stat.size, items };
+	return items;
 }
 
-/** Move every session file except `keep` (the one in use) into the trash, and drop the
- *  cache. Returns the folder to pass to {@link restoreUsageHistory}. */
-export function resetUsageHistory(keep: readonly string[] = []): { moved: number; bytes: number; dir: string } {
-	const sessionsDir = join(getAgentDir(), "sessions");
-	const kept = new Set(keep.map((p) => p.toLowerCase()));
-	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-	const dir = join(usageTrashRoot(), stamp);
-	let moved = 0;
-	let bytes = 0;
-	for (const file of scanSessionFiles(sessionsDir)) {
-		if (kept.has(file.toLowerCase())) continue;
-		const rel = relative(sessionsDir, file);
-		const dest = join(dir, rel);
+function writeUsageBaseline(raw: string | null): void {
+	const path = baselinePath();
+	if (raw === null) rmSync(path, { force: true });
+	else {
+		mkdirSync(cacheDir(), { recursive: true });
+		const tmp = path + "." + process.pid + ".tmp";
 		try {
-			bytes += statSync(file).size;
-			mkdirSync(join(dest, ".."), { recursive: true });
-			try {
-				renameSync(file, dest);
-			} catch {
-				// Different volume: copy, then drop the original.
-				copyFileSync(file, dest);
-				unlinkSync(file);
-			}
-			moved++;
-		} catch {
-			// A locked file (Windows, session still open elsewhere) stays where it is: the reset
-			// moved what it could, and the confirmation line reports the count it actually moved.
+			writeFileSync(tmp, raw, "utf8");
+			renameSync(tmp, path);
+		} finally {
+			rmSync(tmp, { force: true });
 		}
 	}
 	resetUsageCache();
-	return { moved, bytes, dir };
 }
 
-/** The undo of {@link resetUsageHistory}: move the parked files back into place. */
-export function restoreUsageHistory(dir: string): { restored: number } {
+/** Snapshot complete messages, including daily totals, so appended messages still count. */
+export function resetUsageStats(): string | null {
+	collectUsageSummary(true, "today");
+	const path = baselinePath();
+	const previous = existsSync(path) ? readFileSync(path, "utf8") : null;
 	const sessionsDir = join(getAgentDir(), "sessions");
-	let restored = 0;
-	for (const file of scanSessionFiles(dir)) {
-		const dest = join(sessionsDir, relative(dir, file));
-		try {
-			mkdirSync(join(dest, ".."), { recursive: true });
-			if (existsSync(dest)) continue; // A new session took that name: keep both.
-			try {
-				renameSync(file, dest);
-			} catch {
-				copyFileSync(file, dest);
-				unlinkSync(file);
-			}
-			restored++;
-		} catch {
-			// Locked: leave it in the trash, the rest still comes back.
-		}
-	}
-	resetUsageCache();
-	return { restored };
+	const snapshot = Object.fromEntries([...loadDiskCache()].map(([file, item]) => [relative(sessionsDir, file), encodeDiskItem(item)]));
+	writeUsageBaseline(JSON.stringify(snapshot));
+	return previous;
+}
+
+/** Restore the previous counting baseline; session files stay where they are. */
+export function restoreUsageStats(previous: string | null): void {
+	writeUsageBaseline(previous);
 }
 
 /** One file's rollup, narrowed to the days a range covers. Same shape the `all` path reads
@@ -644,6 +607,7 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 	const sessionsDir = join(getAgentDir(), "sessions");
 	const files = scanSessionFiles(sessionsDir);
 	const diskCache = loadDiskCache();
+	const baseline = loadUsageBaseline();
 	let cacheDirty = false;
 
 	const providerMap = new Map<
@@ -671,6 +635,17 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 		if (!(cached && cached.v === CACHE_VERSION && cached.rollup)) cached = undefined;
 		if (cached && needDays && !cached.rollup.days) cached = undefined;
 		const fallbackDay = dayKey(stat.mtimeMs);
+		const baselineItem = baseline.get(file);
+		const reparse = (): FileCacheItem => {
+			// Keep the prefix's original day buckets: undated records otherwise inherit the
+			// file's new modification day when a cache is rebuilt after an append.
+			const offset = baselineItem && (baselineItem.consumed ?? 0) <= stat.size ? (baselineItem.consumed ?? 0) : 0;
+			const rollup: FileRollup = offset > 0 ? structuredClone(baselineItem!.rollup) : { providers: {} };
+			const bytes = readTail(file, offset) ?? readFileSync(file).subarray(offset);
+			const parsed = parseBuffer(bytes, fallbackDay);
+			foldInto(rollup, parsed.entries);
+			return { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: offset + parsed.consumed, rollup };
+		};
 
 		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
 			// Unchanged since the last scan: its rollup already holds everything.
@@ -687,19 +662,22 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 				cached.size = stat.size;
 			} else {
 				// Unreadable: fall back to whole-file.
-				const full = parseBuffer(readFileSync(file), fallbackDay);
-				cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+				cached = reparse();
 				diskCache.set(file, cached);
 			}
 			cacheDirty = true;
 		} else {
-			const full = parseBuffer(readFileSync(file), fallbackDay);
-			cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+			cached = reparse();
 			diskCache.set(file, cached);
 			cacheDirty = true;
 		}
 
-		for (const [key, r] of Object.entries(needDays ? rollupSince(cached.rollup, sinceDay) : cached.rollup.providers)) {
+		const before = baselineItem?.rollup;
+		const excluded = before ? (needDays ? rollupSince(before, sinceDay) : before.providers) : {};
+		for (const [key, current] of Object.entries(needDays ? rollupSince(cached.rollup, sinceDay) : cached.rollup.providers)) {
+			const r = { ...current };
+			for (const field of ["msgs", "input", "output", "cacheRead", "cost"] as const) r[field] = Math.max(0, r[field] - (excluded[key]?.[field] ?? 0));
+			if (r.msgs === 0) continue;
 			const sep = key.indexOf("\u0000");
 			const pname = sep === -1 ? key : key.slice(0, sep);
 			if (!providerMap.has(pname)) {
