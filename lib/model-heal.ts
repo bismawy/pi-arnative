@@ -509,10 +509,18 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 				break;
 			}
 			const channel = channels.get(lower(model.provider))!;
-			const supported = await probeEffort(
-				{ ...model, compat: { ...channel.compat, ...(model.compat ?? {}) } },
-				{ baseUrl: channel.baseUrl, key: channel.key(), headers: channel.headers, fetchImpl: deps.fetchImpl },
-			);
+			let supported: string[];
+			try {
+				supported = await probeEffort(
+					{ ...model, compat: { ...channel.compat, ...(model.compat ?? {}) } },
+					{ baseUrl: channel.baseUrl, key: channel.key(), headers: channel.headers, fetchImpl: deps.fetchImpl, signal: deps.signal, deadline },
+				);
+			} catch (error) {
+				deps.signal?.throwIfAborted();
+				if (!(error instanceof Error) || error.name !== "TimeoutError" || Date.now() < deadline) throw error;
+				errors.push(`${model.provider}: probe budget exhausted`);
+				break;
+			}
 			deps.signal?.throwIfAborted();
 			if (supported.length === 0) {
 				// Stamped as failed so the next run waits the short TTL instead of re-sending.
