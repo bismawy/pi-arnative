@@ -11,6 +11,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Preset saves now compare against the current disk value and preserve invalid profiles. Unsaved choices emit a warning.
 - Usage Reset now clears model/provider statistics without moving session files or removing them from `/resume`. A persistent baseline excludes earlier messages, counts new messages in existing sessions, and supports Undo while the dashboard remains open. Existing `usage-trash` files stay untouched.
 
 ## [0.10.0] - 2026-11-08
