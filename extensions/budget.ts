@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
+import { announce } from "../lib/status-widget.ts";
 import { rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { matchesBack } from "../lib/shortcuts.ts";
 import {
@@ -187,7 +188,7 @@ export function budgetLevelNow(): BudgetLevel {
 const BUDGET_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Budget"),
 	description: "Warn-only caps on the UTC day and the rolling 30d — enforce on blocks the next turn.",
-	legend: "[↑↓] Move  [Enter] Change  [←] Back  [Esc] Close",
+	legend: "[↑↓] Move  [Space] Change  [Esc] Back",
 };
 
 const ENFORCE_ON_NOTE = "on — blocks the next turn over a cap";
@@ -320,7 +321,7 @@ class BudgetModalComponent implements Component {
 			this.hooks.requestRender();
 			return;
 		}
-		if (matchesKey(keyData, "enter")) {
+		if (matchesKey(keyData, "enter") || matchesKey(keyData, "space")) {
 			this.hooks.change(this.selected);
 			this.hooks.requestRender();
 		}
@@ -390,6 +391,7 @@ export async function openBudget(ctx: ExtensionCommandContext): Promise<boolean 
 		const index = labels.indexOf(pick);
 		changeBudgetRow(index);
 		ctx.ui.notify(`[arnative] Budget: ${rowText(budgetRows()[index]!)}`, "info");
+		announce(ctx.ui, `Budget: ${rowText(budgetRows()[index]!)}.`);
 		return;
 	}
 
@@ -400,6 +402,7 @@ export async function openBudget(ctx: ExtensionCommandContext): Promise<boolean 
 			{
 				change: (index) => {
 					changeBudgetRow(index);
+					announce(ctx.ui, `Budget: ${rowText(budgetRows()[index]!)}.`);
 					tui.requestRender();
 				},
 				done: (back) => done(back),
@@ -586,7 +589,7 @@ if (isMain(import.meta.url)) {
 		BUDGET_PICKER_TEXT.description === "Warn-only caps on the UTC day and the rolling 30d — enforce on blocks the next turn.",
 		"the Budget screen description is pinned",
 	);
-	assert(BUDGET_PICKER_TEXT.legend === "[↑↓] Move  [Enter] Change  [←] Back  [Esc] Close", "the Budget legend is pinned");
+	assert(BUDGET_PICKER_TEXT.legend === "[↑↓] Move  [Space] Change  [Esc] Back", "the Budget legend is pinned");
 	assert(rowText(rows[0]!) === "Day cap · $5.00", "the headless row text is pinned: " + rowText(rows[0]!));
 
 	// The dashboard: the two spend-vs-cap windows, pure and pinned.
