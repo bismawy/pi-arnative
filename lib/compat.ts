@@ -272,7 +272,8 @@ function isParamRejection(status: number, body: string): boolean {
  *  `[]` means nothing answered — never call that "nothing supported". */
 export async function probeEffort(model: CompatModel, options: EffortProbeOptions): Promise<string[]> {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const url = `${options.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+	const responses = lower(model.api) === "openai-responses";
+	const url = `${options.baseUrl.replace(/\/+$/, "")}/${responses ? "responses" : "chat/completions"}`;
 	const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json", ...options.headers };
 	if (options.key) headers.authorization = `Bearer ${options.key}`;
 	const accepted: string[] = [];
@@ -288,10 +289,17 @@ export async function probeEffort(model: CompatModel, options: EffortProbeOption
 	};
 	for (const [index, level] of EFFORT_RANK.entries()) {
 		checkStopped();
-		const body = JSON.stringify({
+		const body = JSON.stringify(responses ? {
+			model: model.id,
+			input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
+			...(model.compat?.supportsMaxOutputTokens === false ? {} : { max_output_tokens: PROBE_TOKENS }),
+			stream: false,
+			store: false,
+			reasoning: { effort: level },
+		} : {
 			model: model.id,
 			messages: [{ role: "user", content: "ping" }],
-			max_tokens: PROBE_TOKENS,
+			[model.compat?.maxTokensField === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens"]: PROBE_TOKENS,
 			stream: false,
 			...(thinkingPayload(model.compat ?? {}, true) ?? {}),
 			reasoning_effort: level,
