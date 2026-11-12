@@ -10,6 +10,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { visibleWidth, matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../lib/ansi.ts";
 import { screenTitle } from "../lib/box.ts";
+import { announce } from "../lib/status-widget.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markedLabels, ROW_DIVIDER } from "../lib/format.ts";
 import { SPINNER_GRADIENT_KEY, SPINNER_PRESET_KEY, SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
@@ -98,7 +99,11 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void>
 			revert: () => {
 				if (current) ctx.ui.setTheme(current);
 			},
-			done: () => done(false),
+			done: () => {
+				const applied = ctx.ui.theme.name;
+				announce(ctx.ui, applied ? `${applied} theme applied.` : "Theme applied.");
+				done(false);
+			},
 			back: () => {
 				// Back drops the live preview, then reports upward so the menu reopens.
 				// Guarded like `revert`: `theme.name` is optional, and `setTheme(undefined)`
@@ -118,7 +123,7 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void>
 const footersPickerText = (): ListPickerText => ({
 	title: screenTitle("Footers"),
 	description: "Selection applies live — custom footer or built-in.",
-	legend: `[↑↓] Preview  [c] Cost ${activeFooterCost() ? "on" : "off"}  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
+	legend: `[↑↓] Preview  [c] Cost ${activeFooterCost() ? "on" : "off"}  [Enter] Select  [Esc] Back`,
 });
 
 const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
@@ -143,7 +148,10 @@ const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void
 			{
 				preview: (name) => setFooterPreset(name as FooterPreset, ctx),
 				revert: () => setFooterPreset(opened, ctx),
-				done: () => done(false),
+				done: () => {
+					announce(ctx.ui, `Footer: ${activeFooterPreset()}.`);
+					done(false);
+				},
 				back: () => {
 					// Back drops the live preview, then reports upward so the menu reopens.
 					if (activeFooterPreset() !== opened) setFooterPreset(opened, ctx);
@@ -195,7 +203,10 @@ const openHeaders = async (ctx: ExtensionCommandContext): Promise<boolean | void
 			{
 				preview: (name) => setHeaderPreset(name as HeaderPreset, ctx),
 				revert: () => setHeaderPreset(opened, ctx),
-				done: () => done(false),
+				done: () => {
+					announce(ctx.ui, `Header: ${activeHeaderPreset()}.`);
+					done(false);
+				},
 				back: () => {
 					// Back drops the live preview, then reports upward so the menu reopens.
 					if (activeHeaderPreset() !== opened) setHeaderPreset(opened, ctx);
@@ -239,7 +250,10 @@ const openAnimations = async (ctx: ExtensionCommandContext): Promise<boolean | v
 			{
 				preview: (name) => setSpinnerPreset(name as SpinnerPreset),
 				revert: () => setSpinnerPreset(opened),
-				done: () => done(false),
+				done: () => {
+					announce(ctx.ui, `Animation: ${activeSpinnerPreset()}.`);
+					done(false);
+				},
 				back: () => {
 					// Back restores the preset it opened with, then reports upward.
 					if (activeSpinnerPreset() !== opened) setSpinnerPreset(opened);
@@ -316,6 +330,7 @@ const openAutoCompact = async (ctx: ExtensionCommandContext): Promise<boolean | 
 				revert: () => {},
 				done: () => {
 					setAutoCompact(AUTO_COMPACT_CHOICES[picker.index]!);
+					announce(ctx.ui, `Auto-compact: ${AUTO_COMPACT_CHOICES[picker.index]}.`);
 					done(false);
 				},
 				cancel: () => done(false),
@@ -382,7 +397,10 @@ const openModelHeal = async (ctx: ExtensionCommandContext): Promise<boolean | vo
 				revert: () => {},
 				done: () => {
 					if (picker.index === MODEL_HEAL_CHOICES.length) runNow = true;
-					else setModelHeal(MODEL_HEAL_CHOICES[picker.index]!);
+					else {
+						setModelHeal(MODEL_HEAL_CHOICES[picker.index]!);
+						announce(ctx.ui, `Model heal: ${MODEL_HEAL_CHOICES[picker.index]}.`);
+					}
 					done(false);
 				},
 				cancel: () => done(false),
@@ -708,8 +726,8 @@ if (isMain(import.meta.url)) {
 
 	// `←` reports upward instead of closing on a screen with a parent, reverting the live
 	// preview first; the root menu has nothing behind it and omits the key.
-	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "the root menu legend omits ←");
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", "submenu legend advertises Esc Back");
+	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Select  [Esc] Close", "root menu legend omits ←");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Select  [Esc] Back", "submenu legend advertises Esc Back");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [Esc] Back", "live legend advertises Esc Back");
 	let backs = 0;
 	let backReverts = 0;

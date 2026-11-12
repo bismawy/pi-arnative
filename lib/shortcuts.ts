@@ -78,10 +78,10 @@ export const UNDO_USAGE = keySet("U", "shift+u");
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
 /** Root `/arnative` menu: nothing behind it, so Esc closes. */
-export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
+export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Select"], [CANCEL.label, "Close"]);
 /** Move-and-open list inside a submenu (the provider list, the provider actions): Esc steps
  *  back to the screen above, exactly like ←. */
-export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Back"]);
+export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Select"], [CANCEL.label, "Back"]);
 /** Live-preview list: moving applies, Enter keeps, Esc drops the preview and steps out. */
 export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [CANCEL.label, "Back"]);
 /** A list you only read (the `/todos` recap): moving changes nothing, so there is no Open. */
@@ -131,7 +131,7 @@ if (isMain(import.meta.url)) {
 	assert(!matchesBack("h"), "a bare letter is not the back key");
 	// The legends are built from the same keys the handlers match, so a key cannot be
 	// advertised on one screen and handled on none.
-	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", `submenu legend pinned, got ${LEGEND_MOVE}`);
+	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Select  [Esc] Back", `submenu legend pinned, got ${LEGEND_MOVE}`);
 	assert(LEGEND_READ_ONLY === "[↑↓] Move  [Esc] Close", `read-only legend pinned, got ${LEGEND_READ_ONLY}`);
 	assert(
 		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${CANCEL.label}] Back`,

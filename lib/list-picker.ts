@@ -386,8 +386,8 @@ export class InputPicker implements Component, Focusable {
 
 // Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
-	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "root legend pinned, no ← behind the root menu");
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", "move legend pinned: Esc is Back where a parent exists");
+	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Select  [Esc] Close", "root legend pinned, no ← behind the root menu");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Select  [Esc] Back", "move legend pinned: Esc is Back where a parent exists");
 	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [Esc] Back", "live legend pinned: Esc drops the preview and steps out");
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 	const quiet = (): void => undefined;
