@@ -13,7 +13,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseOklch, oklchToRgb } from "../lib/color.ts";
+import { contrast, hexToOklch, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
 import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -33,20 +33,33 @@ function oklch(L, C, H) {
 }
 
 /**
- * Soft tier of a color: clone at L 0.82 with a fifth of the GAMUT-CLAMPED chroma, hue
- * kept. `lib/ansi.ts` softens the resolved token with this same recipe at runtime, so a
- * `*Soft` var declared here and the extension's derived value agree. Grey-collapse is
- * avoided because the hue is carried, not dropped.
+ * Soft tier of a color: clone at lightness `l` (default 0.82) with `scale`
+ * (default 0.5, matching `SOFT_CHROMA_SCALE` in lib/ansi.ts; the accent tier
+ * uses 0.15 at 0.94 lightness — a near-white tint — matching
+ * `SOFT_CHROMA_SCALE_ACCENT` and `SOFT_L_ACCENT`) of the GAMUT-CLAMPED
+ * chroma, hue kept. `lib/ansi.ts` softens the resolved token with these same
+ * recipes at runtime, so `*Soft` vars declared here and the extension's derived
+ * values agree. Grey-collapse is avoided because the hue is carried, not dropped.
  *
- * The chroma keeps five decimals (not the usual three): the soft tier multiplies it by
- * 0.18, so a coarser round-trip shifts the last hex digit and the `declare == derive`
- * guard in ui-render-tweaks.ts fails.
+ * The chroma keeps five decimals (not the usual three): the soft tier multiplies
+ * it by the scale, so a coarser round-trip shifts the last hex digit and the
+ * `declare == derive` guard in ui-render-tweaks.ts fails.
  */
-function soften(value) {
+function soften(value, scale = 0.35, l = 0.90) {
 	const o = parseOklch(value);
 	assert(o !== null, `cannot soften a non-oklch color: ${value}`);
-	const { chroma } = oklchToRgb(0.82, o.C * 0.18, o.H);
-	return `oklch(82% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
+	const { chroma } = oklchToRgb(l, o.C * scale, o.H);
+	return `oklch(${+(l * 100).toFixed(1)}% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
+}
+
+/** Normalize a spec color to an oklch literal: hex is converted, oklch passes through. */
+function colorLiteral(value) {
+	const s = String(value).trim();
+	if (s.startsWith("#")) {
+		const o = hexToOklch(s);
+		return oklch(o.L, o.C, o.H);
+	}
+	return s;
 }
 
 // --- shared ramps ----------------------------------------------------------
@@ -79,152 +92,314 @@ const ACCENT_OFFSET = {
  */
 const THEMES = {
 	arnative: {
-		accent: "oklch(81.1% 0.1455 217.709375)",
+		// Cyan & gold: strong-cyan focus, bright-gold signature (primary), school-bus
+		// yellow labels, icy-aqua links/code (tone), deep teal message panels.
+		accent: "oklch(77% 0.13 193)",
 		chroma: 0.13,
 		canvasL: 0.27,
-		neutralHue: 232,
+		neutralHue: 205,
 		neutralChroma: 0.012,
-		primary: "oklch(82% 0.14 218)",
-		secondary: "oklch(78% 0.11 282)",
-		hues: { heading: 75, label: 282 },
-	},
-	"arnative-sun": {
-		accent: "oklch(82.4% 0.1408 70.170730)",
-		chroma: 0.14,
-		canvasL: 0.27,
-		neutralHue: 70,
-		neutralChroma: 0.012,
-		primary: "oklch(84% 0.15 70)",
-		secondary: "oklch(78% 0.12 35)",
-		hues: { heading: 60, label: 330 },
-	},
-	"arnative-zinc": {
-		accent: "oklch(71.2% 0.0129 286.066504)",
-		chroma: 0.02,
-		canvasL: 0.26,
-		neutralHue: 285,
-		neutralChroma: 0.005,
-		primary: "oklch(86% 0.015 285)",
-		secondary: "oklch(72% 0.025 240)",
-		hues: { heading: 285, label: 285 },
-	},
-	"arnative-violet": {
-		accent: "oklch(70.9% 0.1592 293.541199)",
-		chroma: 0.14,
-		canvasL: 0.27,
-		neutralHue: 295,
-		neutralChroma: 0.012,
-		primary: "oklch(82% 0.15 294)",
-		secondary: "oklch(78% 0.11 215)",
-		hues: { heading: 295, label: 330 },
-	},
-	"arnative-emerald": {
-		accent: "oklch(84.5% 0.1299 164.978166)",
-		chroma: 0.12,
-		canvasL: 0.27,
-		neutralHue: 165,
-		neutralChroma: 0.012,
-		primary: "oklch(84% 0.13 165)",
-		secondary: "oklch(78% 0.10 195)",
-		hues: { heading: 165, label: 200 },
-	},
-	"arnative-matrix": {
-		accent: "oklch(86.9% 0.2776 144.466116)",
-		chroma: 0.22,
-		canvasL: 0.24,
-		neutralHue: 145,
-		neutralChroma: 0.02,
-		primary: "oklch(88% 0.24 145)",
-		secondary: "oklch(76% 0.16 165)",
-		surfaceMsg: "oklch(24% 0.035 145)",
-		hues: {
-			heading: 145, link: 145, label: 145,
-			keyword: 145, func: 145, variable: 145, string: 145, number: 145, type: 145,
-		},
+		primary: "oklch(88.8% 0.181 96)",
+		secondary: "oklch(84.2% 0.172 86)",
+		tone: "oklch(95.1% 0.073 196)",
+		// Teal panel, deepened to L:19% for stealth dark contrast.
+		surfaceMsg: "oklch(19% 0.04 191)",
+		// The label tier follows the accent (soft cyan); the gold signature lives on
+		// headings and links instead, so the theme keeps two tones without the label gap.
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "primary",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: { heading: 96, label: 96, link: 196, code: 196, bullet: 193, border: 86, selected: 86 },
 	},
 	"arnative-cyberpunk": {
-		accent: "oklch(76% 0.22 355)",
-		chroma: 0.2,
+		// Neon fuchsia focus (#ea00d9, accent), electric cyan headings & model (#0abdc6, primary),
+		// deep purple secondary (#711c91, secondary), and deep violet panels.
+		accent: "oklch(76% 0.22 332)",
+		chroma: 0.22,
 		canvasL: 0.24,
 		neutralHue: 275,
 		neutralChroma: 0.02,
-		primary: "oklch(88% 0.18 95)",
-		secondary: "oklch(82% 0.16 200)",
-		surfaceMsg: "oklch(24% 0.035 200)",
-		borderAccent: "secondary",
+		primary: "oklch(72.7% 0.123 201)",
+		secondary: "oklch(42.4% 0.183 314)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
 		headingColor: "primary",
-		codeColor: "secondary",
-		bulletColor: "primary",
-		keywordColor: "secondary",
-		hues: {
-			heading: 95, link: 200, label: 200, code: 200, bullet: 95, border: 200, selected: 200, searchMatch: 95,
-			keyword: 200, func: 95, variable: 355, string: 140, number: 45, type: 200,
-		},
-	},
-	"arnative-synthwave": {
-		accent: "oklch(80% 0.18 50)",
-		chroma: 0.17,
-		canvasL: 0.24,
-		neutralHue: 300,
-		neutralChroma: 0.015,
-		primary: "oklch(78% 0.19 339)",
-		secondary: "oklch(82% 0.16 185)",
-		surfaceMsg: "oklch(24% 0.03 300)",
-		borderAccent: "secondary",
-		codeColor: "secondary",
-		bulletColor: "primary",
-		hues: {
-			heading: 50, link: 185, label: 185, code: 185, bullet: 339, border: 185, selected: 185, searchMatch: 50,
-			keyword: 185, func: 50, variable: 339, string: 45, number: 339, type: 290,
-		},
-	},
-	"arnative-gruvbox": {
-		accent: "oklch(76% 0.15 45)",
-		chroma: 0.14,
-		canvasL: 0.24,
-		neutralHue: 70,
-		neutralChroma: 0.015,
-		primary: "oklch(84% 0.14 83)",
-		secondary: "oklch(78% 0.10 175)",
-		borderAccent: "secondary",
-		headingColor: "primary",
-		codeColor: "secondary",
+		linkColor: "primary",
+		codeColor: "accent",
 		bulletColor: "accent",
 		hues: {
-			heading: 83, link: 175, label: 175, code: 175, bullet: 45, border: 83, selected: 83, searchMatch: 83,
-			keyword: 45, func: 83, variable: 175, string: 145, number: 45, type: 83,
+			heading: 201, label: 201, link: 201, code: 332, bullet: 332, border: 201, selected: 201, searchMatch: 332,
+			keyword: 332, func: 201, variable: 332, string: 140, number: 45, type: 201,
+		},
+	},
+	"arnative-crimson": {
+		// Garnet red focus (#941b0c, accent), fiery burnt orange headings (#bc3908 adjusted to L:58%, primary),
+		// golden amber secondary (#f6aa1c, secondary), and deep red-brown panels (#361715, surfaceMsg).
+		accent: "oklch(74% 0.16 31)",
+		chroma: 0.16,
+		canvasL: 0.24,
+		neutralHue: 31,
+		neutralChroma: 0.015,
+		primary: "oklch(58% 0.175 37)",
+		secondary: "oklch(79.2% 0.161 75)",
+		tone: "oklch(82% 0.14 70)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 37, label: 37, link: 70, code: 70, bullet: 31, border: 75, selected: 75, searchMatch: 31,
+			keyword: 31, func: 75, variable: 31, string: 145, number: 75, type: 70,
+		},
+	},
+	"arnative-matrix": {
+		// Medium-jungle green focus (#009a22, accent), bright phosphor-green headings & model (#00ff2b, primary),
+		// lime green secondary (#36ba01, secondary), and jet-black teal panels (#0a2e36, surfaceMsg).
+		// AccentSoft provides the bright, soft matrix pastel green for footer labels.
+		accent: "oklch(74% 0.191 144)",
+		chroma: 0.19,
+		canvasL: 0.24,
+		neutralHue: 215,
+		neutralChroma: 0.015,
+		primary: "oklch(86.7% 0.287 143)",
+		secondary: "oklch(69% 0.223 140)",
+		tone: "oklch(82% 0.12 175)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "primary",
+		hues: {
+			heading: 143, label: 143, link: 175, code: 175, bullet: 143, border: 140, selected: 140, searchMatch: 144,
+			keyword: 144, func: 143, variable: 175, string: 144, number: 85, type: 175,
+		},
+	},
+	"arnative-neutral": {
+		// Grey-olive focus (#8a817c, accent), powder-blush warm headings (#e0afa0, primary),
+		// silver grey links/code & secondary (#bcb8b1, secondary), and deep warm-taupe panels.
+		accent: "oklch(76% 0.035 51)",
+		chroma: 0.035,
+		canvasL: 0.24,
+		neutralHue: 58,
+		neutralChroma: 0.008,
+		primary: "oklch(79.5% 0.061 38)",
+		secondary: "oklch(78.4% 0.011 82)",
+		tone: "oklch(82% 0.015 82)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 38, label: 38, link: 82, code: 82, bullet: 51, border: 82, selected: 82, searchMatch: 51,
+			keyword: 51, func: 38, variable: 82, string: 97, number: 51, type: 82,
+		},
+	},
+	"arnative-zinc": {
+		// Zinc: ash grey focus (#b8bdb5, accent), cool steel headings & model (#889696, primary),
+		// dust grey footer labels & secondary (#d2d4c8, secondary), and deep slate-zinc panels.
+		accent: "oklch(79.2% 0.035 133)",
+		chroma: 0.035,
+		canvasL: 0.25,
+		neutralHue: 120,
+		neutralChroma: 0.008,
+		primary: "oklch(66.2% 0.016 197)",
+		secondary: "oklch(86.5% 0.016 114)",
+		tone: "oklch(80% 0.03 197)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 197, label: 197, link: 197, code: 197, bullet: 133, border: 114, selected: 114, searchMatch: 133,
+			keyword: 133, func: 197, variable: 114, string: 114, number: 114, type: 197,
 		},
 	},
 	"arnative-nord": {
-		accent: "oklch(74% 0.09 310)",
-		chroma: 0.07,
-		canvasL: 0.3,
-		neutralHue: 240,
-		neutralChroma: 0.01,
-		primary: "oklch(78% 0.08 217)",
-		secondary: "oklch(82% 0.09 195)",
-		borderAccent: "secondary",
-		codeColor: "secondary",
-		bulletColor: "primary",
+		// Nord polar night: dark slate canvas, polar navy focus (#3c455c adapted to L:76%, accent),
+		// frosted blue-grey headings & model (#697d97, primary), slate-purple footer labels (#777696, secondary),
+		// and deep slate-blue panels.
+		accent: "oklch(76% 0.06 268)",
+		chroma: 0.06,
+		canvasL: 0.26,
+		neutralHue: 255,
+		neutralChroma: 0.012,
+		primary: "oklch(58.3% 0.047 255)",
+		secondary: "oklch(57.8% 0.049 286)",
+		tone: "oklch(80% 0.05 194)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
 		hues: {
-			heading: 75, link: 195, label: 195, code: 195, bullet: 217, border: 217, selected: 217, searchMatch: 75,
-			keyword: 217, func: 195, variable: 217, string: 145, number: 310, type: 195,
+			heading: 255, label: 255, link: 194, code: 194, bullet: 268, border: 286, selected: 286, searchMatch: 268,
+			keyword: 268, func: 255, variable: 286, string: 131, number: 286, type: 194,
 		},
 	},
 	"arnative-dracula": {
-		accent: "oklch(76% 0.18 330)",
-		chroma: 0.14,
-		canvasL: 0.29,
-		neutralHue: 285,
+		// Dracula: night canvas #282a36 with #44475a panels, pink focus #ff80bf (accent),
+		// purple headings & model name #9580ff (primary), bright yellow footer labels #ffff80 (secondary),
+		// cyan links and code #8be9fd (tone).
+		accent: "oklch(76.2% 0.168 351)",
+		chroma: 0.17,
+		canvasL: 0.28,
+		neutralHue: 278,
 		neutralChroma: 0.012,
-		primary: "oklch(78% 0.15 295)",
-		secondary: "oklch(82% 0.13 190)",
+		primary: "oklch(67.8% 0.181 288)",
+		secondary: "oklch(97.5% 0.149 109)",
+		tone: "oklch(86% 0.09 213)",
+		surfaceMsg: "primary",
 		borderAccent: "secondary",
-		codeColor: "secondary",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
 		bulletColor: "accent",
 		hues: {
-			heading: 85, link: 190, label: 190, code: 190, bullet: 330, border: 295, selected: 295, searchMatch: 85,
-			keyword: 330, func: 140, variable: 190, string: 85, number: 295, type: 190,
+			heading: 288, label: 288, link: 213, code: 213, bullet: 351, border: 109, selected: 109, searchMatch: 351,
+			keyword: 351, func: 142, variable: 288, string: 109, number: 109, type: 213,
+		},
+	},
+	"arnative-gruvbox": {
+		// Gruvbox dark: warm canvas #282828 with #3c3836 panels, yellow focus #eebd35 (accent),
+		// red headings & model #d83328 (derived from #cc241d, primary), blue-grey footer labels #458588 (secondary),
+		// aqua links and code #83a598 (tone).
+		accent: "oklch(82% 0.153 88)",
+		chroma: 0.15,
+		canvasL: 0.25,
+		neutralHue: 60,
+		neutralChroma: 0.008,
+		primary: "oklch(58% 0.203 29)",
+		secondary: "oklch(57.6% 0.066 199)",
+		tone: "oklch(78% 0.045 170)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 29, label: 29, link: 170, code: 170, bullet: 88, border: 199, selected: 199, searchMatch: 88,
+			keyword: 29, func: 111, variable: 88, string: 83, number: 29, type: 199,
+		},
+	},
+	"arnative-magical": {
+		// Magical: vivid lavender focus (#b892ff, accent), pastel rose/pink headings & model (#ff90b3, primary),
+		// deep vivid purple secondary (#6e44ff, secondary), and deep rose-wine panels.
+		accent: "oklch(73.9% 0.157 299)",
+		chroma: 0.16,
+		canvasL: 0.24,
+		neutralHue: 300,
+		neutralChroma: 0.015,
+		primary: "oklch(78.1% 0.139 1)",
+		secondary: "oklch(55.5% 0.257 285)",
+		tone: "oklch(84% 0.10 320)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 1, label: 1, link: 320, code: 320, bullet: 299, border: 285, selected: 285, searchMatch: 299,
+			keyword: 285, func: 1, variable: 299, string: 140, number: 285, type: 320,
+		},
+	},
+	"arnative-lemonade": {
+		// Lemonade: soft sage focus (#aac0aa, accent), warm peach-orange headings & model (#f4b886, primary),
+		// bright lime-lemon secondary (#cbe896, secondary), and deep peach-wood panels.
+		accent: "oklch(79% 0.06 148)",
+		chroma: 0.06,
+		canvasL: 0.24,
+		neutralHue: 61,
+		neutralChroma: 0.012,
+		primary: "oklch(82.6% 0.095 61)",
+		secondary: "oklch(89.1% 0.11 124)",
+		tone: "oklch(85% 0.08 124)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 61, label: 61, link: 124, code: 124, bullet: 148, border: 124, selected: 124, searchMatch: 148,
+			keyword: 148, func: 61, variable: 124, string: 124, number: 61, type: 124,
+		},
+	},
+	"arnative-blossom": {
+		// Blossom: crimson rose focus (#dd2d4a, accent), blossom pink headings & model (#f26a8d, primary),
+		// soft petal pink secondary (#ffc2d1, secondary), and deep rose-wine panels.
+		accent: "oklch(74% 0.18 18)",
+		chroma: 0.18,
+		canvasL: 0.24,
+		neutralHue: 6,
+		neutralChroma: 0.015,
+		primary: "oklch(69.9% 0.17 6)",
+		secondary: "oklch(87.3% 0.072 2)",
+		tone: "oklch(84% 0.10 350)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 6, label: 6, link: 350, code: 350, bullet: 18, border: 2, selected: 2, searchMatch: 18,
+			keyword: 18, func: 6, variable: 18, string: 140, number: 2, type: 350,
+		},
+	},
+	"arnative-garden": {
+		// Garden: warm earth-gold focus (#dda15e, accent), olive-moss headings & model (#6c7844 adapted from #606c38, primary),
+		// terracotta secondary (#bc6c25, secondary), and deep forest-earth panels.
+		accent: "oklch(75.3% 0.11 68)",
+		chroma: 0.11,
+		canvasL: 0.24,
+		neutralHue: 68,
+		neutralChroma: 0.012,
+		primary: "oklch(55% 0.076 120)",
+		secondary: "oklch(60.9% 0.13 57)",
+		tone: "oklch(80% 0.06 120)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 120, label: 120, link: 120, code: 120, bullet: 68, border: 57, selected: 57, searchMatch: 68,
+			keyword: 68, func: 120, variable: 57, string: 140, number: 57, type: 120,
+		},
+	},
+	"arnative-earthy": {
+		// Earthy: warm tan focus (#a68a64, accent), sage-moss headings & model (#6e7653 adapted from #656d4a, primary),
+		// clay brown secondary (#7f5539, secondary), and deep forest-earth panels.
+		accent: "oklch(76% 0.063 75)",
+		chroma: 0.065,
+		canvasL: 0.24,
+		neutralHue: 75,
+		neutralChroma: 0.012,
+		primary: "oklch(55% 0.053 119)",
+		secondary: "oklch(48.9% 0.07 54)",
+		tone: "oklch(78% 0.04 119)",
+		surfaceMsg: "primary",
+		borderAccent: "accentSoft",
+		headingColor: "primary",
+		linkColor: "tone",
+		codeColor: "tone",
+		bulletColor: "accent",
+		hues: {
+			heading: 119, label: 119, link: 119, code: 119, bullet: 75, border: 54, selected: 54, searchMatch: 75,
+			keyword: 75, func: 119, variable: 54, string: 140, number: 54, type: 119,
 		},
 	},
 };
@@ -275,8 +450,9 @@ function derive(spec) {
 	// lib/ansi.ts). One source keeps the declared value and the runtime one identical.
 	const accentBorderVal = oklch(0.82, c * 0.6, h);
 	const accentVal = oklch(0.78, c, h);
-	const borderAccentRole = spec.borderAccent ?? "accentBorder";
-	const borderAccentVal = { accentBorder: accentBorderVal, secondary: secondaryVal }[borderAccentRole] ?? borderAccentRole;
+	const accentSoftVal = soften(accentVal);
+	const borderAccentRole = spec.borderAccent ?? "accentSoft";
+	const borderAccentVal = { accentBorder: accentBorderVal, accentSoft: accentSoftVal, secondary: secondaryVal }[borderAccentRole] ?? borderAccentRole;
 
 	const vars = {
 		fg: oklch(NEUTRAL.fg, nc, nh),
@@ -285,15 +461,29 @@ function derive(spec) {
 		fgFaint: oklch(NEUTRAL.fgFaint, nc, nh),
 		primary: primaryVal,
 		secondary: secondaryVal,
-		secondarySoft: soften(borderAccentVal),
+		secondarySoft: soften(secondaryVal),
 		accent: accentVal,
-		accentSoft: soften(accentVal),
+		accentSoft: accentSoftVal,
 		accentBorder: accentBorderVal,
 		success: oklch(0.78, Math.min(c, 0.15), sem("success")),
 		error: oklch(0.76, Math.min(c, 0.15), sem("error")),
 		warning: oklch(0.86, Math.min(c, 0.14), sem("warning")),
-		surfaceMsg: spec.surfaceMsg ?? oklch(base, nc * 0.5, nh),
 	};
+	// Optional third signature tone (a color of its own, reused by roles via its var).
+	if (spec.tone) vars.tone = colorLiteral(spec.tone);
+	// Optional heading/model signature tone (e.g. cyberpunk's purple), also a var.
+	if (spec.headingTone) vars.headingTone = colorLiteral(spec.headingTone);
+
+	// The message panel: a literal/hex override, or the name of a var whose hue is
+	// darkened to a stealth dark level (L:19%) — so a theme can reuse an existing signature var
+	// instead of hand-picking a color. Defaults to the neutral canvas tint.
+	if (typeof spec.surfaceMsg === "string" && spec.surfaceMsg in vars) {
+		const src = parseOklch(vars[spec.surfaceMsg]);
+		assert(src !== null, `surfaceMsg var must be an oklch color: ${spec.surfaceMsg}`);
+		vars.surfaceMsg = oklch(0.19, Math.min(src.C * 0.35, 0.05), src.H);
+	} else {
+		vars.surfaceMsg = spec.surfaceMsg ?? oklch(0.19, nc * 0.5, nh);
+	}
 
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
 	const roles = {
@@ -334,7 +524,7 @@ function derive(spec) {
 		mdCodeBlockBorder: "fgMuted",
 		mdQuote: "fgMuted",
 		mdQuoteBorder: "fgMuted",
-		mdHr: "fgFaint",
+		mdHr: spec.hrColor ?? "fgFaint",
 		mdListBullet: spec.bulletColor ?? accentLiteral,
 
 		toolDiffAdded: "success",
@@ -351,7 +541,7 @@ function derive(spec) {
 		syntaxOperator: "fg",
 		syntaxPunctuation: "fgMuted",
 
-		thinkingOff: oklch(THINKING.off, nc, nh),
+		thinkingOff: oklch(spec.thinkingOff ?? THINKING.off, nc, nh),
 		thinkingMinimal: oklch(THINKING.minimal, c * 0.25, h),
 		thinkingLow: oklch(THINKING.low, c * 0.4, h),
 		thinkingMedium: oklch(THINKING.medium, c * 0.6, h),
@@ -390,6 +580,58 @@ function derive(spec) {
 	return { vars, roles, exp };
 }
 
+// --- dual-tone guard -------------------------------------------------------
+
+/** Hues between two colours, 0..180. */
+const hueGap = (a, b) => {
+	const d = Math.abs(hue(a) - hue(b)) % 360;
+	return d > 180 ? 360 - d : d;
+};
+
+/** How far the label tier must sit from the accent. Every theme draws the footer, the
+ *  selected row and the detail line on `borderAccent`; when that shares the accent's hue
+ *  the whole UI reads as one colour, which is how six themes ended up mono-tone. */
+const MIN_HUE_GAP = { default: 25, "arnative": 0, "arnative-cyberpunk": 0, "arnative-crimson": 0, "arnative-matrix": 0, "arnative-neutral": 0, "arnative-gruvbox": 0, "arnative-nord": 0, "arnative-zinc": 0, "arnative-magical": 0, "arnative-lemonade": 0, "arnative-blossom": 0, "arnative-garden": 0, "arnative-earthy": 0 };
+
+function assertDualTone(name, { vars, roles, exp }) {
+	const accent = parseOklch(vars.accent);
+	const labelValue = roles.borderAccent in vars ? vars[roles.borderAccent] : roles.borderAccent;
+	const label = parseOklch(String(labelValue));
+	assert(accent !== null && label !== null, `${name}: accent and borderAccent must both be oklch`);
+	const min = MIN_HUE_GAP[name] ?? MIN_HUE_GAP.default;
+	const gap = hueGap(accent.H, label.H);
+	assert(
+		gap >= min,
+		`${name}: accent ${Math.round(accent.H)} and borderAccent ${Math.round(label.H)} are ${gap.toFixed(0)}° apart, need ${min}°`,
+	);
+	// A label tier without chroma is grey text, not a second tone.
+	const minChroma = name === "arnative-neutral" || name === "arnative-zinc" ? 0.01 : 0.02;
+	assert(label.C >= minChroma, `${name}: borderAccent chroma ${label.C} is too low to read as a tone`);
+	// And it has to stand off the canvas it is drawn on.
+	const ratio = contrast(toHex(labelValue), toHex(exp.pageBg));
+	assert(ratio >= 3, `${name}: borderAccent contrast ${ratio.toFixed(2)} on pageBg is too low`);
+}
+
+// --- cross-theme distinctness ----------------------------------------------
+
+/** Two themes may not share a signature colour: the picker previews one at a time, so a
+ *  repeated accent or footer tier makes two palettes look like the same theme. */
+function assertDistinctThemes(themes) {
+	const seen = new Map();
+	for (const [name, { vars, roles }] of themes) {
+		const label = roles.borderAccent in vars ? vars[roles.borderAccent] : roles.borderAccent;
+		for (const [tier, value] of [
+			["accent", vars.accent],
+			["borderAccent", label],
+		]) {
+			const hex = toHex(value);
+			const other = seen.get(hex);
+			assert(other === undefined, `${name}.${tier} ${hex} repeats ${other}`);
+			seen.set(hex, `${name}.${tier}`);
+		}
+	}
+}
+
 // --- rendering -------------------------------------------------------------
 
 function render(name, { vars, roles, exp }) {
@@ -420,8 +662,12 @@ function render(name, { vars, roles, exp }) {
 
 const check = process.argv.includes("--check");
 let drifted = 0;
+const built = new Map();
 for (const [name, spec] of Object.entries(THEMES)) {
-	const content = render(name, derive({ ...spec, name }));
+	const derived = derive({ ...spec, name });
+	assertDualTone(name, derived);
+	built.set(name, derived);
+	const content = render(name, derived);
 	const file = join(HERE, `${name}.json`);
 	if (check) {
 		const current = await readFile(file, "utf8").catch(() => "");
@@ -434,6 +680,7 @@ for (const [name, spec] of Object.entries(THEMES)) {
 		console.log(`✓ ${name}.json`);
 	}
 }
+assertDistinctThemes(built);
 if (check) {
 	if (drifted) process.exit(1);
 	console.log(`✓ ${Object.keys(THEMES).length} themes in sync with gen-themes.mjs`);

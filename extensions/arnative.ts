@@ -5,6 +5,7 @@
  * Screens share one chrome and one title shape ({@link renderScreen}); a box border takes
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
+import { bindSetModel } from "../lib/provider.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../lib/ansi.ts";
@@ -33,12 +34,13 @@ import {
 	setAutoCompact,
 	type AutoCompactChoice,
 } from "./autocompact.ts";
-import { healNow } from "./model-heal.ts";
+import { cancelManualHeal, healNow } from "./model-heal.ts";
 import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { BACK_KEY_LABEL } from "../lib/shortcuts.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
+import { SHORTCUT_OPEN_ARNATIVE } from "../lib/shortcuts.ts";
 
 export interface ArnativeMenu {
 	value: string;
@@ -583,7 +585,15 @@ export default function (pi: ExtensionAPI) {
 		if (!shouldApplyDefaultTheme(pi.getSettings()?.theme, ctx.ui.getAllThemes())) return;
 		ctx.ui.setTheme(DEFAULT_THEME);
 	});
+	bindSetModel((model) => pi.setModel(model as never));
+	pi.on("session_shutdown", () => cancelManualHeal());
 	registerCommands(pi);
+	for (const key of SHORTCUT_OPEN_ARNATIVE.keys) {
+		pi.registerShortcut(key, {
+			description: "Open Arnative settings menu",
+			handler: (ctx) => arnativeHandler("", ctx as never),
+		});
+	}
 }
 
 // Self-check: `node extensions/arnative.ts`
@@ -658,7 +668,7 @@ if (isMain(import.meta.url)) {
 	// The /arnative picker lists the package's family only; everything else (system, dark,
 	// light, a theme of the user's own) stays in /settings → Theme.
 	assert(isArnativeThemeName("arnative"), "the default theme is family");
-	assert(isArnativeThemeName("arnative-sun"), "a variant is family");
+	assert(isArnativeThemeName("arnative-cyberpunk"), "a variant is family");
 	for (const outsider of ["system", "dark", "light", "omarchy-system", "arnativeX", ""])
 		assert(!isArnativeThemeName(outsider), `${JSON.stringify(outsider)} is not family`);
 
@@ -671,11 +681,11 @@ if (isMain(import.meta.url)) {
 
 	// Live-preview picker (shared by Themes and Headers): move = preview, Enter = keep, Esc = revert.
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
-	const pickerText: ListPickerText = { title: screenTitle("Themes"), description: "sub", legend: "[Esc] Revert" };
+	const pickerText: ListPickerText = { title: screenTitle("Themes"), description: "sub", legend: "[Esc] Back" };
 	const previews: string[] = [];
 	let reverted = 0;
 	let done = 0;
-	const picker = new ListPicker(fakeTheme, nameRows(["arnative", "arnative-nord"]), "arnative", {
+	const picker = new ListPicker(fakeTheme, nameRows(["arnative", "arnative-cyberpunk"]), "arnative", {
 		preview: (n) => previews.push(n),
 		revert: () => reverted++,
 		done: () => done++,
@@ -688,8 +698,8 @@ if (isMain(import.meta.url)) {
 	assert(lines.some((l) => l.includes("→ arnative")), "the cursor marks the live value");
 	assert(!lines.some((l) => l.includes("●")), "no redundant ● column next to the → cursor");
 	picker.handleInput("\x1b[B"); // down
-	assert(previews.length === 1 && previews[0] === "arnative-nord", "move previews immediately");
-	assert(picker.render(50).some((l) => l.includes("→ arnative-nord")), "the cursor follows the preview");
+	assert(previews.length === 1 && previews[0] === "arnative-cyberpunk", "move previews immediately");
+	assert(picker.render(50).some((l) => l.includes("→ arnative-cyberpunk")), "the cursor follows the preview");
 	picker.handleInput("\r"); // enter
 	assert(done === 1 && reverted === 0, "Enter keeps (no revert)");
 	picker.handleInput("\x1b[B");
@@ -699,8 +709,8 @@ if (isMain(import.meta.url)) {
 	// `←` reports upward instead of closing on a screen with a parent, reverting the live
 	// preview first; the root menu has nothing behind it and omits the key.
 	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "the root menu legend omits ←");
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "submenu legend advertises ← Back");
-	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", "submenu legend advertises Esc Back");
+	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [Esc] Back", "live legend advertises Esc Back");
 	let backs = 0;
 	let backReverts = 0;
 	const childPicker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", {
@@ -711,8 +721,9 @@ if (isMain(import.meta.url)) {
 		requestRender: () => {},
 	}, pickerText);
 	childPicker.handleInput("\x1b[D"); // ←
-	assert(backs === 1 && backReverts === 0, "← reports back to the parent and leaves the revert to it");
-	// The root menu has no parent, so ← must still leave the screen — never a dead key.
+	childPicker.handleInput("\x1b"); // Esc
+	assert(backs === 2 && backReverts === 0, "Esc and ← both report back; the parent owns the revert");
+	// The root menu has no parent, so the same keys must still leave the screen.
 	let rootCancels = 0;
 	const rootPicker = new ListPicker(fakeTheme, nameRows(["a"]), undefined, {
 		preview: () => {},
@@ -722,7 +733,8 @@ if (isMain(import.meta.url)) {
 		requestRender: () => {},
 	}, pickerText, false);
 	rootPicker.handleInput("\x1b[D");
-	assert(rootCancels === 1, "← closes the root menu, which has no parent");
+	rootPicker.handleInput("\x1b"); // Esc
+	assert(rootCancels === 2, "Esc and ← close the root menu, which has no parent");
 
 	// The main menu reuses the picker with preview/revert as no-ops: moving changes no
 	// setting, only Enter opens a row. `reverted` proves it.

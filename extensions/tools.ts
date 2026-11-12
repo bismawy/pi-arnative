@@ -141,6 +141,18 @@ export function resHead(theme: Theme): string {
 	return theme.fg("dim", "󱞩");
 }
 
+/** Rows a block of text takes once painted at `width`, blank lines dropped: one long JSON
+ *  string is a single newline but twenty-five rows on screen. */
+const drawnRows = (text: string, width: number): number =>
+	text
+		.split("\n")
+		.filter((l) => l.trim())
+		.reduce((n, l) => n + Math.max(1, Math.ceil(visibleWidth(l) / Math.max(1, width))), 0);
+
+/** A summary is one row by definition: a single-line JSON payload of 40k chars would
+ *  otherwise wrap into a full screen and the box would look expanded while folded. */
+const oneRow = (text: string, inner: number): string => truncateToWidth(text, inner, "…");
+
 // Title line: duration right-aligned and space-aware (title truncated when it
 // doesn't fit); expanded = full title wrapped. All lines stay <= inner (overflow bug).
 export function titleRow(
@@ -412,6 +424,17 @@ const componentLines = (component: any, width: number): string[] => {
 	}
 };
 
+/** Right-align a label on the first row of `rows`, for a row pi did not build: the fold
+ *  hint and the runtime still land where every other box puts them. */
+const rightAlign = (th: Theme, rows: string[], inner: number, right: string): string[] => {
+	if (!right || rows.length === 0) return rows;
+	const label = th.fg("dim", right);
+	const avail = Math.max(4, inner - visibleWidth(label) - 1);
+	const head = truncateToWidth(rows[0]!, avail, "…");
+	const pad = Math.max(1, avail - visibleWidth(head));
+	return [`${head}${" ".repeat(pad)}${label}`, ...rows.slice(1)];
+};
+
 // Status icon + third-party lines -> our box content lines.
 const boxedRows = (icon: string, lines: string[]): string[] => {
 	const body = lines.filter((l) => !isBlankLine(l));
@@ -505,21 +528,50 @@ if (ToolExecutionComponent?.prototype?.render) {
 			// MCP dumps the whole output on error (1-line summary instead), Chrome
 			// DevTools is a bare line, and errors take our own path (pi-web-access'
 			// own error box would nest a box inside a box).
-			const theirs =
-				own && !isErr && !cdp && !MCP_TOOL(name)
-					? safeCall(() => own.call(this, { content: result.content, details: result.details }, opts, th, ctx))
-					: null;
 			return new Lines((width) => {
 				const soft = softSecondaryOf(th);
 				const inner = Math.max(8, width - 4);
 				const icon = isErr ? th.fg("error", "x") : th.fg("success", "✓");
-				const boxed2 = componentLines(theirs, width - 6);
+				// Their renderer already answers `expanded`, so both states are measured: the fold
+				// label appears only when the other state really shows a different number of rows.
+				const theirsAt = (exp: boolean) =>
+					own && !isErr && !cdp && !MCP_TOOL(name)
+						? componentLines(
+								safeCall(() =>
+									own.call(this, { content: result.content, details: result.details }, { ...opts, expanded: exp }, th, ctx),
+								),
+								width - 6,
+							)
+						: [];
+				const boxed2 = theirsAt(opts.expanded);
+				// Only rows on screen decide: a renderer that answers `expanded` with the same visible
+				// height (a trailing newline, a blank row) has nothing to fold.
+				const rowsShown = (rows: string[]) => rows.filter((l) => !isBlankLine(l)).length;
+				const foldHint = rowsShown(theirsAt(!opts.expanded)) === rowsShown(boxed2) ? "" : opts.expanded ? HINT_COLLAPSE : HINT_EXPAND;
 				if (fff && boxed2.length) {
 					const callLines = componentLines(safeCall(() => origCall.call(this)?.call(this, ctx.args, th, ctx)), width - 6);
-					return box(th, width, boxedRows(icon, [callLines[0]?.trim() || displayName(name), ...boxed2]));
+					const head = `${icon} ${callLines[0]?.trim() || th.fg("accent", displayName(name))}`;
+					const right = [durationOf(ctx), foldHint].filter(Boolean).join(" · ");
+					return box(th, width, rightAlign(th, [head, ...boxed2], inner, right));
 				}
-				if (boxed2.length && !cdp) return box(th, width, boxedRows(icon, boxed2));
-				const more = countLines(text) > 1;
+				// Third-party content keeps its own template but not its own chrome: without this the
+				// box had no title row, so the tool name, the runtime and the fold label were all lost.
+				if (boxed2.length && !cdp) {
+					const rows = titleRow(
+						th,
+						icon,
+						th.fg("accent", displayName(name)),
+						mcpInfo(name, ctx.args, th),
+						inner,
+						durationOf(ctx),
+						opts.expanded,
+						foldHint,
+					);
+					return box(th, width, [...rows, ...boxed2]);
+				}
+				// A payload with no newline can still be a full screen of wrapped text, so the row
+				// count is measured at this width: a 40k-char JSON line folds like any other box.
+				const more = drawnRows(text, inner) > 1;
 				const rows = titleRow(
 					th,
 					icon,
@@ -533,7 +585,11 @@ if (ToolExecutionComponent?.prototype?.render) {
 					more ? (opts.expanded ? HINT_COLLAPSE : HINT_EXPAND) : "",
 				);
 				const summary = toolSummary(name, text, ctx.args);
-				rows.push(`${resHead(th)}${summary ? ` ${paintLinks(summary, soft)}` : ""}`);
+				const summaryRow = oneRow(
+					`${resHead(th)}${summary ? ` ${paintLinks(summary, soft)}` : ""}`,
+					inner,
+				);
+				rows.push(summaryRow);
 				if (opts.expanded && more) {
 					// MCP args are gone once the call box is replaced by the result.
 					if (MCP_TOOL(name)) rows.push(th.fg("dim", `args ${JSON.stringify(ctx.args ?? {})}`));
@@ -697,7 +753,8 @@ function minimal(
 				const inner = Math.max(8, width - 4);
 				// Anything the collapsed summary hides gets the standard hint; without it a
 				// two-line box (edit: `+1 / -1`) looks complete while the diff sits behind it.
-				const hasDetail = countLines(text) > 1 || Boolean((result.details as { diff?: string } | undefined)?.diff);
+				const hasDetail =
+					drawnRows(text, inner) > 1 || Boolean((result.details as { diff?: string } | undefined)?.diff);
 				const label = hasDetail ? (expanded ? HINT_COLLAPSE : HINT_EXPAND) : "";
 				const rows = titleRow(
 					theme,
@@ -711,7 +768,7 @@ function minimal(
 				);
 				const resLine = res(result, theme, soft, isErr, expanded);
 				if (expanded) rows.push(...full(result, theme));
-				else if (resLine) rows.push(resLine);
+				else if (resLine) rows.push(oneRow(resLine, inner));
 				return box(theme, width, rows);
 			});
 		},
@@ -1680,5 +1737,65 @@ if (isMain(import.meta.url)) {
 		);
 	}
 
+
+	// --- Third-party boxes carry a title row, so they can be folded like any other ----
+	// pi-web-access paints its own template; without our title row the box lost the tool
+	// name, the runtime and the [show] label, so the only way to expand it was ctrl+o.
+	const paFolding = {
+		toolName: "web_search",
+		toolDefinition: {
+			renderResult: (_r: unknown, o: { expanded?: boolean }) => ({
+				render: () => (o.expanded ? ["a", "b", "c", "d"] : ["a"]),
+			}),
+		},
+	};
+		const paFold = (expanded: boolean) =>
+		(ToolExecutionComponent.prototype.getResultRenderer.call(paFolding) as any)(
+			{ content: [{ type: "text", text: "raw" }], details: {} },
+			{ expanded, isPartial: false },
+			th,
+			{ args: {}, state: {} },
+			).render(80) as string[];
+		const paFolded = paFold(false).map(stripAnsi);
+		const paOpen = paFold(true).map(stripAnsi);
+		assert(paFolded[1]!.includes("search"), "third-party box: the title row names the tool");
+		assert(paFolded[1]!.includes("[show]"), "third-party box: collapsed offers [show]");
+		assert(paOpen[1]!.includes("[hide]"), "third-party box: expanded offers [hide]");
+		assert(paOpen.length > paFolded.length, "third-party box: expanding really shows more rows");
+		// A renderer that ignores `expanded` has nothing to fold, so it gets no label.
+		const flat = { toolName: "web_search", toolDefinition: { renderResult: () => ({ render: () => ["only line"] }) } };
+		for (const expanded of [false, true]) {
+			const rows = (ToolExecutionComponent.prototype.getResultRenderer.call(flat) as any)(
+			{ content: [{ type: "text", text: "raw" }], details: {} },
+			{ expanded, isPartial: false },
+			th,
+			{ args: {}, state: {} },
+			).render(80) as string[];
+			assert(rows.every((l: string) => !l.includes("[show]") && !l.includes("[hide]")), `third-party box: nothing to fold, no label (expanded=${expanded})`);
+		}
+
+	// --- A one-line payload that fills the screen still folds ---------------------
+	// A JSON reply has no newline, so it used to count as one row: no [show], and the
+	// summary row wrapped into 30 rows because nothing clipped it.
+		const longJson = JSON.stringify({ results: [{ url: "https://example.com", text: "x".repeat(4000) }] });
+		const longBox = resRenderer(
+		{ content: [{ type: "text", text: longJson }] },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: {}, state: {} },
+		).render(80) as string[];
+		assert(longBox.some((l: string) => l.includes("[show]")), "a wrapped one-line payload offers [show]");
+		assert(longBox.length <= 6, `a folded box stays short whatever the payload (${longBox.length} rows)`);
+		assert(
+		longBox.every((l: string) => !l.includes("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")),
+		"the summary row is one row: the payload is clipped, not wrapped",
+		);
+		const shortBox = resRenderer(
+		{ content: [{ type: "text", text: "done" }] },
+		{ expanded: false, isPartial: false },
+		th,
+		{ args: {}, state: {} },
+		).render(80) as string[];
+		assert(shortBox.every((l: string) => !l.includes("[show]")), "a one-row answer has nothing to fold, so no label");
 	console.log("OK");
 }

@@ -37,12 +37,14 @@ export const SHORTCUT_RELOAD = build("r");
 export const SHORTCUT_TOGGLE_FOOTER = build("m");
 /** Expand/collapse the task list widget. Same platform split: Alt+o on Windows/WSL. */
 export const SHORTCUT_TOGGLE_TODOS = build("o");
+/** Open the /arnative settings menu. Alt+a on Windows/WSL, Ctrl+alt+a elsewhere. */
+export const SHORTCUT_OPEN_ARNATIVE = build("a");
 /** Scroll the expanded task list: `j` down, `k` up, one task per press. */
 export const SHORTCUT_SCROLL_TODOS_DOWN = build("j");
 export const SHORTCUT_SCROLL_TODOS_UP = build("k");
 
-/** The one "go back" key: `←` leaves a screen for its parent, while Esc closes or reverts
- *  it. Defined here so no screen can advertise a key another screen does not handle. */
+/** The `←` byte matcher. Esc is the advertised way out of a screen (Back, or Close at the
+ *  root); `←` stays as an alias so muscle memory keeps working, but no footer names it. */
 export const BACK_KEY_LABEL = "←";
 export function matchesBack(data: string): boolean {
 	return matchesKey(data, "left");
@@ -65,23 +67,35 @@ const MOVE = keySet("↑↓", "up", "down");
 const CHOOSE = keySet("Enter", "enter");
 const BACK = keySet(BACK_KEY_LABEL, "left");
 const CANCEL = keySet("Esc", "escape");
-const QUIT = keySet("q/Esc", "q", "escape");
+/** The usage dashboard window switch: Tab forward, Shift+Tab back. */
+const RANGE = keySet("Tab", "tab");
+/** Upper case on purpose: the lower case keys already navigate, so a plain r cannot
+ *  start a destructive flow by accident. Both footers name the capital letter. */
+export const RESET_USAGE = keySet("R", "shift+r");
+/** The undo of a reset, offered only while a reset is the last thing that happened. */
+export const UNDO_USAGE = keySet("U", "shift+u");
 
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
-/** Root `/arnative` menu: nothing behind it, so `←` is not advertised — Esc closes. */
+/** Root `/arnative` menu: nothing behind it, so Esc closes. */
 export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
-/** Move-and-open list inside a submenu (the provider list, the provider actions):
- *  `←` steps back to the screen above. */
-export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [BACK.label, "Back"], [CANCEL.label, "Close"]);
-/** Live-preview list: moving applies, Enter keeps, `←` steps out, Esc reverts. */
-export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [BACK.label, "Back"], [CANCEL.label, "Revert"]);
+/** Move-and-open list inside a submenu (the provider list, the provider actions): Esc steps
+ *  back to the screen above, exactly like ←. */
+export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Back"]);
+/** Live-preview list: moving applies, Enter keeps, Esc drops the preview and steps out. */
+export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [CANCEL.label, "Back"]);
 /** A list you only read (the `/todos` recap): moving changes nothing, so there is no Open. */
 export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
-/** The read-only usage dashboard. The full legend needs the room, so a narrow box degrades. */
-export function legendUsage(width: number): string {
-	const full = legend([MOVE.label, "Move"], ["Click", "Open/close"], ["v", "View"], [BACK.label, "Back"], [QUIT.label, "Exit"]);
-	return width >= visibleWidth(full) ? full : legend([QUIT.label, "Exit"]);
+/** The usage dashboard. `reset` adds the key that deletes history, so a screen without
+ *  that key never advertises it; `undo` appears only while a reset can be undone. `v` cycles
+ *  the Provider → Project → Prices views, handled on every view. */
+export function legendUsage(width: number, opts: { reset?: boolean; undo?: boolean } = {}): string {
+	const pairs: [string, string][] = [[MOVE.label, "Move"], [RANGE.label, "Range"], ["Click", "Open/close"], ["v", "View"]];
+	if (opts.reset) pairs.push([CANCEL.label, "Back"], [RESET_USAGE.label, "Reset"]);
+	if (opts.undo) pairs.push([UNDO_USAGE.label, "Undo"]);
+	if (!opts.reset) pairs.push([CANCEL.label, "Back"]);
+	const full = legend(...pairs);
+	return width >= visibleWidth(full) ? full : legend([CANCEL.label, "Back"]);
 }
 
 if (isMain(import.meta.url)) {
@@ -117,22 +131,25 @@ if (isMain(import.meta.url)) {
 	assert(!matchesBack("h"), "a bare letter is not the back key");
 	// The legends are built from the same keys the handlers match, so a key cannot be
 	// advertised on one screen and handled on none.
-	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", `root menu legend pinned, got ${LEGEND_MOVE}`);
-	assert(LEGEND_MOVE.includes("[←] Back"), "the root menu advertises ← Back");
+	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", `submenu legend pinned, got ${LEGEND_MOVE}`);
 	assert(LEGEND_READ_ONLY === "[↑↓] Move  [Esc] Close", `read-only legend pinned, got ${LEGEND_READ_ONLY}`);
 	assert(
-		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${BACK_KEY_LABEL}] Back  [Esc] Revert`,
+		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${CANCEL.label}] Back`,
 		`live legend pinned, got ${LEGEND_LIVE}`,
 	);
 	assert(MOVE.matches("\x1b[A") && MOVE.matches("\x1b[B"), "the ↑↓ key matches both arrows");
 	assert(CHOOSE.matches("\r"), "[Enter] matches carriage return");
-	assert(BACK.matches("\x1b[D"), "[←] in the legend is the same key matchesBack accepts");
+	assert(BACK.matches("\x1b[D"), "← is still the back key, even when the footer names only Esc");
 	assert(CANCEL.matches("\x1b"), "[Esc] matches escape");
-	assert(!CANCEL.matches("\x1b[D"), "[Esc] is not the back key");
-	assert(legendUsage(120).includes(`[${BACK_KEY_LABEL}] Back`), "a wide usage legend advertises back");
+	assert(!CANCEL.matches("\x1b[D"), "[Esc] is not the ← byte sequence");
+	assert(legendUsage(120).includes("[Esc] Back"), "a wide usage legend advertises Esc Back");
 	assert(legendUsage(120).includes("[Click] Open/close"), "a wide usage legend advertises the mouse");
 	assert(legendUsage(120).includes("[v] View"), "a wide usage legend advertises the view key the dashboard handles");
-	assert(legendUsage(20) === "[q/Esc] Exit", "a narrow usage legend degrades to the one key that still fits");
+	assert(legendUsage(20) === "[Esc] Back", "a narrow usage legend degrades to the one key that still fits");
 	assert(!legendUsage(20).includes("[v]"), "the narrow usage legend drops the view key with the rest");
+	assert(legendUsage(160, { reset: true }).includes("[R] Reset"), "a reset-capable dashboard advertises R Reset");
+	assert(!legendUsage(160).includes("Reset"), "the read-only dashboard does not advertise a key it lacks");
+	assert(RESET_USAGE.matches("R") && !RESET_USAGE.matches("r"), "a capital R is shift+r, not r");
+	assert(UNDO_USAGE.matches("U") && !UNDO_USAGE.matches("u"), "a capital U is shift+u, not u");
 	console.log("shortcuts.ts self-check OK");
 }

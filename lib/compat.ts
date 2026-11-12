@@ -7,6 +7,7 @@
  * Two things ride along with the same probe: the real `contextWindow`/`maxTokens`, and
  * (on demand) which `reasoning_effort` names the channel accepts.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { assert, isMain } from "./check.ts";
 
 export type Compat = Record<string, unknown>;
@@ -190,7 +191,6 @@ export function mergeMeta(prev: ModelMeta | undefined, next: ModelMeta): ModelMe
 // pi's levels in clamp order; `off` has no wire name of its own.
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const EFFORT_RANK = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-const PROBED = new Set(EFFORT_RANK);
 const IDENTITY: Record<string, string> = { low: "low", medium: "medium", high: "high", xhigh: "xhigh" };
 const LEVEL_TIMEOUT_MS = 30_000;
 const PROBE_TOKENS = 16;
@@ -228,24 +228,6 @@ export function thinkingPayload(compat: Compat, enabled: boolean): Record<string
 	}
 }
 
-/** Nearest accepted effort, up first (pi's clamp order), ties down. */
-export function nearestEffort(level: string, accepted: Set<string>): string | undefined {
-	const idx = EFFORT_RANK.indexOf(level);
-	if (idx === -1) return undefined;
-	let best: string | undefined;
-	let bestDistance = Number.POSITIVE_INFINITY;
-	for (const candidate of accepted) {
-		const cIdx = EFFORT_RANK.indexOf(candidate);
-		if (cIdx === -1) continue;
-		const distance = cIdx >= idx ? cIdx - idx : (idx - cIdx) * 1.01;
-		if (distance < bestDistance) {
-			bestDistance = distance;
-			best = candidate;
-		}
-	}
-	return best;
-}
-
 /** A map that remaps or drops a level was shaped by the user, not by a probe. */
 export function carriesRemap(map: Record<string, string | null> | undefined): boolean {
 	if (!map) return false;
@@ -256,47 +238,16 @@ export function carriesRemap(map: Record<string, string | null> | undefined): bo
 	return false;
 }
 
-/** Probe results → `thinkingLevelMap`. A rejected level maps to the nearest accepted one;
- *  a level that works stays unmapped, so nothing is pinned that need not be. Undefined when
- *  nothing answered or nothing changed. */
-export function buildEffortMap(current: Record<string, string | null> | undefined, supported: string[]): Record<string, string | null> | undefined {
+/** Probe results -> an exact `thinkingLevelMap`: each accepted effort maps to itself and
+ *  every rejected one is null, so pi offers only the levels the channel really runs and
+ *  never sends one it drops. `off` stays pi's call (it disables thinking; it is not an
+ *  effort). Undefined when nothing answered. */
+export function buildEffortMap(supported: string[]): Record<string, string | null> | undefined {
 	const accepted = new Set(supported);
 	if (accepted.size === 0) return undefined;
 	const out: Record<string, string | null> = {};
-	let changed = false;
-	for (const level of THINKING_LEVELS) {
-		const existing = current?.[level];
-		const optIn = level === "off" || level === "xhigh" || level === "max";
-		if (optIn) {
-			if (existing === undefined) continue; // not offered → not the probe's call
-			if (existing === null || !PROBED.has(existing)) {
-				out[level] = existing;
-				continue;
-			}
-			const from = level === "off" ? "minimal" : level;
-			const value = accepted.has(existing) ? existing : level === "off" && accepted.has("none") ? "none" : nearestEffort(from, accepted);
-			if (!value) {
-				out[level] = null;
-				changed = true;
-				continue;
-			}
-			if (value !== existing) changed = true;
-			out[level] = value;
-			continue;
-		}
-		if (existing !== undefined && existing !== level) {
-			out[level] = existing; // offered under another name: deliberate
-			continue;
-		}
-		if (existing === null) {
-			out[level] = null;
-			continue;
-		}
-		if (accepted.has(level)) continue;
-		out[level] = nearestEffort(level, accepted) ?? null;
-		changed = true;
-	}
-	return changed ? out : undefined;
+	for (const level of THINKING_LEVELS) if (level !== "off") out[level] = accepted.has(level) ? level : null;
+	return out;
 }
 
 export interface EffortProbeOptions {
@@ -304,6 +255,8 @@ export interface EffortProbeOptions {
 	key?: string;
 	headers?: Record<string, string>;
 	fetchImpl?: typeof fetch;
+	signal?: AbortSignal;
+	deadline?: number;
 	/** Called after each level, for a progress row. */
 	onLevel?: (level: string, accepted: boolean | undefined, index: number) => void;
 }
@@ -315,47 +268,70 @@ function isParamRejection(status: number, body: string): boolean {
 	return REJECTION_RE.test(body);
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 /** Every effort name the channel accepts, found with one tiny completion per level.
  *  `[]` means nothing answered — never call that "nothing supported". */
 export async function probeEffort(model: CompatModel, options: EffortProbeOptions): Promise<string[]> {
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const url = `${options.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+	const responses = lower(model.api) === "openai-responses";
+	const url = `${options.baseUrl.replace(/\/+$/, "")}/${responses ? "responses" : "chat/completions"}`;
 	const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json", ...options.headers };
 	if (options.key) headers.authorization = `Bearer ${options.key}`;
 	const accepted: string[] = [];
-
+	const signal = AbortSignal.any([
+		...(options.signal ? [options.signal] : []),
+		...(options.deadline !== undefined ? [AbortSignal.timeout(Math.max(1, options.deadline - Date.now()))] : []),
+	]);
+	const checkStopped = (): void => {
+		signal.throwIfAborted();
+		if (options.deadline !== undefined && Date.now() >= options.deadline) {
+			throw new DOMException("Effort probe budget exhausted", "TimeoutError");
+		}
+	};
 	for (const [index, level] of EFFORT_RANK.entries()) {
-		const body = JSON.stringify({
+		checkStopped();
+		const body = JSON.stringify(responses ? {
+			model: model.id,
+			input: [{ role: "user", content: [{ type: "input_text", text: "ping" }] }],
+			...(model.compat?.supportsMaxOutputTokens === false ? {} : { max_output_tokens: PROBE_TOKENS }),
+			stream: false,
+			store: false,
+			reasoning: { effort: level },
+		} : {
 			model: model.id,
 			messages: [{ role: "user", content: "ping" }],
-			max_tokens: PROBE_TOKENS,
+			[model.compat?.maxTokensField === "max_completion_tokens" ? "max_completion_tokens" : "max_tokens"]: PROBE_TOKENS,
 			stream: false,
 			...(thinkingPayload(model.compat ?? {}, true) ?? {}),
 			reasoning_effort: level,
 		});
 		let verdict: boolean | undefined;
-		// Two attempts per level: a first 400 can be an upstream flake, a second confirms it.
 		for (let attempt = 0; attempt < 2 && verdict === undefined; attempt++) {
+			checkStopped();
 			let status: number;
 			let text: string;
 			try {
-				const response = await fetchImpl(url, { method: "POST", headers, body, signal: AbortSignal.timeout(LEVEL_TIMEOUT_MS) });
+				const response = await fetchImpl(url, { method: "POST", headers, body, signal: AbortSignal.any([signal, AbortSignal.timeout(LEVEL_TIMEOUT_MS)]) });
 				status = response.status;
 				text = (await response.text()).slice(0, 4000);
 			} catch {
+				checkStopped();
 				break; // network/timeout: inconclusive
 			}
+			checkStopped();
 			if (status < 300) {
 				verdict = true;
 				break;
 			}
 			if (status === 429) {
-				await sleep(RETRY_PAUSE_MS);
+				try {
+					await sleep(RETRY_PAUSE_MS, undefined, { signal });
+				} catch (error) {
+					checkStopped();
+					throw error;
+				}
 				continue;
 			}
-			if (!isParamRejection(status, text)) break; // 401/403/5xx without a hint: unknown
+			if (!isParamRejection(status, text)) break;
 			verdict = false;
 		}
 		if (verdict) accepted.push(level);
@@ -387,12 +363,11 @@ if (isMain(import.meta.url)) {
 	assert(mergeMeta({ maxTokens: 4096 }, { maxTokens: 8192 }).maxTokens === 8192, "an output cap only grows");
 	assert(mergeMeta({ contextWindow: 1024 }, { maxTokens: 8192 }).maxTokens === 1024, "a cap above the window clamps to the window");
 
-	assert(nearestEffort("medium", new Set(["low", "high"])) === "high", "a rejected level moves up first");
-	assert(nearestEffort("high", new Set(["low", "medium"])) === "medium", "with no level above it moves down");
-	assert(buildEffortMap(undefined, ["minimal", "low", "high"])?.medium === "high", "a rejected level is remapped");
-	assert(buildEffortMap(undefined, ["minimal", "low", "high"])?.xhigh === undefined, "an opt-in level is not invented");
-	assert(buildEffortMap({ medium: null, high: "high" }, ["high"])?.medium === null, "a deliberate null survives");
-	assert(buildEffortMap({ medium: "high" }, ["high"])?.medium === "high", "a deliberate remap is preserved");
+	assert(buildEffortMap([]) === undefined, "nothing answered writes nothing");
+	const exact = buildEffortMap(["none", "low", "high", "max"])!;
+	assert(exact.low === "low" && exact.high === "high" && exact.max === "max", "an accepted effort maps to itself");
+	assert(exact.minimal === null && exact.medium === null && exact.xhigh === null, "a rejected effort is unsupported, never remapped");
+	assert(exact.off === undefined, "off stays pi's call");
 	assert(carriesRemap({ medium: "high" }) && carriesRemap({ low: null }) && !carriesRemap({ low: "low" }), "only a shaped map counts as deliberate");
 	assert(thinkingPayload({ thinkingFormat: "zai" }, true)?.thinking !== undefined, "a channel that needs a thinking block gets one");
 	assert(isEffortProbeable({ ...base, reasoning: true }), "a reasoning model on a relay is probeable");
@@ -407,7 +382,7 @@ if (isMain(import.meta.url)) {
 	}) as unknown as typeof fetch;
 	const supported = await probeEffort({ ...base, id: "relay-model", reasoning: true }, { baseUrl: base.baseUrl, fetchImpl: fakeFetch });
 	assert(supported.join() === "none,minimal,low,high", "the probe reports exactly the accepted levels");
-	assert(buildEffortMap(undefined, supported)?.medium === "high", "a rejected level is remapped to the nearest accepted one");
+	assert(buildEffortMap(supported)?.medium === null, "a rejected level is not offered");
 	const deadFetch = (async () => ({ status: 401, text: async () => "unauthorized" })) as unknown as typeof fetch;
 	assert((await probeEffort({ ...base, reasoning: true }, { baseUrl: base.baseUrl, fetchImpl: deadFetch })).length === 0, "a credential failure answers nothing, so nothing is written");
 

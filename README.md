@@ -12,7 +12,7 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 
 pi-arnative replaces pi’s default terminal chrome with a unified visual interface.
 
-- Warm Themes: Contrast-checked OKLCH color palettes generated without drift (`arnative` plus 10 variants).
+- Warm Themes: Contrast-checked OKLCH color palettes generated without drift (`arnative` plus eight variants).
 - Tabbed Header: Compact box menu showing Directory, Model, Context, Skills, Extensions, and Shortcuts.
 - Rounded Tool Boxes: Status, spinner, runtime duration, and clickable `[show]` / `[hide]` output toggles.
 - Task List: `todo` tool, `/todos` view, and a boxed widget above the editor that auto-hides 30s after all tasks finish.
@@ -34,7 +34,7 @@ Saved to `~/.pi/agent/arnative/config.json` via `/arnative`:
 - **Footer cost:** off by default. Press `[c]` in the Footers picker to add the session's cost (`$0.42`, `~$0.42` when no provider reported a billed total) to the metrics row; the choice is stored as `footerCost` in `config.json`.
 - **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle the Google gradient sweep.
 - **Auto-compact:** Off by default. **Smart** tiers trigger near ~200k tokens (`≥768k→20%`, `≥384k→40%`, `≥192k→80%`, `<192k→pi core`), or pick a fixed budget (`100k` to `400k`).
-- **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with 6h TTL, reasoning effort probe with 24h TTL), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten.
+- **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with a 6h TTL, reasoning effort probe with a 24h TTL, and a failed fetch of either retried after 1h), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten. `/model-heal` forces every pass, warns that thinking probes can use paid tokens, and shows the stage it is in.
 - **Task list (`todo`):** Stored per session in `~/.pi/agent/arnative/todos/<session-id>.json` (uninstall `@juicesharp/rpiv-todo` first to avoid tool name conflict). Click `[click to expand]` / `[click to collapse]` or press `ctrl+alt+o` (`alt+o`) to toggle; click `↑`/`↓` counters or press `ctrl+alt+j`/`k` (`alt+j`/`k`) to scroll. Auto-hides 30s after completion (set `PI_ARNATIVE_TODO_HIDE_MS` to override, `0` for immediate hide; expanding pauses the timer).
 
 </details>
@@ -78,6 +78,8 @@ module deleted here is pruned from the installed copy (a stale entry point would
 | `/todos` | Full task list recap |
 | `/providers` | Custom provider manager |
 | `/model-heal` | Run `models.json` heal passes now |
+
+In Usage, `R` resets all model/provider statistics after confirmation. Session files stay unchanged and remain available through `/resume`. New messages count from the reset, including messages in existing sessions. The baseline persists in `~/.pi/agent/arnative/usage-baseline.json`; `U` undoes the latest reset while that dashboard remains open. Files from earlier resets in `usage-trash` stay untouched.
 
 <details>
 <summary><b>Keybindings & Platform Notes</b></summary>
@@ -124,7 +126,7 @@ Bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 <details>
 <summary><b>Theme Variants & Development</b></summary>
 
-**Themes (`themes/gen-themes.mjs` + `lib/color.ts`):** `arnative` · `sun` · `zinc` · `violet` · `emerald` · `matrix` · `cyberpunk` · `synthwave` · `gruvbox` · `nord` · `dracula`
+**Themes (`themes/gen-themes.mjs` + `lib/color.ts`):** `arnative` · `arnative-cyberpunk` · `arnative-crimson` · `arnative-matrix` · `arnative-neutral` · `arnative-zinc` · `arnative-nord` · `arnative-dracula` · `arnative-gruvbox`
 
 ```bash
 npm test                              # Run self-checks and unit tests

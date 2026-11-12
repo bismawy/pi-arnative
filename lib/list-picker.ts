@@ -17,7 +17,7 @@ export const LIST_LEGEND_ROOT = LEGEND_ROOT;
 export const LIST_LEGEND_MOVE = LEGEND_MOVE;
 export const LIST_LEGEND_LIVE = LEGEND_LIVE;
 /** A text field: Enter keeps the value, Esc leaves it untouched. */
-export const INPUT_LEGEND = "[Enter] Save  [Esc] Cancel";
+export const INPUT_LEGEND = "[Enter] Save  [Esc] Back";
 
 /** One picker row: `Label · Note`. `note` is absent on the preset lists (themes, headers,
  *  footers), which are bare names. */
@@ -74,6 +74,9 @@ interface ListPickerHooks {
 	/** Description re-read on every render, so the line under the title can follow screen
 	 *  state (the model list shows the API flavor `a` switched to). */
 	description?: () => string;
+	// What the rows are ("models"): shows a filter line under the description, the way
+	// vision-watcher filters its model list. Slash focuses it, Enter keeps it, Esc clears it.
+	search?: string;
 }
 
 /** Box copy, so one picker serves every menu ("Themes - Arnative⠙", "Headers - Arnative⠙", …).
@@ -97,6 +100,11 @@ export class ListPicker implements Component {
 	private readonly edge: (s: string) => string;
 	/** Rows shown before the list scrolls (a relay catalog can be far longer than the screen). */
 	private readonly maxRows: number | undefined;
+	private readonly field: Input | undefined;
+	private typing = false;
+	private get placeholder(): string {
+		return "Type to filter " + (this.hooks?.search ?? "") + "...";
+	}
 
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
@@ -121,6 +129,8 @@ export class ListPicker implements Component {
 		this.selected = Math.max(0, rows.findIndex((r) => r.label === current));
 		this.edge = thinkingColorOf(theme, thinkingLevel);
 		this.maxRows = maxRows;
+		// The live field: accent prompt and a cursor, shown only while typing (render draws the idle line).
+		this.field = hooks.search ? new Input({ prompt: theme.fg("accent", "> "), placeholder: this.placeholder, placeholderStyle: (t) => theme.fg("muted", t) }) : undefined;
 		this.tick = hooks.tickMs ? setInterval(() => hooks.requestRender(), hooks.tickMs) : undefined;
 	}
 
@@ -134,37 +144,93 @@ export class ListPicker implements Component {
 
 	/** Selected row, for callers that need the choice after `done()` resolves. */
 	get index(): number {
-		return this.selected;
+		return this.shown[this.selected] ?? -1;
+	}
+
+	// Rows the search query matches, as indexes into rows. The match is fuzzy (the query's
+	// characters in order, gaps allowed, spaces ignored), so "river flash" and "riverflash"
+	// both find river/.../DeepSeek-V4.1-Flash.
+	private get shown(): number[] {
+		const q = this.query.toLowerCase().replace(/\s+/g, "");
+		const fits = (label: string): boolean => {
+			let at = 0;
+			for (const ch of label.toLowerCase()) if (ch === q[at]) at++;
+			return at === q.length;
+		};
+		return this.rows.flatMap((r, i) => (fits(r.label) ? [i] : []));
+	}
+
+	private get query(): string {
+		return this.field?.getValue() ?? "";
+	}
+
+	private setQuery(query: string): void {
+		this.field?.setValue(query);
+		this.selected = 0;
+		this.hooks.requestRender();
+	}
+
+	// True when the key belongs to the search field. Slash switches typing on and off. While
+	// typing every key is text (Space and digits too) and the arrows edit the field, so
+	// Enter, slash or Esc ends typing and keeps the filter; every command then acts on the
+	// matching rows. Esc one more time is the screen's Back.
+	private searchKey(keyData: string): boolean {
+		const field = this.field;
+		if (!field) return false;
+		const setTyping = (on: boolean): true => {
+			this.typing = on;
+			field.focused = on;
+			this.hooks.requestRender();
+			return true;
+		};
+		if (!this.typing) return keyData === "/" && setTyping(true);
+		if (keyData === "/" || matchesKey(keyData, "enter") || matchesKey(keyData, "escape")) return setTyping(false);
+		if (matchesKey(keyData, "up") || matchesKey(keyData, "down")) return false;
+		const before = this.query;
+		field.handleInput(keyData);
+		if (this.query !== before) this.selected = 0;
+		this.hooks.requestRender();
+		return true;
+	}
+
+	/** Esc/←: `back` owns an uncommitted preview's revert, so it is not duplicated here. */
+	private leave(): void {
+		if (this.hooks.back) {
+			this.hooks.back();
+			return;
+		}
+		if (this.applied !== this.opened) this.hooks.revert();
+		(this.hooks.cancel ?? this.hooks.done)();
 	}
 
 	private move(delta: number): void {
-		const next = Math.min(this.rows.length - 1, Math.max(0, this.selected + delta));
-		if (next === this.selected) return;
+		const shown = this.shown;
+		const next = Math.min(shown.length - 1, Math.max(0, this.selected + delta));
+		if (next === this.selected || next < 0) return;
 		this.selected = next;
 		if (!this.livePreview) {
 			this.hooks.requestRender();
 			return;
 		}
-		this.applied = this.rows[next]!.label;
+		this.applied = this.rows[shown[next]!]!.label;
 		this.hooks.preview(this.applied);
 		this.hooks.requestRender();
 	}
 
 	handleInput(keyData: string): void {
-		if (matchesBack(keyData)) {
-			// Leave for the parent without touching the preview: `back` owns the revert of an
-			// uncommitted preview, because "cancel" here means "close", not "undo".
-			if (this.hooks.back === false) return;
-			if (this.hooks.back) {
-				this.hooks.back();
-				return;
-			}
-			// No parent (the root menu): ← behaves like Esc — close, reverting a live preview.
-			if (this.applied !== this.opened) this.hooks.revert();
-			(this.hooks.cancel ?? this.hooks.done)();
+		if (this.searchKey(keyData)) return;
+		// Esc steps out one level: a screen with a parent reopens it, and the root closes.
+		// ← is the same key for muscle memory, but a fill screen (`back: false`) hides it.
+		if (matchesKey(keyData, "escape")) {
+			this.leave();
 			return;
 		}
-		if (keyData === "Q" || matchesKey(keyData, "q") || matchesKey(keyData, "escape")) {
+		if (matchesBack(keyData)) {
+			if (this.hooks.back === false) return;
+			this.leave();
+			return;
+		}
+		if (keyData === "Q" || matchesKey(keyData, "q")) {
 			if (this.applied !== this.opened) this.hooks.revert();
 			(this.hooks.cancel ?? this.hooks.done)();
 			return;
@@ -194,11 +260,12 @@ export class ListPicker implements Component {
 		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
 		const body: string[] = [];
 		// A long list scrolls a window centered on the cursor, so the box keeps one height.
-		const max = this.maxRows ?? this.rows.length;
-		const windowStart = this.rows.length <= max ? 0 : Math.min(Math.max(0, this.selected - Math.floor(max / 2)), this.rows.length - max);
-		const windowEnd = Math.min(this.rows.length, windowStart + max);
+		const shown = this.shown;
+		const max = this.maxRows ?? shown.length;
+		const windowStart = shown.length <= max ? 0 : Math.min(Math.max(0, this.selected - Math.floor(max / 2)), shown.length - max);
+		const windowEnd = Math.min(shown.length, windowStart + max);
 		for (let i = windowStart; i < windowEnd; i++) {
-			const item = this.rows[i]!;
+			const item = this.rows[shown[i]!]!;
 			const isSelected = i === this.selected;
 			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
 			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
@@ -220,7 +287,14 @@ export class ListPicker implements Component {
 		}
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
 		if (windowStart > 0) body.unshift(truncateToWidth(th.fg("dim", `↑ ${windowStart} more`), width - 4, ""));
-		if (windowEnd < this.rows.length) body.push(truncateToWidth(th.fg("dim", `↓ ${this.rows.length - windowEnd} more`), width - 4, ""));
+		if (windowEnd < shown.length) body.push(truncateToWidth(th.fg("dim", `↓ ${shown.length - windowEnd} more`), width - 4, ""));
+		if (this.field) {
+			// Idle, pi-tui's Input would still paint its fake cursor, so the off state is drawn here:
+			// a disabled prompt (the editor's idle border colour) over the kept query or the placeholder.
+			const idle = th.fg("borderMuted", "> ") + (this.query ? th.fg("text", this.query) : th.fg("dim", this.placeholder));
+			const line = this.typing ? this.field.render(Math.max(1, width - 4)) : [truncateToWidth(idle, width - 4, "")];
+			body.unshift(...line, "");
+		}
 		return renderScreen(
 			th,
 			width,
@@ -313,8 +387,8 @@ export class InputPicker implements Component, Focusable {
 // Self-check: `node lib/list-picker.ts`
 if (isMain(import.meta.url)) {
 	assert(LIST_LEGEND_ROOT === "[↑↓] Move  [Enter] Open  [Esc] Close", "root legend pinned, no ← behind the root menu");
-	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [←] Back  [Esc] Close", "move legend pinned, ← advertised where a back target exists");
-	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [←] Back  [Esc] Revert", "live legend pinned");
+	assert(LIST_LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", "move legend pinned: Esc is Back where a parent exists");
+	assert(LIST_LEGEND_LIVE === "[↑↓] Preview  [Enter] Select  [Esc] Back", "live legend pinned: Esc drops the preview and steps out");
 	const fakeTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 	const quiet = (): void => undefined;
 	const picker = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false);
@@ -402,5 +476,26 @@ if (isMain(import.meta.url)) {
 	assert(!inputCancelled, "Enter is not a cancel");
 	field.handleInput("\x1b");
 	assert(inputCancelled, "Esc cancels the field");
+	// The Thinking flow: / starts typing, every key is text, Enter keeps the filter, then commands act on it.
+	const hits: string[] = [];
+	const filtered = new ListPicker(fakeTheme, [{ label: "river/ds-v4" }, { label: "auto/glm" }], undefined, { preview: () => {}, revert: () => {}, done: () => hits.push("done"), requestRender: () => {}, toggle: () => hits.push("toggle"), press: (k) => { if (/^[0-9]$/.test(k)) hits.push("press " + k); }, search: "models" }, { title: "T", description: "d", legend: "l" }, false);
+	filtered.handleInput("r");
+	assert(filtered.index === 0, "a letter outside typing does not filter");
+	filtered.handleInput("/");
+	for (const ch of "River 7") filtered.handleInput(ch);
+	assert(hits.join() === "" && filtered.index === -1, "while typing, Space and digits are text");
+	filtered.handleInput("\x7f");
+	for (const ch of "ds4") filtered.handleInput(ch);
+	assert(filtered.index === 0 && hits.join() === "", "the filter is fuzzy and ignores spaces: river ds4 finds river/ds-v4");
+	filtered.handleInput("\r");
+	filtered.handleInput("0");
+	filtered.handleInput(" ");
+	assert(hits.join() === "press 0,toggle" && filtered.index === 0, "Enter ends typing without saving, then keys are commands on the match");
+	filtered.handleInput("/");
+	filtered.handleInput("\x1b");
+	assert(hits.join() === "press 0,toggle", "Esc while typing ends typing and keeps the filter, so the screen stays open");
+	filtered.handleInput("\x1b");
+	assert(hits.join().endsWith("done"), "a second Esc, outside typing, leaves the screen");
+
 	console.log("list-picker.ts self-check OK");
 }

@@ -9,7 +9,11 @@
  *   (subagent / nested tool calls) rides on the tool result only, never on an
  *   assistant message, so summing both roles counts it once.
  * - Rollups also keep per-day buckets (UTC) and the session cwd, so /usage can answer
- *   "today" and "per project" from the cache without a full re-scan.
+ *   "today", the range bar (All/Today/7d/30d/3m) and "per project" from the cache without a
+ *   full re-scan.
+ * - A statistics reset writes `usage-baseline.json`: the summary subtracts the baseline
+ *   rollup per file, so earlier messages stop counting in every view while the session
+ *   files stay untouched (see {@link resetUsageStats}).
  */
 import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,8 +31,10 @@ interface UsageEntry {
 	cost: number;
 	/** True when `cost` is the provider-billed total (`totalFromProvider`); false when it is a catalog estimate. */
 	billed: boolean;
-	/** Message timestamp (ms), kept so entries can be bucketed per day. 0 when absent. */
-	ts: number;
+	/** UTC day bucket (`YYYY-MM-DD`) the message counts in. A line without a usable
+	 *  timestamp inherits the file's mtime day (`fallbackDay`), like the range feature
+	 *  always did — an undated record must not fall into 1970 and vanish from every window. */
+	day: string;
 }
 
 interface FileCacheItem {
@@ -81,10 +87,31 @@ function addToRollup(r: Rollup, e: UsageEntry): void {
 	r.billed += e.billed ? e.cost : 0;
 }
 
+/** A time window the dashboard can show. `all` is the whole history. */
+export type UsageRange = "all" | "today" | "7d" | "30d" | "3m";
+
+/** Tab order of the range bar. */
+export const USAGE_RANGES: readonly UsageRange[] = ["all", "today", "7d", "30d", "3m"];
+
 /** UTC day bucket key (`YYYY-MM-DD`) of a timestamp. UTC on purpose: local time would make the
  *  on-disk cache depend on the timezone of the machine that wrote it, so a restore elsewhere
- *  would re-bucket every entry. */
-const dayKey = (ts: number): string => new Date(ts > 0 ? ts : 0).toISOString().slice(0, 10);
+ *  would re-bucket every entry. Exported for the range bar, whose windows share the buckets. */
+export function dayKey(ms: number): string {
+	return new Date(ms > 0 ? ms : 0).toISOString().slice(0, 10);
+}
+
+/** UTC midnight where `range` starts: today, 7 or 30 calendar days back, 3 months back.
+ *  `undefined` for `all`, which has no floor. UTC to match the day buckets: a local-midnight
+ *  floor would cut a UTC+7 "today" at 7am local and drop the morning's spend. */
+export function rangeStart(range: UsageRange, now = Date.now()): number | undefined {
+	if (range === "all") return undefined;
+	const d = new Date(now);
+	d.setUTCHours(0, 0, 0, 0);
+	if (range === "today") return d.getTime();
+	if (range === "3m") d.setUTCMonth(d.getUTCMonth() - 3);
+	else d.setUTCDate(d.getUTCDate() - (range === "7d" ? 6 : 29));
+	return d.getTime();
+}
 
 /** Fold entries into an existing file rollup, updating provider, provider+model and day keys
  *  together in one pass over the entries. */
@@ -96,7 +123,7 @@ function foldInto(rollup: FileRollup, entries: UsageEntry[]): void {
 		addToRollup(rollup.providers[e.provider]!, e);
 		(rollup.providers[key] ??= emptyRollup());
 		addToRollup(rollup.providers[key]!, e);
-		const day = `${dayKey(e.ts)}\u0000${key}`;
+		const day = `${e.day}\u0000${key}`;
 		(rollup.days[day] ??= emptyRollup());
 		addToRollup(rollup.days[day]!, e);
 	}
@@ -400,18 +427,33 @@ function decodeDiskItem(raw: unknown): FileCacheItem | null {
 	const hasDays = d.d !== undefined;
 	if (hasDays) {
 		for (const [dk, a] of Object.entries(d.d!)) {
-			const row = rowOf(a);
-			if (!row) continue;
-			const [msgs, input, output, cacheRead, cacheWrite, cost, billed] = row;
-			Object.assign((rollup.days[dk] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cacheWrite, cost, billed });
+			if (Array.isArray(a)) {
+				// v6+ flat shape: `day\0provider\0model` -> one row.
+				const row = rowOf(a);
+				if (!row) continue;
+				const [msgs, input, output, cacheRead, cacheWrite, cost, billed] = row;
+				Object.assign((rollup.days[dk] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cacheWrite, cost, billed });
+				continue;
+			}
+			// Pre-merge shape (the range-bar cache): `provider\0model` -> `day` -> row. Fold it
+			// into the flat keys so an old cache or baseline still answers the windows; the
+			// item is stamped below current anyway and re-parsed once from its file.
+			if (!a || typeof a !== "object") continue;
+			for (const [day, rowRaw] of Object.entries(a as Record<string, unknown>)) {
+				const row = rowOf(rowRaw);
+				if (!row) continue;
+				const [msgs, input, output, cacheRead, cacheWrite, cost, billed] = row;
+				const flat = `${day}\u0000${dk}`;
+				Object.assign((rollup.days[flat] ??= emptyRollup()), { sessions: 1, msgs, input, output, cacheRead, cacheWrite, cost, billed });
+			}
 		}
 	}
 	return {
 		mtimeMs: d.m,
 		size: d.s,
-		// Only an item carrying `t` is v8: a v7 item (wide rows, day buckets, no `t`) is stamped 7
-		// so the scan re-parses its file once to pick up the tool-result spend it lacks.
-		v: d.t === CACHE_VERSION ? CACHE_VERSION : hasDays ? (wide ? 7 : 6) : 5,
+		// Only an item carrying `t` AND the day map is current: a v9 writer always emits `d`
+		// (empty or not), so a `t` without `d` is a tampered or truncated item, not a v9 one.
+		v: d.t === CACHE_VERSION && d.d !== undefined ? CACHE_VERSION : hasDays ? (wide ? 7 : 6) : 5,
 		cwd: typeof d.w === "string" ? d.w : undefined,
 		consumed: typeof d.c === "number" ? d.c : d.s,
 		rollup,
@@ -544,14 +586,20 @@ function childSessionFiles(dir: string): string[] {
  *  (`ToolResultMessage.usage`), but that spend already sits in the child's own session file
  *  (see {@link scanSessionFiles}), so reading it here would count it twice. The footer reads
  *  it from the branch instead, where no child file exists. */
-function entryOfLine(line: string): UsageEntry | null {
+function entryOfLine(line: string, fallbackDay: string): UsageEntry | null {
 	// Loose prefilter (fast path only): exact key would break on JSON formatting changes
 	// and silently drop usage. The role is re-checked on the parsed object below.
 	if (!line || !line.includes('"role"')) return null;
 	try {
-		const m = JSON.parse(line)?.message;
+		const rec = JSON.parse(line) as { timestamp?: unknown; message?: { role?: string; provider?: string; model?: string; usage?: Record<string, unknown> } };
+		const m = rec?.message;
 		if (m?.role !== "assistant") return null;
-		const u = m.usage || {};
+		const u = (m.usage ?? {}) as { input?: unknown; output?: unknown; cacheRead?: unknown; cacheWrite?: unknown; cost?: { total?: unknown; totalFromProvider?: unknown } };
+		// The session entry carries its own ISO `timestamp`; the inner message carries ms.
+		// Either dates the day bucket — prefer the record's, fall back to the message's,
+		// then to the file's mtime day for records that carry neither.
+		const recTs = typeof rec?.timestamp === "string" ? Date.parse(rec.timestamp) : tsOf(rec?.timestamp);
+		const written = (Number.isFinite(recTs) && recTs > 0 ? recTs : 0) || tsOf(m?.timestamp);
 		return {
 			provider: String(m.provider || "unknown"),
 			model: String(m.model || "unknown"),
@@ -561,7 +609,7 @@ function entryOfLine(line: string): UsageEntry | null {
 			cacheWrite: Number(u.cacheWrite) || 0,
 			cost: Number(u.cost?.total) || 0,
 			billed: u.cost?.totalFromProvider === true,
-			ts: tsOf(m.timestamp),
+			day: written > 0 ? dayKey(written) : fallbackDay,
 		};
 	} catch {
 		return null;
@@ -592,9 +640,10 @@ function sessionCwdOf(line: string): string | undefined {
  * Parse newline-terminated lines from a buffer. The returned offset is byte-granular, so it can
  * be fed back to `readSync`; a trailing segment without a newline counts only when it parses, so
  * a write caught mid-flight is left for the next scan rather than dropped. `cwd` is set only
- * when the buffer starts with the session header, i.e. on a whole-file parse.
+ * when the buffer starts with the session header, i.e. on a whole-file parse. `fallbackDay`
+ * dates a line that carries no usable timestamp of its own (the file's mtime day).
  */
-function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number; cwd?: string } {
+function parseBuffer(buf: Buffer, fallbackDay: string): { entries: UsageEntry[]; consumed: number; cwd?: string } {
 	const entries: UsageEntry[] = [];
 	let start = 0;
 	let consumed = 0;
@@ -605,7 +654,7 @@ function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number; cw
 		const line = buf.toString("utf8", start, nl);
 		// Only the buffer's first line can be the session header; a tail never contains it.
 		if (start === 0) cwd = sessionCwdOf(line) ?? cwd;
-		const entry = entryOfLine(line);
+		const entry = entryOfLine(line, fallbackDay);
 		if (entry) entries.push(entry);
 		start = nl + 1;
 		consumed = start;
@@ -613,7 +662,7 @@ function parseBuffer(buf: Buffer): { entries: UsageEntry[]; consumed: number; cw
 	if (start < buf.length) {
 		const tail = buf.toString("utf8", start);
 		if (start === 0) cwd = sessionCwdOf(tail) ?? cwd;
-		const entry = entryOfLine(tail);
+		const entry = entryOfLine(tail, fallbackDay);
 		if (entry) {
 			entries.push(entry);
 			consumed = buf.length;
@@ -656,6 +705,7 @@ function readTail(filePath: string, fromByte: number): Buffer | null {
 }
 
 let cachedSummary: UsageSummary | null = null;
+let cachedRange: UsageRange | null = null;
 let lastScanMs = 0;
 
 /** Drop every in-memory memo so the next scan reads the cache file and the session files
@@ -665,8 +715,69 @@ let lastScanMs = 0;
 export function resetUsageCache(): void {
 	diskMemo = null;
 	priceMemo = null;
+	baselineMemo = null;
 	cachedSummary = null;
+	cachedRange = null;
 	lastScanMs = 0;
+}
+
+// =============================================================================
+// Reset statistics without changing the session history
+// =============================================================================
+
+const baselinePath = (): string => join(cacheDir(), "usage-baseline.json");
+let baselineMemo: { path: string; mtimeMs: number; size: number; items: Map<string, FileCacheItem> } | null = null;
+
+function loadUsageBaseline(): Map<string, FileCacheItem> {
+	const path = baselinePath();
+	if (!existsSync(path)) {
+		baselineMemo = null;
+		return new Map();
+	}
+	const stat = statSync(path);
+	if (baselineMemo?.path === path && baselineMemo.mtimeMs === stat.mtimeMs && baselineMemo.size === stat.size) return baselineMemo.items;
+	const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid usage baseline");
+	const items = new Map<string, FileCacheItem>();
+	for (const [key, value] of Object.entries(raw)) {
+		const item = decodeDiskItem(value);
+		if (!item) throw new Error("Invalid usage baseline entry");
+		items.set(join(getAgentDir(), "sessions", key), item);
+	}
+	baselineMemo = { path, mtimeMs: stat.mtimeMs, size: stat.size, items };
+	return items;
+}
+
+function writeUsageBaseline(raw: string | null): void {
+	const path = baselinePath();
+	if (raw === null) rmSync(path, { force: true });
+	else {
+		mkdirSync(cacheDir(), { recursive: true });
+		const tmp = path + "." + process.pid + ".tmp";
+		try {
+			writeFileSync(tmp, raw, "utf8");
+			renameSync(tmp, path);
+		} finally {
+			rmSync(tmp, { force: true });
+		}
+	}
+	resetUsageCache();
+}
+
+/** Snapshot complete messages, including daily totals, so appended messages still count. */
+export function resetUsageStats(): string | null {
+	collectUsageSummary(true, "today");
+	const path = baselinePath();
+	const previous = existsSync(path) ? readFileSync(path, "utf8") : null;
+	const sessionsDir = join(getAgentDir(), "sessions");
+	const snapshot = Object.fromEntries([...loadDiskCache()].map(([file, item]) => [relative(sessionsDir, file), encodeDiskItem(item)]));
+	writeUsageBaseline(JSON.stringify(snapshot));
+	return previous;
+}
+
+/** Restore the previous counting baseline; session files stay where they are. */
+export function restoreUsageStats(previous: string | null): void {
+	writeUsageBaseline(previous);
 }
 
 /** A provider map as folded per file: provider → its models. Shared by the global provider
@@ -763,7 +874,7 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 				output: mData.output,
 				cacheRead: mData.cacheRead,
 				cacheWrite: mData.cacheWrite,
-				totalTokens: mData.input + mData.output,
+				totalTokens: mData.input + mData.output + mData.cacheRead,
 				cost: mData.billed,
 				estimatedCost,
 			});
@@ -777,7 +888,7 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 			input: pData.input,
 			output: pData.output,
 			cacheRead: pData.cacheRead,
-			totalTokens: pData.input + pData.output,
+			totalTokens: pData.input + pData.output + pData.cacheRead,
 			cost: pData.billed,
 			estimatedCost: providerEstimate,
 			models,
@@ -788,15 +899,71 @@ function providerStatsOf(map: ProviderMap, priceTable: PriceTable): UsageProvide
 	return providers;
 }
 
-export function collectUsageSummary(forceScan = false): UsageSummary {
+/** One file's rollup, narrowed to the days a range covers. Reads the flat
+ *  `day\0provider\0model` buckets and emits the same provider/provider\0model keys the
+ *  `all` path reads straight from `providers`, so the aggregation below runs once for both. */
+function rollupSince(rollup: FileRollup, sinceDay: string): Record<string, Rollup> {
+	const out: Record<string, Rollup> = {};
+	for (const [dk, r] of Object.entries(rollup.days)) {
+		// Day keys start with the fixed-width `YYYY-MM-DD`.
+		const day = dk.slice(0, 10);
+		if (day < sinceDay) continue;
+		const pm = dk.slice(11);
+		const sep = pm.indexOf("\u0000");
+		if (sep === -1) continue;
+		const pname = pm.slice(0, sep);
+		for (const key of [pm, pname]) {
+			const o = (out[key] ??= emptyRollup());
+			o.msgs += r.msgs;
+			o.input += r.input;
+			o.output += r.output;
+			o.cacheRead += r.cacheRead;
+			o.cacheWrite += r.cacheWrite;
+			o.cost += r.cost;
+			o.billed += r.billed;
+		}
+	}
+	for (const r of Object.values(out)) r.sessions = 1;
+	return out;
+}
+
+const ROLLUP_FIELDS = ["msgs", "input", "output", "cacheRead", "cacheWrite", "cost", "billed"] as const;
+
+/** A file's provider rows as the summary should count them: the range's day window when one
+ *  is active, minus the statistics-reset baseline — field-wise, floored at 0, empty rows
+ *  dropped. Both the global provider list and the per-project breakdown read this same map,
+ *  so a project never counts what the provider row above it excluded. */
+function effectiveProviders(rollup: FileRollup, baseline: FileRollup | undefined, sinceDay: string, needDays: boolean): Record<string, Rollup> {
+	const current = needDays ? rollupSince(rollup, sinceDay) : rollup.providers;
+	const before = baseline === undefined ? undefined : needDays ? rollupSince(baseline, sinceDay) : baseline.providers;
+	if (before === undefined) return current;
+	const out: Record<string, Rollup> = {};
+	for (const [key, r] of Object.entries(current)) {
+		const b = before[key];
+		const nr = { ...r };
+		for (const f of ROLLUP_FIELDS) nr[f] = Math.max(0, r[f] - (b?.[f] ?? 0));
+		if (nr.msgs === 0) continue;
+		out[key] = nr;
+	}
+	return out;
+}
+
+export function collectUsageSummary(forceScan = false, range: UsageRange = "all"): UsageSummary {
 	const now = Date.now();
-	if (!forceScan && cachedSummary && now - lastScanMs < 5000) {
+	if (!forceScan && cachedSummary && cachedRange === range && now - lastScanMs < 5000) {
 		return cachedSummary;
 	}
+
+	// A range reads day buckets. Every v9 item carries them, and anything older is already
+	// re-parsed by the version stamp, so no separate "needs days" pass is required.
+	const start = rangeStart(range, now);
+	const sinceDay = start === undefined ? "" : dayKey(start);
+	const needDays = start !== undefined;
 
 	const sessionsDir = join(getAgentDir(), "sessions");
 	const files = scanSessionFiles(sessionsDir);
 	const diskCache = loadDiskCache();
+	const baseline = loadUsageBaseline();
 	let cacheDirty = false;
 
 	const priceTable = loadPriceTable();
@@ -804,7 +971,8 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	/** Per-project aggregation: a file's project is its cwd, so each file folds into exactly
 	 *  one entry, whose providers keep their own model rows for the Project view. */
 	const projectMap = new Map<string, { sessions: Set<string>; providers: ProviderMap }>();
-	/** Day buckets across all files, keyed by the UTC day (the `day\0provider\0model` prefix). */
+	/** Day buckets across all files, keyed by the UTC day (the `day` prefix of each bucket
+	 *  key), baseline-subtracted so the windows answer the same statistics the rows do. */
 	const dayMap = new Map<string, Rollup>();
 
 	for (const file of files) {
@@ -818,6 +986,28 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		let cached = diskCache.get(file);
 		if (!(cached && cached.v === CACHE_VERSION && cached.rollup)) cached = undefined;
 
+		const fallbackDay = dayKey(stat.mtimeMs);
+		const baselineItem = baseline.get(file);
+		const reparse = (): FileCacheItem => {
+			// Keep the prefix's original day buckets: undated records otherwise inherit the
+			// file's new modification day when a cache is rebuilt after an append. The rollup
+			// seeds from the baseline so the cached item still holds the full history — the
+			// baseline is subtracted at read time, never baked into the cache.
+			const offset = baselineItem && (baselineItem.consumed ?? 0) <= stat.size ? (baselineItem.consumed ?? 0) : 0;
+			const rollup: FileRollup = offset > 0 ? structuredClone(baselineItem!.rollup) : { providers: {}, days: {} };
+			const bytes = offset > 0 ? (readTail(file, offset) ?? readFileSync(file).subarray(offset)) : readFileSync(file);
+			const parsed = parseBuffer(bytes, fallbackDay);
+			foldInto(rollup, parsed.entries);
+			return {
+				mtimeMs: stat.mtimeMs,
+				size: stat.size,
+				v: CACHE_VERSION,
+				cwd: parsed.cwd ?? (offset > 0 ? baselineItem!.cwd : undefined) ?? cached?.cwd,
+				consumed: offset + parsed.consumed,
+				rollup,
+			};
+		};
+
 		if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
 			// Unchanged since the last scan: its rollup already holds everything.
 		} else if (cached && (cached.consumed ?? 0) > 0 && stat.size > (cached.consumed ?? 0)) {
@@ -826,7 +1016,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			// re-parses whole — see the final branch.) The cwd stays the one already stored:
 			// the tail does not contain the session header, so the head is not re-read.
 			const tail = readTail(file, cached.consumed!);
-			const parsed = tail ? parseBuffer(tail) : null;
+			const parsed = tail ? parseBuffer(tail, fallbackDay) : null;
 			if (parsed) {
 				foldInto(cached.rollup, parsed.entries);
 				cached.consumed = cached.consumed! + parsed.consumed;
@@ -834,38 +1024,41 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 				cached.size = stat.size;
 			} else {
 				// Unreadable: fall back to whole-file.
-				const full = parseBuffer(readFileSync(file));
-				cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, cwd: full.cwd ?? cached.cwd, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+				cached = reparse();
 				diskCache.set(file, cached);
 			}
 			cacheDirty = true;
 		} else {
-			// Whole-file parse: the session header (first line) carries the cwd.
-			const full = parseBuffer(readFileSync(file));
-			cached = { mtimeMs: stat.mtimeMs, size: stat.size, v: CACHE_VERSION, cwd: full.cwd ?? cached?.cwd, consumed: full.consumed, rollup: rollupOfFile(full.entries) };
+			cached = reparse();
 			diskCache.set(file, cached);
 			cacheDirty = true;
 		}
+
+		// What this file contributes: range window and reset baseline already applied.
+		const effective: FileRollup = { providers: effectiveProviders(cached.rollup, baselineItem?.rollup, sinceDay, needDays), days: {} };
 
 		// A file with no cwd in its cache item lands in "unknown" rather than being re-read.
 		const projectName = cached.cwd ?? "unknown";
 		let project = projectMap.get(projectName);
 		if (!project) projectMap.set(projectName, (project = { sessions: new Set(), providers: new Map() }));
 		project.sessions.add(file);
-		foldFileIntoProviderMap(providerMap, file, cached.rollup);
-		foldFileIntoProviderMap(project.providers, file, cached.rollup);
+		foldFileIntoProviderMap(providerMap, file, effective);
+		foldFileIntoProviderMap(project.providers, file, effective);
+		const baseDays = baselineItem?.rollup.days;
 		for (const [dk, r] of Object.entries(cached.rollup.days)) {
-			// Day keys start with the fixed-width `YYYY-MM-DD`.
+			// Day keys start with the fixed-width `YYYY-MM-DD`; the baseline's same-key row is
+			// subtracted field-wise so the windows never resurrect pre-reset spend.
 			const day = dk.slice(0, 10);
+			const b = baseDays?.[dk];
 			let t = dayMap.get(day);
 			if (!t) dayMap.set(day, (t = emptyRollup()));
-			t.msgs += r.msgs;
-			t.input += r.input;
-			t.output += r.output;
-			t.cacheRead += r.cacheRead;
-			t.cacheWrite += r.cacheWrite;
-			t.cost += r.cost;
-			t.billed += r.billed;
+			t.msgs += Math.max(0, r.msgs - (b?.msgs ?? 0));
+			t.input += Math.max(0, r.input - (b?.input ?? 0));
+			t.output += Math.max(0, r.output - (b?.output ?? 0));
+			t.cacheRead += Math.max(0, r.cacheRead - (b?.cacheRead ?? 0));
+			t.cacheWrite += Math.max(0, r.cacheWrite - (b?.cacheWrite ?? 0));
+			t.cost += Math.max(0, r.cost - (b?.cost ?? 0));
+			t.billed += Math.max(0, r.billed - (b?.billed ?? 0));
 		}
 	}
 
@@ -929,7 +1122,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 			input,
 			output,
 			cacheRead,
-			totalTokens: input + output,
+			totalTokens: input + output + cacheRead,
 			cost,
 			estimatedCost: est,
 			providers: pStats,
@@ -962,7 +1155,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 		input: totalInp,
 		output: totalOut,
 		cacheRead: totalCache,
-		totalTokens: totalInp + totalOut,
+		totalTokens: totalInp + totalOut + totalCache,
 		cost: totalCost,
 		reportedCost: totalCost,
 		estimatedCost,
@@ -975,6 +1168,7 @@ export function collectUsageSummary(forceScan = false): UsageSummary {
 	}
 
 	cachedSummary = { providers, projects, totals };
+	cachedRange = range;
 	lastScanMs = now;
 	return cachedSummary;
 }

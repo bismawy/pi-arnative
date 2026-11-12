@@ -670,6 +670,11 @@ interface UsageTotals {
 	assistant?: boolean;
 }
 
+let usageScanManager: object | undefined;
+let usageScanLeaf: unknown;
+// A stream mutates the same leaf, so its delta updates the cached prefix. A different
+// manager or leaf must rescan: equal-length /tree branches can have different usage.
+
 let usageScanNums: UsageTotals = { inp: 0, out: 0, read: 0, costBilled: 0, costEstimated: 0 };
 // Usage of the branch's last entry at scan time (assistant or tool result): a stream tick
 // mutates that entry in place (branch length unchanged), so the delta is applied on top of
@@ -799,6 +804,7 @@ export function getUsage(
 	const branch = ctx.sessionManager.getBranch();
 	// Memoized on models.json's stat, so this is one statSync per frame, not a read.
 	const priceTable = loadPriceTable();
+	const leaf = branch[branch.length - 1];
 	const last = lastUsageOf(branch, priceTable);
 	let inp = 0;
 	let out = 0;
@@ -807,7 +813,7 @@ export function getUsage(
 	let costEstimated = 0;
 	let winInp = 0;
 	let winRead = 0;
-	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
+	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen && ctx.sessionManager === usageScanManager && leaf === usageScanLeaf) {
 		// Cached sums + the streaming delta of the last message (mutated in place).
 		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
 		out = usageScanNums.out + last.out - usageScanLast.out;
@@ -858,6 +864,8 @@ export function getUsage(
 		}
 		usageScanWin = { inp: winInp, read: winRead };
 		usageScanWinLast = last.assistant === true && assist.length > 2 ? { inp: last.inp, read: last.read } : null;
+		usageScanManager = ctx.sessionManager;
+		usageScanLeaf = leaf;
 	}
 	usageTotals = { inp, read };
 	usageWindow = { inp: winInp, read: winRead };
@@ -1117,6 +1125,8 @@ export default function (pi: ExtensionAPI) {
 			// previous session's sums whenever the fresh branch happens to be the same length.
 			usageScanAt = 0;
 			usageScanLen = -1;
+			usageScanManager = undefined;
+			usageScanLeaf = undefined;
 		} else {
 			currentModel = (globalThis as Record<symbol, any>)[MODEL_KEY] ?? ctx.model;
 			currentThinkingLevel = (globalThis as Record<symbol, any>)[THINKING_KEY] ?? ctx.thinkingLevel;
@@ -1465,6 +1475,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		usageScanManager = undefined;
+		usageScanLeaf = undefined;
 		stopWorkingClock();
 		stopIdleProbe();
 		stopClockTick();
