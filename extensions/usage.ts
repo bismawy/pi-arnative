@@ -20,8 +20,6 @@ import {
 	getModelAllTimeUsage,
 	hasPrice,
 	loadPriceTable,
-	dayKey,
-	rangeStart,
 	resetUsageCache,
 	resetUsageStats,
 	restoreUsageStats,
@@ -71,6 +69,20 @@ export interface RowItem {
 	/** Prices view only: a model used in the sessions but absent from the price table. */
 	unpriced?: boolean;
 }
+
+/** The stat columns every row shares; each view only adds its type, label and nesting. */
+const statsOf = (
+	s: { sessions: number; msgs: number; totalTokens: number; input: number; output: number; cacheRead: number; cost: number; estimatedCost: number },
+): Pick<RowItem, "sessions" | "msgs" | "tokens" | "input" | "output" | "cacheRead" | "cost" | "estimatedCost"> => ({
+	sessions: s.sessions,
+	msgs: s.msgs,
+	tokens: s.totalTokens,
+	input: s.input,
+	output: s.output,
+	cacheRead: s.cacheRead,
+	cost: s.cost,
+	estimatedCost: s.estimatedCost,
+});
 
 /** The dashboard views, cycled by `v`: Provider → Project → Prices. */
 type UsageView = "provider" | "project" | "prices";
@@ -166,14 +178,7 @@ export class UsageModalComponent implements Component {
 						providerName: p.name,
 						modelName: m.name,
 						label: `${p.name}/${m.name}`,
-						sessions: m.sessions,
-						msgs: m.msgs,
-						tokens: m.totalTokens,
-						input: m.input,
-						output: m.output,
-						cacheRead: m.cacheRead,
-						cost: m.cost,
-						estimatedCost: m.estimatedCost,
+						...statsOf(m),
 						unpriced: true,
 					});
 				}
@@ -189,14 +194,7 @@ export class UsageModalComponent implements Component {
 					projectName: proj.name,
 					providerName: proj.name,
 					label: proj.name,
-					sessions: proj.sessions,
-					msgs: proj.msgs,
-					tokens: proj.totalTokens,
-					input: proj.input,
-					output: proj.output,
-					cacheRead: proj.cacheRead,
-					cost: proj.cost,
-					estimatedCost: proj.estimatedCost,
+					...statsOf(proj),
 					expanded: isExpanded,
 				});
 				if (isExpanded) {
@@ -206,14 +204,7 @@ export class UsageModalComponent implements Component {
 							projectName: proj.name,
 							providerName: p.name,
 							label: capitalize(p.name),
-							sessions: p.sessions,
-							msgs: p.msgs,
-							tokens: p.totalTokens,
-							input: p.input,
-							output: p.output,
-							cacheRead: p.cacheRead,
-							cost: p.cost,
-							estimatedCost: p.estimatedCost,
+							...statsOf(p),
 						});
 					}
 				}
@@ -229,14 +220,7 @@ export class UsageModalComponent implements Component {
 				// provider does not end up with two arrows on one line. Capitalized to match the
 				// detail line and the model rows beneath it.
 				label: capitalize(p.name),
-				sessions: p.sessions,
-				msgs: p.msgs,
-				tokens: p.totalTokens,
-				input: p.input,
-				output: p.output,
-				cacheRead: p.cacheRead,
-				cost: p.cost,
-				estimatedCost: p.estimatedCost,
+				...statsOf(p),
 				expanded: isExpanded,
 			});
 
@@ -247,14 +231,7 @@ export class UsageModalComponent implements Component {
 						providerName: p.name,
 						modelName: m.name,
 						label: m.name,
-						sessions: m.sessions,
-						msgs: m.msgs,
-						tokens: m.totalTokens,
-						input: m.input,
-						output: m.output,
-						cacheRead: m.cacheRead,
-						cost: m.cost,
-						estimatedCost: m.estimatedCost,
+						...statsOf(m),
 					});
 				}
 			}
