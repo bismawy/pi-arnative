@@ -373,7 +373,7 @@ class BudgetModalComponent implements Component {
 			const paint = isSelected ? (s: string) => acc(bold(s)) : (s: string) => th.fg(row.note ? "text" : "muted", s);
 			const note = budgetRowNote(row.label);
 			const noteText = note ? ` ${dim("·")} ${dim(note)}` : "";
-			body.push(` ${isSelected ? acc("→ ") : "  "}${paint(row.label)}${noteText}`);
+			body.push(`${isSelected ? acc("→ ") : "  "}${paint(row.label)}${noteText}`);
 		}
 		return renderScreen(th, width, this.text, body.map((l) => truncateToWidth(l, contentW, "")), this.edge);
 	}
