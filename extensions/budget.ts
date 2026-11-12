@@ -321,7 +321,7 @@ class BudgetModalComponent implements Component {
 			this.hooks.requestRender();
 			return;
 		}
-		if (matchesKey(keyData, "enter") || matchesKey(keyData, "space")) {
+		if (matchesKey(keyData, "space")) {
 			this.hooks.change(this.selected);
 			this.hooks.requestRender();
 		}
@@ -616,8 +616,8 @@ if (isMain(import.meta.url)) {
 	assert(rendered.some((l) => l.includes("30d") && l.includes("no cap")), "the uncapped window says no cap");
 	assert(rendered.some((l) => l.includes("Day cap") && l.includes("$5.00")), "the editable rows render with their notes");
 	modal.handleInput("\x1b[B"); // down
-	modal.handleInput("\r"); // enter
-	assert(changed.length === 1 && changed[0] === 1, "down+enter changes the second row (30d cap), not the first");
+	modal.handleInput(" "); // space
+	assert(changed.length === 1 && changed[0] === 1, "down+space changes the second row (30d cap), not the first");
 	assert(modal.render(40).length > 0, "the modal renders on a narrow terminal");
 
 	// Both windows capped: the bars share one column however long the spend-of-cap text is.
