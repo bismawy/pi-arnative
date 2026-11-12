@@ -609,10 +609,11 @@ export function piCacheHit(): string | null {
 
 let usageScanAt = 0;
 let usageScanLen = -1;
+let usageScanManager: object | undefined;
+let usageScanLeaf: unknown;
 let usageScanNums = { inp: 0, out: 0, read: 0 };
-// Usage of the branch's last entry at scan time: a stream tick mutates that message
-// in place (branch length unchanged), so the delta is applied on top of the cached
-// sums — O(1) per frame, numbers always fresh, still no O(N) rescan per frame.
+// A stream mutates the same leaf, so its delta updates the cached prefix. A different
+// manager or leaf must rescan: equal-length /tree branches can have different usage.
 let usageScanLast = { inp: 0, out: 0, read: 0 };
 
 const lastUsageOf = (branch: readonly unknown[]): { inp: number; out: number; read: number } => {
@@ -623,19 +624,19 @@ const lastUsageOf = (branch: readonly unknown[]): { inp: number; out: number; re
 	return u ? { inp: u.input || 0, out: u.output || 0, read: u.cacheRead || 0 } : { inp: 0, out: 0, read: 0 };
 };
 
-// 2s cache + branch length: the footer renders on every poke/stream tick, so
-// without this every frame rescans the whole branch (O(N) per frame).
+// Cache sums for 2s on one branch; getBranch still builds the current path.
 export function getUsage(
 	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
 	acc: (t: string) => string,
 	soft: (t: string) => string,
 ): string {
 	const branch = ctx.sessionManager.getBranch();
+	const leaf = branch[branch.length - 1];
 	const last = lastUsageOf(branch);
 	let inp = 0;
 	let out = 0;
 	let read = 0;
-	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen) {
+	if (Date.now() - usageScanAt < 2000 && branch.length === usageScanLen && ctx.sessionManager === usageScanManager && leaf === usageScanLeaf) {
 		// Cached sums + the streaming delta of the last message (mutated in place).
 		inp = usageScanNums.inp + last.inp - usageScanLast.inp;
 		out = usageScanNums.out + last.out - usageScanLast.out;
@@ -658,6 +659,8 @@ export function getUsage(
 		usageScanLast = last;
 		usageScanAt = Date.now();
 		usageScanLen = branch.length;
+		usageScanManager = ctx.sessionManager;
+		usageScanLeaf = leaf;
 	}
 	usageTotals = { inp, read };
 	const parts: string[] = [];
@@ -912,6 +915,8 @@ export default function (pi: ExtensionAPI) {
 			// previous session's sums whenever the fresh branch happens to be the same length.
 			usageScanAt = 0;
 			usageScanLen = -1;
+			usageScanManager = undefined;
+			usageScanLeaf = undefined;
 		} else {
 			currentModel = (globalThis as Record<symbol, any>)[MODEL_KEY] ?? ctx.model;
 			currentThinkingLevel = (globalThis as Record<symbol, any>)[THINKING_KEY] ?? ctx.thinkingLevel;
@@ -1243,6 +1248,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		usageScanManager = undefined;
+		usageScanLeaf = undefined;
 		stopWorkingClock();
 		stopIdleProbe();
 		stopClockTick();
