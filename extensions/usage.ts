@@ -11,7 +11,7 @@ import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, ty
 import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize } from "../lib/format.ts";
-import { thinkingColorOf, softSecondaryOf } from "../lib/ansi.ts";
+import { thinkingColorOf, softOf, softSecondaryOf } from "../lib/ansi.ts";
 import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../lib/shortcuts.ts";
 import {
 	collectUsageSummary,
@@ -424,9 +424,10 @@ export class UsageModalComponent implements Component {
 		// label tier (the border-accent hue) and falls back to the accent tier.
 		const soft = softSecondaryOf(th);
 		const acc = (s: string) => th.fg("accent", s);
-		// Selection follows the menu style: a chosen row takes accentSoft, not the accent that
-		// marks the provider level itself.
-		const accSoft = (s: string) => th.fg("accentSoft", s);
+		// Selection follows the menu style: a chosen row takes the soft accent, not the accent
+		// that marks the provider level itself. `softOf` resolves the token on Pi <=1.1.0 and
+		// derives it from the resolved accent on 1.2+, where `fg("accentSoft")` throws.
+		const accSoft = softOf(th);
 		const dim = (s: string) => th.fg("dim", s);
 
 		const rows = this.buildFlatRows();
@@ -1054,6 +1055,20 @@ if (isMain(import.meta.url)) {
 	assert(detailTagged.includes("<accentSoft> · </>"), "the detail divider is accentSoft");
 	const offLines = new UsageModalComponent(taggedTheme, () => {}, () => {}, "off").render(260);
 	assert(offLines[0]!.includes("<thinkingOff>"), "thinking off colors the border with thinkingOff");
+	// Pi 1.2+ rejects `accentSoft`/`secondarySoft` in `fg`; the rows and detail must still paint
+	// (softOf derives the tint from `colors.accent`), or the dashboard crashes on render.
+	const strictTheme = {
+		fg: (c: string, t: string) => {
+			if (c === "accentSoft" || c === "secondarySoft") throw new Error(`Unknown theme color: ${c}`);
+			return t;
+		},
+		style: (t: string) => t,
+		colors: { accent: { kind: "oklch", l: 0.7, c: 0.1, h: 200 } },
+	} as never;
+	assert(
+		new UsageModalComponent(strictTheme, () => {}, () => {}, "off").render(120).length > 0,
+		"a theme without the soft tokens still renders the rows",
+	);
 	// Shared chrome (per `renderScreen`): title accent+bold, description muted, legend dim.
 	// `taggedTheme.bold` is identity, so only the accent wrapper shows here; the bold half is
 	// pinned in lib/box.ts.
