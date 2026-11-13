@@ -216,7 +216,7 @@ export class UsageModalComponent implements Component {
 			return rows;
 		}
 		if (this.view === "project") {
-			// Same grid and nesting as the Provider view, one level up: Project → Provider → Model.
+			// Same grid and columns as the Provider view, one level up: Project → Provider.
 			for (const proj of this.summary.projects) {
 				const isExpanded = this.expandedProjects.has(proj.name);
 				rows.push({
@@ -229,26 +229,13 @@ export class UsageModalComponent implements Component {
 				});
 				if (!isExpanded) continue;
 				for (const p of proj.providers) {
-					const open = this.expandedProviders.has(p.name);
 					rows.push({
 						type: "provider",
 						projectName: proj.name,
 						providerName: p.name,
 						label: capitalize(p.name),
 						...statsOf(p),
-						expanded: open,
 					});
-					if (!open) continue;
-					for (const m of p.models ?? []) {
-						rows.push({
-							type: "model",
-							projectName: proj.name,
-							providerName: p.name,
-							modelName: m.name,
-							label: m.name,
-							...statsOf(m),
-						});
-					}
 				}
 			}
 			return rows;
@@ -546,18 +533,10 @@ export class UsageModalComponent implements Component {
 			const isPriceGroup = this.view === "prices" && item.type === "provider";
 			const blank = (w: number) => " ".repeat(w);
 
-			// Tree depth indents the name cell only, so the figures stay in their columns.
-			const depth =
-				this.view === "project"
-					? item.type === "project"
-						? 0
-						: item.type === "provider"
-							? 1
-							: 2
-					: item.type === "provider"
-						? 0
-						: 1;
-			const indent = "  ".repeat(depth);
+			// One indent for the rows under a group (model, price, or the provider under a
+			// project): it eats name width so the figures keep their columns.
+			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
+			const indent = item.type === groupType ? "" : "  ";
 			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), Math.max(10, rowNameW - indent.length), false);
 			const cSess = isPriceGroup ? blank(sessionW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.in ?? 0) : formatCount(item.sessions)), sessionW);
 			const cMsgs = isPriceGroup ? blank(messagesW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.out ?? 0) : formatCount(item.msgs)), messagesW);
@@ -578,9 +557,7 @@ export class UsageModalComponent implements Component {
 			const cCost = isPriceGroup ? blank(colW.cost) : formatCol(paintVal(costCell), colW.cost);
 
 			// Gutter: the expand arrow carries the accent, blank indent for the rows beneath it.
-			// A row that can open (project, provider) draws the arrow in every view.
-			const canExpand = item.type === "project" || item.type === "provider";
-			const gutterText = canExpand ? acc(item.expanded ? "▾" : "▸") : " ";
+			const gutterText = item.type === groupType ? acc(item.expanded ? "▾" : "▸") : " ";
 			const line = indent + gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
@@ -1101,8 +1078,8 @@ if (isMain(import.meta.url)) {
 	const projectLines = taggedProject.render(260);
 	assert(projectLines.some((l) => /<accent>[▸▾]/.test(l)), "the expand arrow carries the accent");
 	assert(
-		projectLines.some((l) => /│<\/> {2,4}<accent>[▸▾]<\/> <text>/.test(l)),
-		"a provider row under a project draws an arrow and sits on plain text",
+		projectLines.some((l) => /│<\/>\s{3,5}<text>/.test(l)),
+		"a provider row under a project sits on plain text, indented like a model row",
 	);
 	// The fixture holds one project, so the cursor lands on its provider; the project row then
 	// rests on the accent while the provider takes the soft accent.
