@@ -15,7 +15,7 @@ const confirm = (panel: UsageModalComponent, key = "R") => {
 	panel.handleInput(key);
 	panel.handleInput("y");
 };
-const message = (provider: string, input: number, timestamp = new Date().toISOString()) => JSON.stringify({ timestamp, message: { role: "assistant", provider, model: "test-model", usage: { input, output: 10, cacheRead: 20, cost: { total: 0.01 } } } }) + "\n";
+const message = (provider: string, input: number, timestamp = new Date().toISOString()) => JSON.stringify({ timestamp, message: { role: "assistant", provider, model: "test-model", usage: { input, output: 10, cacheRead: 20, cost: { total: 0.01, totalFromProvider: true } } } }) + "\n";
 const seed = (name: string, content: string) => {
 	const file = join(dir, "sessions", "project", name);
 	writeFileSync(file, content);

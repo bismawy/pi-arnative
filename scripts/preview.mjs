@@ -15,6 +15,8 @@ const EXTENSIONS = [
 	"timestamps.ts",
 	"ui-render-tweaks.ts",
 	"usage.ts",
+	"usage-export.ts",
+	"budget.ts",
 	"animations.ts",
 	"autocompact.ts",
 	"model-heal.ts",

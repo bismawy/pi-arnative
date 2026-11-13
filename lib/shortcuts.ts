@@ -78,18 +78,20 @@ export const UNDO_USAGE = keySet("U", "shift+u");
 const legend = (...pairs: [string, string][]): string => pairs.map(([key, action]) => `[${key}] ${action}`).join("  ");
 
 /** Root `/arnative` menu: nothing behind it, so Esc closes. */
-export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Close"]);
+export const LEGEND_ROOT = legend([MOVE.label, "Move"], [CHOOSE.label, "Select"], [CANCEL.label, "Close"]);
 /** Move-and-open list inside a submenu (the provider list, the provider actions): Esc steps
  *  back to the screen above, exactly like ←. */
-export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Open"], [CANCEL.label, "Back"]);
+export const LEGEND_MOVE = legend([MOVE.label, "Move"], [CHOOSE.label, "Select"], [CANCEL.label, "Back"]);
 /** Live-preview list: moving applies, Enter keeps, Esc drops the preview and steps out. */
 export const LEGEND_LIVE = legend([MOVE.label, "Preview"], [CHOOSE.label, "Select"], [CANCEL.label, "Back"]);
 /** A list you only read (the `/todos` recap): moving changes nothing, so there is no Open. */
 export const LEGEND_READ_ONLY = legend([MOVE.label, "Move"], [CANCEL.label, "Close"]);
 /** The usage dashboard. `reset` adds the key that deletes history, so a screen without
- *  that key never advertises it; `undo` appears only while a reset can be undone. */
-export function legendUsage(width: number, opts: { reset?: boolean; undo?: boolean } = {}): string {
-	const pairs: [string, string][] = [[MOVE.label, "Move"], [RANGE.label, "Range"], ["Click", "Open/close"]];
+ *  that key never advertises it; `undo` appears only while a reset can be undone. `v` cycles
+ *  the Provider → Project → Prices views, handled on every view; `next` names the view that
+ *  key would show, so the legend states the destination instead of the generic word View. */
+export function legendUsage(width: number, opts: { reset?: boolean; undo?: boolean; next?: string } = {}): string {
+	const pairs: [string, string][] = [[MOVE.label, "Move"], [RANGE.label, "Range"], ["Space/Click", "Show/Hide"], ["v", opts.next ? `Next: ${opts.next}` : "View"]];
 	if (opts.reset) pairs.push([CANCEL.label, "Back"], [RESET_USAGE.label, "Reset"]);
 	if (opts.undo) pairs.push([UNDO_USAGE.label, "Undo"]);
 	if (!opts.reset) pairs.push([CANCEL.label, "Back"]);
@@ -130,7 +132,7 @@ if (isMain(import.meta.url)) {
 	assert(!matchesBack("h"), "a bare letter is not the back key");
 	// The legends are built from the same keys the handlers match, so a key cannot be
 	// advertised on one screen and handled on none.
-	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Open  [Esc] Back", `submenu legend pinned, got ${LEGEND_MOVE}`);
+	assert(LEGEND_MOVE === "[↑↓] Move  [Enter] Select  [Esc] Back", `submenu legend pinned, got ${LEGEND_MOVE}`);
 	assert(LEGEND_READ_ONLY === "[↑↓] Move  [Esc] Close", `read-only legend pinned, got ${LEGEND_READ_ONLY}`);
 	assert(
 		LEGEND_LIVE === `[↑↓] Preview  [Enter] Select  [${CANCEL.label}] Back`,
@@ -142,8 +144,11 @@ if (isMain(import.meta.url)) {
 	assert(CANCEL.matches("\x1b"), "[Esc] matches escape");
 	assert(!CANCEL.matches("\x1b[D"), "[Esc] is not the ← byte sequence");
 	assert(legendUsage(120).includes("[Esc] Back"), "a wide usage legend advertises Esc Back");
-	assert(legendUsage(120).includes("[Click] Open/close"), "a wide usage legend advertises the mouse");
+	assert(legendUsage(140).includes("[Space/Click] Show/Hide"), "a wide usage legend advertises Space and the mouse");
+	assert(legendUsage(120).includes("[v] View"), "a wide usage legend advertises the view key the dashboard handles");
+	assert(legendUsage(120, { next: "Project" }).includes("[v] Next: Project"), "the legend names the view the key would show");
 	assert(legendUsage(20) === "[Esc] Back", "a narrow usage legend degrades to the one key that still fits");
+	assert(!legendUsage(20).includes("[v]"), "the narrow usage legend drops the view key with the rest");
 	assert(legendUsage(160, { reset: true }).includes("[R] Reset"), "a reset-capable dashboard advertises R Reset");
 	assert(!legendUsage(160).includes("Reset"), "the read-only dashboard does not advertise a key it lacks");
 	assert(RESET_USAGE.matches("R") && !RESET_USAGE.matches("r"), "a capital R is shift+r, not r");

@@ -20,6 +20,8 @@ pi-arnative replaces pi’s default terminal chrome with a unified visual interf
 - Working Spinners: 18 animated presets with live picker preview and optional `[g]` gradient sweep.
 - Transcript Clock: Per-message timestamps with clean bubble backgrounds.
 - Usage Dashboard: Real-time token counts and cost tracking across local sessions via `/usage`.
+- Budget Guardrails: `/arnative` → Budget sets UTC day and rolling 30-day caps on billed spend, draws each window as a spend-vs-cap bar, turns the footer cost cell amber at 80% and red at 100%, and can stop the next turn when enforce is on.
+- Prometheus Textfile Export: On every `turn_end` (at most one write per minute, and only when the numbers changed) the usage summary is written as an exposition file to `~/.pi/agent/arnative/usage.prom` — point a textfile collector at that folder (`node_exporter --collector.textfile.directory=~/.pi/agent/arnative`) and the spend lands in Grafana next to the infra metrics; set `PI_ARNATIVE_EXPORT=0` to turn it off.
 - Custom Providers: Interactive `/providers` wizard to probe endpoints, pick models, set thinking levels, edit the base URL, provider id or API key, and save OpenAI-, Anthropic-, Gemini-, or Ollama-compatible channels to `models.json` and `auth.json`.
 - Model Heal: Background sync (`/model-heal`) that fills missing compat flags, `/models` token limits, and accepted reasoning effort levels in `models.json`.
 - Auto-compact: Automatic context compaction after a turn settles using smart window tiers or a fixed token budget.
@@ -30,6 +32,7 @@ pi-arnative replaces pi’s default terminal chrome with a unified visual interf
 Saved to `~/.pi/agent/arnative/config.json` via `/arnative`:
 
 - **Headers & Footers:** `Arnative (Full)` (default), `Arnative (Minimal)` (footer only; click head text or press `ctrl+alt+m` to toggle), or `Pi (system)`.
+- **Footer cost:** off by default. Press `[c]` in the Footers picker to add the session's cost (`$0.42`, `~$0.42` when no provider reported a billed total) to the metrics row; the choice is stored as `footerCost` in `config.json`.
 - **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle the Google gradient sweep.
 - **Auto-compact:** Off by default. **Smart** tiers trigger near ~200k tokens (`≥768k→20%`, `≥384k→40%`, `≥192k→80%`, `<192k→pi core`), or pick a fixed budget (`100k` to `400k`).
 - **Model heal:** **Full** (default: offline compat flags, `GET /models` limits with a 6h TTL, reasoning effort probe with a 24h TTL, and a failed fetch of either retried after 1h), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten. `/model-heal` forces every pass, warns that thinking probes can use paid tokens, and shows the stage it is in.
@@ -71,7 +74,7 @@ module deleted here is pruned from the installed copy (a stale entry point would
 | `ctrl+alt+k` · `alt+k` | Scroll task list up |
 | Click `[show]` / `[hide]` · `ctrl+o` | Toggle tool output box |
 | `←` / `Esc` | Step back to parent menu / close active screen |
-| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Model heal, Providers, Usage) |
+| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Model heal, Providers, Usage, Budget) |
 | `/usage` | Token & cost dashboard |
 | `/todos` | Full task list recap |
 | `/providers` | Custom provider manager |
