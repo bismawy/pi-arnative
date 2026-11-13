@@ -424,8 +424,10 @@ export class UsageModalComponent implements Component {
 		// label tier (the border-accent hue) and falls back to the accent tier.
 		const soft = softSecondaryOf(th);
 		const acc = (s: string) => th.fg("accent", s);
+		// Selection follows the menu style: a chosen row takes accentSoft, not the accent that
+		// marks the provider level itself.
+		const accSoft = (s: string) => th.fg("accentSoft", s);
 		const dim = (s: string) => th.fg("dim", s);
-		const plain = (s: string) => th.fg("text", s);
 
 		const rows = this.buildFlatRows();
 		if (this.selectedIndex >= rows.length) {
@@ -518,8 +520,11 @@ export class UsageModalComponent implements Component {
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			const paintName = isSelected ? acc : item.type === "provider" ? soft : plain;
-			const paintVal = isSelected ? acc : dim;
+			// Provider and project rows keep the accent; their children sit dim until the cursor
+			// lands on one, which paints it accentSoft like every arnative picker.
+			const isGroupRow = item.type === "provider" || item.type === "project";
+			const paintName = isSelected ? accSoft : isGroupRow ? acc : dim;
+			const paintVal = isSelected ? accSoft : isGroupRow ? acc : dim;
 			const isPrice = item.type === "price";
 			// A Prices group row names the provider; its rate columns stay blank, so the tree
 			// reads as a heading instead of a provider with $0.00 rates.
@@ -549,7 +554,7 @@ export class UsageModalComponent implements Component {
 			// in Project view), blank indent for the rows beneath it.
 			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
 			const gutterText =
-				item.type === groupType ? (item.expanded ? soft("▾") : dim("▸")) : " ";
+				item.type === groupType ? (isSelected ? accSoft(item.expanded ? "▾" : "▸") : acc(item.expanded ? "▾" : "▸")) : " ";
 			const line = gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
