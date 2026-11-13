@@ -520,11 +520,11 @@ export class UsageModalComponent implements Component {
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			// Provider rows sit on the plain text color, project rows keep the accent, and model
-			// or price rows are dim. The cursor paints any row the soft accent, and the expand
-			// arrow alone carries the accent so the eye can find the tree.
+			// Provider and project group rows sit on the plain text color, and the rows beneath
+			// them are dim. The cursor paints any row the soft accent, and the expand arrow alone
+			// carries the accent so the eye can find the tree.
 			const plain = (s: string) => th.fg("text", s);
-			const resting = item.type === "provider" ? plain : item.type === "project" ? acc : dim;
+			const resting = item.type === "model" || item.type === "price" ? dim : plain;
 			const paintName = isSelected ? accSoft : resting;
 			const paintVal = isSelected ? accSoft : resting;
 			const isPrice = item.type === "price";
@@ -1071,8 +1071,8 @@ if (isMain(import.meta.url)) {
 		new UsageModalComponent(strictTheme, () => {}, () => {}, "off").render(120).length > 0,
 		"a theme without the soft tokens still renders the rows",
 	);
-	// Project view: the project label keeps the accent, a provider beneath it sits on plain text,
-	// the expand arrow carries the accent, and the cursor's row takes the soft accent.
+	// Project view: the project group row sits on plain text like a provider group row, and the
+	// expand arrow carries the accent.
 	const taggedProject = new UsageModalComponent(taggedTheme, () => {}, () => {}, "off");
 	taggedProject.handleInput("v");
 	const projectLines = taggedProject.render(260);
@@ -1081,11 +1081,9 @@ if (isMain(import.meta.url)) {
 		projectLines.some((l) => /│<\/>\s{3,5}<text>/.test(l)),
 		"a provider row under a project sits on plain text, indented like a model row",
 	);
-	// The fixture holds one project, so the cursor lands on its provider; the project row then
-	// rests on the accent while the provider takes the soft accent.
 	taggedProject.handleInput("j");
 	const selectedLines = taggedProject.render(260);
-	assert(selectedLines.some((l) => l.includes("<accent>unknown")), "the project label keeps the accent");
+	assert(selectedLines.some((l) => l.includes("<text>unknown")), "the project label sits on plain text");
 	assert(selectedLines.some((l) => /<accentSoft>\w/.test(l)), "the selected provider row takes the soft accent");
 	// Shared chrome (per `renderScreen`): title accent+bold, description muted, legend dim.
 	// `taggedTheme.bold` is identity, so only the accent wrapper shows here; the bold half is
