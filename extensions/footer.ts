@@ -757,7 +757,7 @@ export const RATE_MIN_ACTIVE_MS = 5 * 60_000;
 /** Terminals narrower than this drop the rate — the cost alone still fits. */
 export const RATE_MIN_WIDTH = 80;
 
-/** The session cost cell, with the burn rate appended to it (one cell, not two): `$0.42 · $1.80/h`.
+/** The session cost cell, with the burn rate appended in parentheses (one cell, not two): `$0.42 ($1.80/h)`.
  *  Billed and estimated never blend: `$0.42` when only the provider billed, `~$0.42` when only
  *  an estimate exists, `$0.30 + ~$0.12` when the branch has both, and no cell at all when there
  *  is no cost — the same promise `/usage` makes. The rate is cost per ACTIVE hour — the clock
@@ -783,7 +783,7 @@ export function costCell(
 	const activeMs = clock.total();
 	if (activeMs >= RATE_MIN_ACTIVE_MS && width >= RATE_MIN_WIDTH) {
 		const rate = (costBilled + costEstimated) / (activeMs / 3_600_000);
-		text += ` · ${costEstimated > 0 ? "~" : ""}${formatCost(rate)}/h`;
+		text += ` (${costEstimated > 0 ? "~" : ""}${formatCost(rate)}/h)`;
 	}
 	return `${(bandPaint ?? acc)("\uf155")} ${(bandPaint ?? soft)(text)}`;
 }
@@ -1627,7 +1627,7 @@ if (isMain(import.meta.url)) {
 		clock.lastSeen = clock.runStarted - clock.pauseMs - 1;
 	};
 	freezeClock(14 * 60_000); // $0.42 over 14 active minutes = $1.80/h
-	assert(costCell(0.42, 0, id, id).includes("$0.42 · $1.80/h"), "the rate is cost / active hours: $0.42 over 14 active minutes is $1.80/h: " + costCell(0.42, 0, id, id));
+	assert(costCell(0.42, 0, id, id).includes("$0.42 ($1.80/h)"), "the rate is cost / active hours: $0.42 over 14 active minutes is $1.80/h: " + costCell(0.42, 0, id, id));
 	assert(!costCell(0.42, 0, id, id).includes("~"), "a billed-only rate carries no ~");
 	assert(costCell(0, 0.42, id, id).includes("~$1.80/h"), "an estimate-based rate is prefixed ~, like the estimated part of the cell");
 	freezeClock(RATE_MIN_ACTIVE_MS - 1);

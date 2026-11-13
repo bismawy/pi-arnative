@@ -20,7 +20,7 @@ function setActiveMs(activeMs: number): void {
 test("the rate is cost per active hour for a known clock", () => {
 	setActiveMs(14 * 60_000); // $0.42 over 14 active minutes
 	const cell = costCell(0.42, 0, id, id);
-	assert.ok(cell.includes("$0.42 · $1.80/h"), `rate = cost / active hours, got ${cell}`);
+	assert.ok(cell.includes("$0.42 ($1.80/h)"), `rate = cost / active hours, got ${cell}`);
 	assert.ok(!cell.includes("~"), "a billed-only rate carries no ~");
 });
 
