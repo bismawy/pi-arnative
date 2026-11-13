@@ -521,11 +521,14 @@ export class UsageModalComponent implements Component {
 			const actualIdx = startIdx + i;
 			const isSelected = actualIdx === this.selectedIndex;
 
-			// Provider and project rows keep the accent; their children sit dim until the cursor
-			// lands on one, which paints it accentSoft like every arnative picker.
-			const isGroupRow = item.type === "provider" || item.type === "project";
-			const paintName = isSelected ? accSoft : isGroupRow ? acc : dim;
-			const paintVal = isSelected ? accSoft : isGroupRow ? acc : dim;
+			// Provider rows sit on the plain text color, project rows keep the accent, and model
+			// or price rows are dim. The cursor paints any row the soft accent, and the expand
+			// arrow alone carries the accent so the eye can find the tree.
+			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
+			const plain = (s: string) => th.fg("text", s);
+			const resting = item.type === "provider" ? plain : item.type === "project" ? acc : dim;
+			const paintName = isSelected ? accSoft : resting;
+			const paintVal = isSelected ? accSoft : resting;
 			const isPrice = item.type === "price";
 			// A Prices group row names the provider; its rate columns stay blank, so the tree
 			// reads as a heading instead of a provider with $0.00 rates.
@@ -551,11 +554,8 @@ export class UsageModalComponent implements Component {
 						: "-";
 			const cCost = isPriceGroup ? blank(colW.cost) : formatCol(paintVal(costCell), colW.cost);
 
-			// Gutter: expand arrow on the tree's top level (provider in Provider view, project
-			// in Project view), blank indent for the rows beneath it.
-			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
-			const gutterText =
-				item.type === groupType ? (isSelected ? accSoft(item.expanded ? "▾" : "▸") : acc(item.expanded ? "▾" : "▸")) : " ";
+			// Gutter: the expand arrow carries the accent, blank indent for the rows beneath it.
+			const gutterText = item.type === groupType ? acc(item.expanded ? "▾" : "▸") : " ";
 			const line = gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
@@ -1069,6 +1069,17 @@ if (isMain(import.meta.url)) {
 		new UsageModalComponent(strictTheme, () => {}, () => {}, "off").render(120).length > 0,
 		"a theme without the soft tokens still renders the rows",
 	);
+	// Project view: the project label keeps the accent, a provider beneath it sits on plain text,
+	// the expand arrow carries the accent, and the cursor's row takes the soft accent.
+	const taggedProject = new UsageModalComponent(taggedTheme, () => {}, () => {}, "off");
+	taggedProject.handleInput("v");
+	// The fixture holds one project, so move the cursor onto a provider inside it.
+	taggedProject.handleInput("j");
+	const projectLines = taggedProject.render(260);
+	assert(projectLines.some((l) => /<accent>[▸▾]/.test(l)), "the expand arrow carries the accent");
+	assert(projectLines.some((l) => l.includes("<accent>unknown")), "the project label keeps the accent");
+	assert(projectLines.some((l) => /│<\/> {3}<text>/.test(l)), "a provider row under a project sits on plain text");
+	assert(projectLines.some((l) => /<accentSoft>\w/.test(l)), "the selected provider row takes the soft accent");
 	// Shared chrome (per `renderScreen`): title accent+bold, description muted, legend dim.
 	// `taggedTheme.bold` is identity, so only the accent wrapper shows here; the bold half is
 	// pinned in lib/box.ts.
