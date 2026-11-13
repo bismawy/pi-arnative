@@ -879,7 +879,9 @@ export function getUsage(
 	}
 	if (showCost) {
 		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
-		if (cell) parts.push(cell);
+		// The dollar icon opens a new group, so it takes the same divider the footer uses
+		// between cells; the token and context parts stay a space apart.
+		if (cell) parts.push(parts.length > 0 ? `${soft("·")} ${cell}` : cell);
 	}
 	return parts.join(" ");
 }
@@ -1679,6 +1681,10 @@ if (isMain(import.meta.url)) {
 	const costCtx = { sessionManager: { getBranch: () => costBranch }, getContextUsage: () => undefined } as Parameters<typeof getUsage>[0];
 	assert(!getUsage(costCtx, id, id, false).includes("$0.42"), "cost cell is off unless the switch is on");
 	assert(getUsage(costCtx, id, id, true).includes("$0.42"), "cost cell sums the branch's billed cost when on");
+	assert(
+		getUsage(costCtx, id, id, true).includes("·  $0.42"),
+		"the cost cell opens with the footer divider, so the dollar icon reads as its own group",
+	);
 	assert(getUsage(costCtx, id, id, true, RATE_MIN_WIDTH, warnPaint).includes("<warn>$0.42</warn>"), "the warn band reaches the cost cell through getUsage");
 	assert(getUsage(costCtx, id, id, true, RATE_MIN_WIDTH, overPaint).includes("<error>$0.42</error>"), "the over band reaches the cost cell through getUsage");
 
