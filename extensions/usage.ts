@@ -536,7 +536,7 @@ export class UsageModalComponent implements Component {
 			// One indent for the rows under a group (model, price, or the provider under a
 			// project): it eats name width so the figures keep their columns.
 			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
-			const indent = item.type === groupType ? "" : "  ";
+			const indent = item.type === groupType ? "" : " ";
 			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), Math.max(10, rowNameW - indent.length), false);
 			const cSess = isPriceGroup ? blank(sessionW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.in ?? 0) : formatCount(item.sessions)), sessionW);
 			const cMsgs = isPriceGroup ? blank(messagesW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.out ?? 0) : formatCount(item.msgs)), messagesW);
