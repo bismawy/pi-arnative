@@ -216,7 +216,7 @@ export class UsageModalComponent implements Component {
 			return rows;
 		}
 		if (this.view === "project") {
-			// Same grid and columns as the Provider view, tree Project → Provider.
+			// Same grid and nesting as the Provider view, one level up: Project → Provider → Model.
 			for (const proj of this.summary.projects) {
 				const isExpanded = this.expandedProjects.has(proj.name);
 				rows.push({
@@ -227,14 +227,26 @@ export class UsageModalComponent implements Component {
 					...statsOf(proj),
 					expanded: isExpanded,
 				});
-				if (isExpanded) {
-					for (const p of proj.providers) {
+				if (!isExpanded) continue;
+				for (const p of proj.providers) {
+					const open = this.expandedProviders.has(p.name);
+					rows.push({
+						type: "provider",
+						projectName: proj.name,
+						providerName: p.name,
+						label: capitalize(p.name),
+						...statsOf(p),
+						expanded: open,
+					});
+					if (!open) continue;
+					for (const m of p.models ?? []) {
 						rows.push({
-							type: "provider",
+							type: "model",
 							projectName: proj.name,
 							providerName: p.name,
-							label: capitalize(p.name),
-							...statsOf(p),
+							modelName: m.name,
+							label: m.name,
+							...statsOf(m),
 						});
 					}
 				}
@@ -524,7 +536,6 @@ export class UsageModalComponent implements Component {
 			// Provider rows sit on the plain text color, project rows keep the accent, and model
 			// or price rows are dim. The cursor paints any row the soft accent, and the expand
 			// arrow alone carries the accent so the eye can find the tree.
-			const groupType: RowItem["type"] = this.view === "project" ? "project" : "provider";
 			const plain = (s: string) => th.fg("text", s);
 			const resting = item.type === "provider" ? plain : item.type === "project" ? acc : dim;
 			const paintName = isSelected ? accSoft : resting;
@@ -535,7 +546,19 @@ export class UsageModalComponent implements Component {
 			const isPriceGroup = this.view === "prices" && item.type === "provider";
 			const blank = (w: number) => " ".repeat(w);
 
-			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), rowNameW, false);
+			// Tree depth indents the name cell only, so the figures stay in their columns.
+			const depth =
+				this.view === "project"
+					? item.type === "project"
+						? 0
+						: item.type === "provider"
+							? 1
+							: 2
+					: item.type === "provider"
+						? 0
+						: 1;
+			const indent = "  ".repeat(depth);
+			const cName = formatCol(paintName(isSelected ? bold(item.label) : item.label), Math.max(10, rowNameW - indent.length), false);
 			const cSess = isPriceGroup ? blank(sessionW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.in ?? 0) : formatCount(item.sessions)), sessionW);
 			const cMsgs = isPriceGroup ? blank(messagesW) : formatCol(paintVal(isPrice ? formatCost(item.rates?.out ?? 0) : formatCount(item.msgs)), messagesW);
 			const cToks = isPriceGroup ? blank(colW.tokens) : formatCol(paintVal(isPrice ? formatCost(item.rates?.cacheRead ?? 0) : formatTokens(item.tokens)), colW.tokens);
@@ -555,8 +578,10 @@ export class UsageModalComponent implements Component {
 			const cCost = isPriceGroup ? blank(colW.cost) : formatCol(paintVal(costCell), colW.cost);
 
 			// Gutter: the expand arrow carries the accent, blank indent for the rows beneath it.
-			const gutterText = item.type === groupType ? acc(item.expanded ? "▾" : "▸") : " ";
-			const line = gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
+			// A row that can open (project, provider) draws the arrow in every view.
+			const canExpand = item.type === "project" || item.type === "provider";
+			const gutterText = canExpand ? acc(item.expanded ? "▾" : "▸") : " ";
+			const line = indent + gutterText + " " + cName + cSess + cMsgs + cToks + cCost;
 			this.rowHitboxes.push({ line: CHROME_ROWS + body.length, index: actualIdx });
 			body.push(line);
 		}
@@ -1073,13 +1098,18 @@ if (isMain(import.meta.url)) {
 	// the expand arrow carries the accent, and the cursor's row takes the soft accent.
 	const taggedProject = new UsageModalComponent(taggedTheme, () => {}, () => {}, "off");
 	taggedProject.handleInput("v");
-	// The fixture holds one project, so move the cursor onto a provider inside it.
-	taggedProject.handleInput("j");
 	const projectLines = taggedProject.render(260);
 	assert(projectLines.some((l) => /<accent>[▸▾]/.test(l)), "the expand arrow carries the accent");
-	assert(projectLines.some((l) => l.includes("<accent>unknown")), "the project label keeps the accent");
-	assert(projectLines.some((l) => /│<\/> {3}<text>/.test(l)), "a provider row under a project sits on plain text");
-	assert(projectLines.some((l) => /<accentSoft>\w/.test(l)), "the selected provider row takes the soft accent");
+	assert(
+		projectLines.some((l) => /│<\/> {2,4}<accent>[▸▾]<\/> <text>/.test(l)),
+		"a provider row under a project draws an arrow and sits on plain text",
+	);
+	// The fixture holds one project, so the cursor lands on its provider; the project row then
+	// rests on the accent while the provider takes the soft accent.
+	taggedProject.handleInput("j");
+	const selectedLines = taggedProject.render(260);
+	assert(selectedLines.some((l) => l.includes("<accent>unknown")), "the project label keeps the accent");
+	assert(selectedLines.some((l) => /<accentSoft>\w/.test(l)), "the selected provider row takes the soft accent");
 	// Shared chrome (per `renderScreen`): title accent+bold, description muted, legend dim.
 	// `taggedTheme.bold` is identity, so only the accent wrapper shows here; the bold half is
 	// pinned in lib/box.ts.
@@ -1222,7 +1252,7 @@ if (isMain(import.meta.url)) {
 	assert(estBody.includes("$0.65") && !estBody.includes("~$0.65"), "a reported cost is shown as-is, never with `~`");
 	assert(!estBody.includes("estimated (models.json)"), "the separate estimate line is gone; the Total row carries the number");
 	// Only the two table rows — the detail line also carries the estimate.
-	const estRows = estLines.map(plain).filter((l) => /^\u2502 [\u25be\u25b8 ] (Alpha|deepseek)/.test(l));
+	const estRows = estLines.map(plain).filter((l) => /^\u2502\s+(?:[\u25be\u25b8]\s+)?(Alpha|deepseek)/.test(l));
 	assert(estRows.length === 2 && estRows.every((l) => l.includes("~$0.55")), `the estimate shows on the provider row and its model row, got ${JSON.stringify(estRows)}`);
 
 	// Cost must survive every width: a clipped `$5` is worse than a dropped column.
