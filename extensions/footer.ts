@@ -800,6 +800,8 @@ export function getUsage(
 	width: number = RATE_MIN_WIDTH,
 	/** Budget band painter for the cost cell (amber at `warn`, red at `over`); absent keeps acc/soft. */
 	bandPaint?: (t: string) => string,
+	/** Painter for the divider that opens the cost group; the caller passes the footer `dim`. */
+	dim: (t: string) => string = soft,
 ): string {
 	const branch = ctx.sessionManager.getBranch();
 	// Memoized on models.json's stat, so this is one statSync per frame, not a read.
@@ -881,7 +883,7 @@ export function getUsage(
 		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
 		// The dollar icon opens a new group, so it takes the same divider the footer uses
 		// between cells; the token and context parts stay a space apart.
-		if (cell) parts.push(parts.length > 0 ? `${soft("·")} ${cell}` : cell);
+		if (cell) parts.push(parts.length > 0 ? `${dim("·")} ${cell}` : cell);
 	}
 	return parts.join(" ");
 }
@@ -1250,7 +1252,7 @@ export default function (pi: ExtensionAPI) {
 								// Nothing is read at all while the cell is off.
 								const band = activeFooterCost() ? budgetLevelNow() : "ok";
 								const bandPaint = band === "warn" ? colorOr("warning", acc) : band === "over" ? colorOr("error", acc) : undefined;
-								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width, bandPaint);
+								usageStr = getUsage(ctx, acc, secondarySoft, activeFooterCost(), width, bandPaint, dim);
 							} catch {
 								// fallback
 							}
