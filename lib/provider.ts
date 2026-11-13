@@ -382,12 +382,13 @@ function wireModels(name: string, provider: { api?: unknown; baseUrl?: unknown }
 }
 
 /** A stored selection keeps its level; a new id gets the detected one. A probed limit is
- *  merged into the stored one, so a reselect never loses what an earlier probe learned. */
+ *  merged into the stored one, and a probed effort map travels with the level, so a reselect
+ *  never loses what an earlier probe learned (an `auto` level serializes without a map). */
 export function mergeLevels(entry: ProviderEntry, ids: string[], meta?: Map<string, ModelMeta>): ProviderModel[] {
 	return ids.map((id) => {
 		const existing = entry.models.find((m) => m.id === id);
 		const found = meta?.get(id);
-		return { id, level: existing?.level ?? detectLevel(id), meta: found ? mergeMeta(existing?.meta, found) : existing?.meta };
+		return { id, level: existing?.level ?? detectLevel(id), map: existing?.map, meta: found ? mergeMeta(existing?.meta, found) : existing?.meta };
 	});
 }
 
@@ -1460,6 +1461,10 @@ if (isMain(import.meta.url)) {
 	assert(merged[1]!.level === "auto", "a new id defaults to auto");
 	const keptFlag = mergeLevels({ name: "n", baseUrl: "b", api: "openai-completions", models: [{ id: "m1", level: "low" }] }, ["m1"]);
 	assert(keptFlag[0]!.level === "low", "a stored level survives a reselect");
+	// A reselect used to reserialize `auto` without its map, wiping every probed level.
+	const reselected = withProviderModels(probedMap, "r", mergeLevels(loadProviderEntry(probedMap, "r")!, ["m1"]));
+	const reselectedMap = (reselected.providers as Record<string, { models: { thinkingLevelMap?: Record<string, string | null> }[] }>).r!.models[0]!.thinkingLevelMap;
+	assert(reselectedMap?.medium === "high" && reselectedMap?.xhigh === null, "a reselect keeps the probed map");
 	const entryLoaded = loadProviderEntry(rich, "r");
 	assert(entryLoaded?.models[0]!.id === "m1" && entryLoaded.api === "openai-completions", "loadProviderEntry reads models and api");
 	assert(loadProviderEntry(rich, "missing") === undefined, "loadProviderEntry misses cleanly");
