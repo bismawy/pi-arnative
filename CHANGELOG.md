@@ -10,6 +10,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **A reselect keeps the thinking levels a probe paid for.** Selecting or re-probing a provider's models reserialized every `auto` model through `mergeLevels`, which carried only its level, so `wireModels` dropped the stored `thinkingLevelMap` and the model went back to offering every level. `mergeLevels` now carries the probed map with the level, and the reselect path is pinned in the provider self-check (`lib/provider.ts`, `mergeLevels`).
+
 ## [0.11.0] - 2026-11-13
 
 ### Added
