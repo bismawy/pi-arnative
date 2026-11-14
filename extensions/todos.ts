@@ -282,6 +282,9 @@ function refresh(ctx: ExtensionContext, force = false): void {
 			let layout: ReturnType<typeof todoLayout> = { lines: [], up: null, down: null };
 			/** Cells of the hint in the drawn box: the only place a press expands or folds it. */
 			let spans: TextSpan[] = [];
+			/** Swallows the follow-up release/click after a press on the hint or a counter, because
+			 *  the re-render between press and click can remove `↑ 1 more` / `↓ 1 more` at that row. */
+			let swallowClick = false;
 			/** Move the five-row window by `delta` rows and repaint. `top` stays absolute, so the
 			 *  window parks at the end of the list instead of drifting. */
 			const scroll = (delta: number): void => {
@@ -308,7 +311,13 @@ function refresh(ctx: ExtensionContext, force = false): void {
 				// the task names stay selectable and copyable. The work is done on the press: pi
 				// only synthesizes a click when the pointer did not move at all.
 				handleMouse: (event: TuiMouseEvent) => {
-					if (event.button !== "left" || event.y >= height) return undefined;
+					if (event.button !== "left") return undefined;
+					if (event.type === "press") swallowClick = false;
+					if (swallowClick && event.type !== "press") {
+						if (event.type === "click") swallowClick = false;
+						return { handled: true, render: false };
+					}
+					if (event.y >= height) return undefined;
 					const onHint = inSpans(spans, event.y, event.x);
 					const onCounter = event.y === layout.up || event.y === layout.down;
 					if (!onHint && !onCounter) {
@@ -325,6 +334,7 @@ function refresh(ctx: ExtensionContext, force = false): void {
 					// The press already did it, so the release and the click that may follow are
 					// swallowed: toggling again on the click would undo the press.
 					if (event.type !== "press") return { handled: true, render: false };
+					swallowClick = true;
 					if (onCounter) {
 						scroll(event.y === layout.up ? -1 : 1);
 						return { handled: true, render: true };
