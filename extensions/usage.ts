@@ -521,10 +521,13 @@ export class UsageModalComponent implements Component {
 			const isSelected = actualIdx === this.selectedIndex;
 
 			// Provider and project group rows sit on the plain text color, and the rows beneath
-			// them are dim. The cursor paints any row the soft accent, and the expand arrow alone
-			// carries the accent so the eye can find the tree.
+			// them are dim — including the providers nested under a project. The cursor paints
+			// any row the soft accent, and the expand arrow alone carries the accent so the eye
+			// can find the tree.
 			const plain = (s: string) => th.fg("text", s);
-			const resting = item.type === "model" || item.type === "price" ? dim : plain;
+			const nested =
+				item.type === "model" || item.type === "price" || (this.view === "project" && item.type === "provider");
+			const resting = nested ? dim : plain;
 			const paintName = isSelected ? accSoft : resting;
 			const paintVal = isSelected ? accSoft : resting;
 			const isPrice = item.type === "price";
@@ -1071,19 +1074,20 @@ if (isMain(import.meta.url)) {
 		new UsageModalComponent(strictTheme, () => {}, () => {}, "off").render(120).length > 0,
 		"a theme without the soft tokens still renders the rows",
 	);
-	// Project view: the project group row sits on plain text like a provider group row, and the
-	// expand arrow carries the accent.
+	// Project view: the project group row sits on plain text like a provider group row, its
+	// folder content (the providers under it) on dim, and the expand arrow carries the accent.
 	const taggedProject = new UsageModalComponent(taggedTheme, () => {}, () => {}, "off");
 	taggedProject.handleInput("v");
 	const projectLines = taggedProject.render(260);
 	assert(projectLines.some((l) => /<accent>[▸▾]/.test(l)), "the expand arrow carries the accent");
 	assert(
-		projectLines.some((l) => /│<\/>\s{3,5}<text>/.test(l)),
-		"a provider row under a project sits on plain text, indented like a model row",
+		projectLines.some((l) => /│<\/>\s{3,5}<dim>/.test(l)),
+		"a provider row under a project sits on dim text, indented like a model row",
 	);
 	taggedProject.handleInput("j");
 	const selectedLines = taggedProject.render(260);
 	assert(selectedLines.some((l) => l.includes("<text>unknown")), "the project label sits on plain text");
+	assert(!projectLines.some((l) => /│<\/>\s{3,5}<text>/.test(l)), "no provider under a project keeps the plain text color");
 	assert(selectedLines.some((l) => /<accentSoft>\w/.test(l)), "the selected provider row takes the soft accent");
 	// Shared chrome (per `renderScreen`): title accent+bold, description muted, legend dim.
 	// `taggedTheme.bold` is identity, so only the accent wrapper shows here; the bold half is
