@@ -10,6 +10,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **The providers nested under a project are dim, like every other row under a group.** In `/usage` → **Project**, an expanded project listed its providers in the plain text color while the Provider and Prices views already dimmed their children, so a folder's contents read as another group heading. The child rows now take `dim`; the project row keeps `text` and the expand arrow keeps the accent (`extensions/usage.ts`, the `resting` paint in `render`).
+
 ## [0.11.1] - 2026-11-13
 
 ### Fixed
