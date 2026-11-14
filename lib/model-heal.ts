@@ -88,11 +88,9 @@ const errText = (error: unknown): string => (error instanceof Error ? error.mess
 export const DEFAULT_THINKING_MAP = { low: "low", medium: "medium", high: "high", xhigh: "xhigh" };
 
 const HOUR_MS = 60 * 60 * 1000;
-const META_TTL_MS = 6 * HOUR_MS;
 const META_FAILURE_TTL_MS = HOUR_MS;
 const META_TIMEOUT_MS = 8000;
 const META_MAX_BYTES = 2 * 1024 * 1024;
-const EFFORT_TTL_MS = 24 * HOUR_MS;
 const EFFORT_FAILURE_TTL_MS = HOUR_MS;
 const EFFORT_BUDGET_MS = 2 * 60 * 1000;
 
@@ -243,7 +241,9 @@ export function healFlags(deps: HealDeps, only?: RtModel[], active?: RtModel): H
 			const atProvider = assignCompat(entry, shared);
 			if (atProvider.length) detail.push(`${m.provider}: compat += ${atProvider.join(", ")}`);
 			if (Object.keys(own).length) {
-				const { slot, label } = modelSlot(entry, m.id, owned);
+				// Keep per-model compat in modelOverrides so external catalog syncs (e.g. Magpie)
+				// rewriting models[] cannot strip healed flags and re-trigger heals.
+				const { slot, label } = modelSlot(entry, m.id, true);
 				const atModel = assignCompat(slot, own);
 				if (atModel.length) detail.push(`${m.provider} ${label}: compat += ${atModel.join(", ")}`);
 			}
@@ -374,8 +374,23 @@ function readForPass(): Obj | undefined {
 
 let metaInFlight = false;
 
+/** True when a channel's cached catalog still covers all current model ids at the same
+ *  endpoint (or a failed fetch is still inside its 1h cooldown). */
+function metaFresh(prev: HealState["providers"][string] | undefined, channel: Channel, signature: string, now: number): boolean {
+	if (!prev) return false;
+	if (prev.failed) return prev.signature === signature && now - prev.fetchedAt < META_FAILURE_TTL_MS;
+	try {
+		const parsed = JSON.parse(prev.signature) as { baseUrl?: string; ids?: string[] };
+		if (parsed.baseUrl !== channel.baseUrl || !Array.isArray(parsed.ids)) return false;
+		const known = new Set(parsed.ids);
+		return channel.ids.every((id) => known.has(id));
+	} catch {
+		return false;
+	}
+}
+
 /** contextWindow / maxTokens from each channel's catalog. A non-forced run skips a channel
- *  fetched within the TTL whose baseUrl and model ids are unchanged. */
+ *  whose endpoint and current model ids are already cached locally, retrying failures after 1h. */
 export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResult> {
 	if (metaInFlight) return none();
 	metaInFlight = true;
@@ -390,7 +405,7 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 			deps.signal?.throwIfAborted();
 			const signature = JSON.stringify({ baseUrl: channel.baseUrl, ids: channel.ids });
 			const prev = state.providers[channel.provider];
-			if (!force && prev?.signature === signature && now - prev.fetchedAt < (prev.failed ? META_FAILURE_TTL_MS : META_TTL_MS)) continue;
+			if (!force && metaFresh(prev, channel, signature, now)) continue;
 			try {
 				const meta = await fetchMeta(channel, deps.fetchImpl ?? fetch);
 				deps.signal?.throwIfAborted();
@@ -463,10 +478,19 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 
 let effortInFlight = false;
 
+const EFFORT_KEYS = THINKING_LEVELS.filter((l) => l !== "off");
 const sameMap = (a: Record<string, string | null> | undefined, b: Record<string, string | null> | undefined): boolean =>
-	THINKING_LEVELS.every((l) => a?.[l] === b?.[l]);
+	EFFORT_KEYS.every((l) => a?.[l] === b?.[l]);
 
 const mapOf = (m: RtModel): Record<string, string | null> | undefined => (isObj(m.thinkingLevelMap) ? (m.thinkingLevelMap as Record<string, string | null>) : undefined);
+
+function findEffort(efforts: HealState["efforts"], provider: string, id: string): HealState["efforts"][string] | undefined {
+	const exact = efforts[modelKey(provider, id)];
+	if (exact) return exact;
+	const wanted = `${lower(provider)}\0${lower(id)}`;
+	for (const [k, v] of Object.entries(efforts)) if (k.toLowerCase() === wanted) return v;
+	return undefined;
+}
 
 /** Probe the reasoning efforts each relay accepts and remap rejected levels. A map the user
  *  shaped (a remap or a null) is theirs and never probed, not even when forced. */
@@ -488,13 +512,14 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 		const pending = (only ?? deps.models()).filter((m) => {
 			const channel = m?.provider ? channels.get(lower(m.provider)) : undefined;
 			if (!channel || !isEffortProbeable(m, channel.compat)) return false;
-			const prev = state.efforts[modelKey(m.provider, m.id)];
+			const prev = findEffort(state.efforts, m.provider, m.id);
 			// A shaped map (a null or a remap) is the user's unless the probe wrote it. A map an
-			// older probe wrote (nearest-effort remaps) is redone now, not after the TTL.
+			// older probe wrote with nearest-effort remaps is redone once, not on a timer.
 			const probeWrote = prev !== undefined && sameMap(mapOf(m), prev.map);
 			if (carriesRemap(mapOf(m)) && !probeWrote) return false;
-			if (force || !prev || (probeWrote && !prev.failed && prev.exact !== true)) return true;
-			if (now - prev.at >= (prev.failed ? EFFORT_FAILURE_TTL_MS : EFFORT_TTL_MS)) return true;
+			if (force || !prev) return true;
+			if (probeWrote && !prev.failed && prev.exact !== true && carriesRemap(prev.map)) return true;
+			if (prev.failed) return now - prev.at >= EFFORT_FAILURE_TTL_MS;
 			return !sameMap(mapOf(m), prev.map);
 		});
 		if (pending.length === 0) return none();
@@ -607,9 +632,10 @@ if (isMain(import.meta.url)) {
 		const relayCompat = read().relay!.compat as Obj;
 		assert(relayCompat.supportsLongCacheRetention === false && relayCompat.sendSessionAffinityHeaders === true, "a channel-wide flag lands at provider level");
 		assert(relayCompat.cacheControlFormat === undefined, "a flag only one sibling needs stays off the provider");
-		assert((modelIn("relay", "claude-sonnet-4-5").compat as Obj).cacheControlFormat === "anthropic", "and lands on that model");
+		const overrideCompat = (id: string): Obj => ((read().relay!.modelOverrides as Record<string, Obj>)[id]!.compat as Obj);
+		assert(overrideCompat("claude-sonnet-4-5").cacheControlFormat === "anthropic", "and lands on that model override");
 		const r1 = modelIn("relay", "r1");
-		assert(isObj(r1.thinkingLevelMap) && (r1.compat as Obj).supportsDeveloperRole === false, "a reasoning model gets a map and the developer-role opt-out");
+		assert(isObj(r1.thinkingLevelMap) && overrideCompat("r1").supportsDeveloperRole === false, "a reasoning model gets a map and the developer-role opt-out");
 		assert(read().owned!.compat === undefined && isObj((read().owned!.modelOverrides as Obj).o1), "an extension-owned provider is fixed through modelOverrides");
 		assert(existsSync(`${file}.bak-model-heal`), "the first write keeps a backup");
 		const pinned = modelIn("relay", "pinned").thinkingLevelMap as Obj;
