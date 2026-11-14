@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	AssistantMessageComponent,
 	CompactionSummaryMessageComponent,
 	FooterComponent,
 	ToolExecutionComponent,
@@ -42,6 +43,12 @@ const sites: Site[] = [
 		key: "updateDisplay",
 	},
 	{
+		name: "thinking label updateContent",
+		module: "../extensions/ui-render-tweaks.ts",
+		proto: () => AssistantMessageComponent.prototype,
+		key: "updateContent",
+	},
+	{
 		name: "tool box routing",
 		module: "../extensions/tools.ts",
 		proto: () => ToolExecutionComponent.prototype,
@@ -49,16 +56,16 @@ const sites: Site[] = [
 	},
 ];
 
-for (const site of sites) {
+for (const [idx, site] of sites.entries()) {
 	test(`${site.name}: the patch reinstalls on reload`, async () => {
-		await import(site.module);
+		await import(`${site.module}?site=${idx}`);
 		const proto = site.proto();
 		const first = proto?.[site.key];
 		assert.equal(typeof first, "function", `${site.name}: patched method exists`);
 		assert.equal(first[PATCHED], true, `${site.name}: the installed method is marked`);
 		assert.equal(proto[ORIGINALS][site.key][PATCHED], undefined, `${site.name}: the original is pi's own method`);
 
-		await import(`${site.module}?reload=1`);
+		await import(`${site.module}?site=${idx}&reload=1`);
 		const second = proto[site.key];
 		assert.notEqual(second, first, `${site.name}: the second load installs a fresh patch`);
 		assert.equal(second[PATCHED], true, `${site.name}: the fresh patch is marked too`);

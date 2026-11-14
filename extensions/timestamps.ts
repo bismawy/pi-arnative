@@ -192,9 +192,9 @@ if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.protot
 			// First text line that is neither an OSC zone nor a thinking header
 			let targetIdx = -1;
 			for (let i = 0; i < lines.length; i++) {
-				const cleaned = lines[i].replace(/^(\x1b\]133;[A-Z]\x07)+/, "").trim();
-				// Never paste onto the "Thinking..." line
-				if (cleaned.length > 0 && !/^thinking\b/i.test(cleaned)) {
+				const plain = stripAnsi(lines[i].replace(/^(\x1b\]133;[A-Z]\x07)+/, "")).trim();
+				// Never paste onto the hidden thinking line: `Thinking...` while it streams, `Thought for 3s` once it ends (plain or with the \uec21 icon)
+				if (plain.length > 0 && !/^(?:\uec21\s+)?(?:thinking|thought for)\b/i.test(plain)) {
 					targetIdx = i;
 					break;
 				}

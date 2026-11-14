@@ -15,6 +15,7 @@
  *    the `→` marker and `·` separators, selected text in soft.
  */
 import {
+	AssistantMessageComponent,
 	CompactionSummaryMessageComponent,
 	ExtensionSelectorComponent,
 	getMarkdownTheme,
@@ -45,7 +46,7 @@ import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
 import { patchOnce } from "../lib/patch.ts";
 
-type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
+type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; italic?(text: string): string } | null;
 const activeTheme = () => getActiveTheme<Exclude<ActiveTheme, null>>();
 
 // Hide pi's built-in "Reloading keybindings, extensions, skills..." box
@@ -208,6 +209,15 @@ export default function uiRenderTweaks(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		const th = themeOf<Exclude<ActiveTheme, null>>(ctx);
 		if (th) setActiveTheme(th);
+		clearThinkingTicker();
+	});
+
+	pi.on("agent_end", async () => {
+		clearThinkingTicker();
+	});
+
+	pi.on("session_shutdown", async () => {
+		clearThinkingTicker();
 	});
 
 	// 4. `pi-jev-eye-review` contract message: use our own border box.
@@ -271,6 +281,7 @@ if (InteractiveMode?.prototype) {
 if (InteractiveMode?.prototype) {
 	const proto = InteractiveMode.prototype as unknown as {
 		setExtensionWidget(key: string, content: unknown, options?: { placement?: string }): void;
+		renderWidgets?(): void;
 	};
 	patchOnce(proto, "setExtensionWidget", (origSetWidget) => function (
 		this: typeof proto,
@@ -278,6 +289,8 @@ if (InteractiveMode?.prototype) {
 		content: unknown,
 		options?: { placement?: string },
 	) {
+		const ui = (this as unknown as { ui?: { requestRender(): void } }).ui;
+		if (ui) thinkingState.ui = ui;
 		if (Array.isArray(content) && content.every((line) => typeof line === "string")) {
 			const rows = content as string[];
 			content = (_tui: unknown, th: Parameters<typeof statusRows>[0]) => ({
@@ -294,6 +307,13 @@ if (InteractiveMode?.prototype) {
 		}
 		return origSetWidget.call(this, key, content, options);
 	});
+	if (typeof proto.renderWidgets === "function") {
+		patchOnce(proto, "renderWidgets", (origRenderWidgets) => function (this: typeof proto) {
+			const ui = (this as unknown as { ui?: { requestRender(): void } }).ui;
+			if (ui) thinkingState.ui = ui;
+			return origRenderWidgets.call(this);
+		});
+	}
 }
 
 export class JevReviewBoxComponent implements Component {
@@ -390,6 +410,224 @@ if (CompactionSummaryMessageComponent?.prototype) {
 				return { handled: true };
 			}),
 		);
+	});
+}
+
+// 8. Hidden thinking label (`AssistantMessageComponent`): pi renders plain `Thinking...`
+// in `thinkingText`. Arnative replaces pi's default `"Thinking..."` label with `\uec21`
+// in `accent`, `Thinking...` in `dim`, and animates `.` -> `..` -> `...` while that
+// thinking run is actively streaming. Finished or non-default labels stay static.
+export const THINKING_ICON = "\uec21";
+export const THINKING_DOTS = [".", "..", "..."] as const;
+export const THINKING_DOT_MS = 400;
+
+const THINKING_STATE_KEY = Symbol.for("pi-arnative.thinkingLabelState");
+type ThinkingState = {
+	ui: { requestRender(): void } | null;
+	active: Set<object>;
+	starts: WeakMap<object, number[]>;
+	finished: WeakMap<object, Array<string | undefined>>;
+	timer: ReturnType<typeof setInterval> | null;
+};
+const thinkingState = ((globalThis as Record<symbol, unknown>)[THINKING_STATE_KEY] ??= {
+	ui: null,
+	active: new Set<object>(),
+	starts: new WeakMap<object, number[]>(),
+	finished: new WeakMap<object, Array<string | undefined>>(),
+	timer: null,
+}) as ThinkingState;
+
+function stopThinkingTicker(): void {
+	if (thinkingState.timer) {
+		clearInterval(thinkingState.timer);
+		thinkingState.timer = null;
+	}
+}
+
+export function clearThinkingTicker(): void {
+	thinkingState.active.clear();
+	thinkingState.starts = new WeakMap<object, number[]>();
+	thinkingState.finished = new WeakMap<object, Array<string | undefined>>();
+	stopThinkingTicker();
+}
+
+// Clear any leftover timer on module reload so old closures never keep ticking.
+clearThinkingTicker();
+
+function syncThinkingTicker(): void {
+	if (thinkingState.active.size === 0) {
+		stopThinkingTicker();
+		return;
+	}
+	if (thinkingState.timer) return;
+	thinkingState.timer = setInterval(() => {
+		if (thinkingState.active.size === 0) {
+			stopThinkingTicker();
+			return;
+		}
+		thinkingState.ui?.requestRender?.();
+	}, THINKING_DOT_MS);
+	thinkingState.timer.unref?.();
+}
+
+export function thinkingDotsAt(now: number, startMs: number): string {
+	const elapsed = Math.max(0, now - startMs);
+	const step = Math.floor(elapsed / THINKING_DOT_MS) % THINKING_DOTS.length;
+	return THINKING_DOTS[step]!;
+}
+
+// A finished run states what it did and how long it took, so the collapsed block stops
+// claiming to be thinking once the answer has started. Seconds below a minute, then
+// `Xm Ys`; a run always lasts at least one second, never `0s`.
+export function formatThinkingElapsed(ms: number): string {
+	const total = Math.max(1, Math.round(ms / 1000));
+	if (total < 60) return `${total}s`;
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+export function formatThinkingLabel(
+	th: { fg(color: string, text: string): string; italic?(text: string): string } | null,
+	dots = "...",
+	finished?: string,
+): string {
+	const icon = th ? th.fg("dim", THINKING_ICON) : THINKING_ICON;
+	const label = finished ?? `Thinking${dots}`;
+	const styledLabel = th ? (th.italic ? th.italic(th.fg("dim", label)) : th.fg("dim", label)) : label;
+	return `${icon} ${styledLabel}`;
+}
+
+export function activeThinkingRunIndex(
+	message: { content?: Array<{ type?: string; text?: string; thinking?: string }> } | undefined,
+	isStreaming: boolean,
+): number | null {
+	if (!isStreaming || !Array.isArray(message?.content)) return null;
+	let runIdx = -1;
+	let lastVisibleKind: "thinking" | "other" | null = null;
+	for (let i = 0; i < message.content.length; i++) {
+		const block = message.content[i];
+		if (!block) continue;
+		if (block.type === "thinking") {
+			let hasText = false;
+			for (; i < message.content.length; i++) {
+				const b = message.content[i];
+				if (b?.type !== "thinking") break;
+				if (typeof b.thinking === "string" && b.thinking.trim()) hasText = true;
+			}
+			i--;
+			if (hasText) {
+				runIdx++;
+				lastVisibleKind = "thinking";
+			}
+		} else if ((block.type === "text" && typeof block.text === "string" && block.text.trim()) || block.type === "toolCall") {
+			lastVisibleKind = "other";
+		}
+	}
+	return lastVisibleKind === "thinking" && runIdx >= 0 ? runIdx : null;
+}
+
+export class ThinkingLabelComponent implements Component {
+	private inner: Text;
+	private isActive: boolean;
+	private startMs: number | undefined;
+	private finished: string | undefined;
+	private getTheme: () => ActiveTheme;
+
+	constructor(
+		padX: number,
+		isActive: boolean,
+		startMs: number | undefined,
+		getTheme: () => ActiveTheme,
+		finished?: string,
+	) {
+		this.isActive = isActive;
+		this.startMs = startMs;
+		this.finished = finished;
+		this.getTheme = getTheme;
+		this.inner = new Text(this.labelText(), padX, 0);
+	}
+
+	private labelText(): string {
+		const dots = this.isActive ? thinkingDotsAt(Date.now(), this.startMs ?? Date.now()) : "...";
+		return formatThinkingLabel(this.getTheme(), dots, this.isActive ? undefined : this.finished);
+	}
+
+	invalidate(): void {
+		this.inner.invalidate();
+	}
+
+	render(width: number): string[] {
+		this.inner.setText(this.labelText());
+		return this.inner.render(width);
+	}
+}
+
+function isPlainTextComponent(c: unknown): boolean {
+	if (!c || typeof c !== "object") return false;
+	const ctorName = (c as { constructor?: { name?: string } }).constructor?.name;
+	if (ctorName === "Text") return true;
+	return "text" in c && typeof (c as { text?: unknown }).text === "string" && !("theme" in c);
+}
+
+export function patchThinkingInAssistantMessage(comp: {
+	contentContainer?: { children?: unknown[] };
+	lastMessage?: { content?: Array<{ type?: string; text?: string; thinking?: string }> };
+	isStreaming?: boolean;
+	hiddenThinkingLabel?: string;
+	outputPad?: number;
+}): boolean {
+	const th = activeTheme();
+	if (!th || (comp.hiddenThinkingLabel ?? "Thinking...") !== "Thinking...") {
+		thinkingState.active.delete(comp);
+		syncThinkingTicker();
+		return false;
+	}
+	const activeRunIdx = activeThinkingRunIndex(comp.lastMessage, Boolean(comp.isStreaming));
+	const children = comp.contentContainer?.children ?? [];
+	const starts = thinkingState.starts.get(comp) ?? [];
+	const finished = thinkingState.finished.get(comp) ?? [];
+	let runIdx = 0;
+	let anyActive = false;
+	let anyReplaced = false;
+	for (const child of children) {
+		if (!child || typeof child !== "object" || !("child" in child) || !("onMouse" in child)) continue;
+		const region = child as { child: unknown };
+		if (isPlainTextComponent(region.child)) {
+			const isActive = activeRunIdx === runIdx;
+			if (isActive) {
+				anyActive = true;
+				starts[runIdx] ??= Date.now();
+			} else if (starts[runIdx] !== undefined && finished[runIdx] === undefined) {
+				// The run just ended: keep how long it took, so the settled label reads
+				// `Thought for 3s` instead of claiming to still think.
+				finished[runIdx] = `Thought for ${formatThinkingElapsed(Date.now() - starts[runIdx]!)}`;
+			}
+			region.child = new ThinkingLabelComponent(
+				comp.outputPad ?? 1,
+				isActive,
+				starts[runIdx],
+				activeTheme,
+				finished[runIdx],
+			);
+			anyReplaced = true;
+		}
+		runIdx++;
+	}
+	thinkingState.starts.set(comp, starts);
+	thinkingState.finished.set(comp, finished);
+	if (anyActive) thinkingState.active.add(comp);
+	else thinkingState.active.delete(comp);
+	syncThinkingTicker();
+	return anyReplaced;
+}
+
+if (AssistantMessageComponent?.prototype?.updateContent) {
+	const proto = AssistantMessageComponent.prototype as any;
+	patchOnce(proto, "updateContent", (origUpdateContent) => function (this: any, message: unknown, isStreaming?: boolean) {
+		const res = origUpdateContent.call(this, message, isStreaming);
+		patchThinkingInAssistantMessage(this);
+		return res;
 	});
 }
 
@@ -713,5 +951,39 @@ if (isMain(import.meta.url)) {
 		expLines[0].startsWith("╭") && expLines[expLines.length - 1].startsWith("╰") && expLines.some((l: string) => l.includes("Language follows the user")),
 		"contract message expanded: border box with the full content",
 	);
+
+	// Thinking label: accent \uec21 + dim Thinking... + animated . -> .. -> ... while active streaming
+	assert(thinkingDotsAt(0, 0) === "." && thinkingDotsAt(400, 0) === ".." && thinkingDotsAt(800, 0) === "..." && thinkingDotsAt(1200, 0) === ".", "thinking dots loop . -> .. -> ...");
+	const tLabel = formatThinkingLabel(
+		{ fg: (c, t) => `[${c}]${t}[/${c}]`, italic: (t) => `<i>${t}</i>` },
+		"..",
+	);
+	assert(tLabel === "[dim]\uec21[/dim] <i>[dim]Thinking..[/dim]</i>", "thinking label paints icon dim and label dim italic");
+	const doneLabel = formatThinkingLabel(
+		{ fg: (c, t) => `[${c}]${t}[/${c}]`, italic: (t) => `<i>${t}</i>` },
+		"...",
+		"Thought for 3s",
+	);
+	assert(doneLabel === "[dim]\uec21[/dim] <i>[dim]Thought for 3s[/dim]</i>", "a finished run states Thought for Ns, same dim italic paint");
+	assert(formatThinkingElapsed(0) === "1s" && formatThinkingElapsed(2999) === "3s", "a short run counts in whole seconds, never 0s");
+	assert(formatThinkingElapsed(60_000) === "1m" && formatThinkingElapsed(83_000) === "1m 23s", "a long run adds minutes");
+
+	const fakeThinkingMsg = { role: "assistant", content: [{ type: "thinking", thinking: "pondering" }], stopReason: "stop", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, api: "openai-completions", provider: "test", model: "test", timestamp: 0 };
+	const activeComp = new AssistantMessageComponent(undefined, true, getMarkdownTheme(), "Thinking...", 1);
+	activeComp.updateContent(fakeThinkingMsg as any, true);
+	const stripOsc = (s: string) => stripAnsi(s.replace(/\x1b\][^\x07]*\x07/g, "")).trim();
+	const activeLines = activeComp.render(60).map(stripOsc);
+	assert(activeLines.some((l) => l.startsWith("\uec21 Thinking.")), "streaming hidden thinking renders \\uec21 Thinking.(. / .. / ...)");
+	assert(activeThinkingRunIndex(fakeThinkingMsg, true) === 0, "active thinking run is detected while streaming");
+	assert(activeThinkingRunIndex({ content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "done" }] }, true) === null, "thinking stops animating once answer text begins");
+
+	activeComp.updateContent(fakeThinkingMsg as any, false);
+	const doneLines = activeComp.render(60).map(stripOsc);
+	assert(
+		doneLines.some((l) => l.startsWith("\uec21 Thought for ")),
+		"a finished hidden thinking run settles on \uec21 Thought for Ns, not Thinking...",
+	);
+	clearThinkingTicker();
+
 	console.log("ui-render-tweaks.ts self-check OK");
 }
