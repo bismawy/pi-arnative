@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+- **Custom collapsed Thinking label (` Thinking...`) when running `pi-arnative`.** Replaces Pi's default `"Thinking..."` label with `\uec21` in `dim`, `Thinking...` in `dim` italic, and loops `.` → `..` → `...` while that thinking run is actively streaming, settling on ` Thinking...` once text/tool output begins or the message completes (`extensions/ui-render-tweaks.ts`, `extensions/timestamps.ts`, `test/patch-reload.test.ts`).
+
 ## [0.11.1] - 2026-11-13
 
 ### Fixed
