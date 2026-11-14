@@ -10,7 +10,7 @@
 
 ## [Unreleased]
 
-- **Custom collapsed Thinking label (` Thinking...`) when running `pi-arnative`.** Replaces Pi's default `"Thinking..."` label with `\uec21` in `dim`, `Thinking...` in `dim` italic, and loops `.` → `..` → `...` while that thinking run is actively streaming, settling on ` Thinking...` once text/tool output begins or the message completes (`extensions/ui-render-tweaks.ts`, `extensions/timestamps.ts`, `test/patch-reload.test.ts`).
+- **Custom collapsed Thinking label (`\uec21 Thinking...`) when running `pi-arnative`.** Replaces Pi default label with `\uec21` in `dim`, `Thinking...` in `dim` italic, and loops `.` → `..` → `...` while that thinking run is actively streaming. Once the run ends the label states what happened instead of claiming to think: `\uec21 Thought for 3s` (`3s` under a minute, `1m 23s` above), still `dim` italic, with one duration kept per run so a later run after a tool call times itself (`extensions/ui-render-tweaks.ts`, `formatThinkingElapsed`, `ThinkingLabelComponent`, `patchThinkingInAssistantMessage`; `extensions/timestamps.ts` keeps the timestamp off both labels; pinned in the ui-render-tweaks self-check and `test/patch-reload.test.ts`).
 
 ## [0.11.1] - 2026-11-13
 
