@@ -296,3 +296,40 @@ test("a new session with no stored file starts with an empty list", async () => 
 	const listed = await registered!.execute("call-1", { action: "list" }, undefined, undefined, freshCtx) as { content: { text: string }[] };
 	assert.equal(listed.content[0]!.text, "The list is empty", "the previous session's tasks do not leak into the new session");
 });
+
+test("clicking a 1-more counter that disappears on render does not collapse the box", async () => {
+	const freshCtx = { ...ctx, sessionManager: { getSessionId: () => "widget-1-more-session" } };
+	await handlers.get("session_start")!({ reason: "new" }, freshCtx);
+	await registered!.execute(
+		"call-2",
+		{ action: "create", tasks: [1, 2, 3, 4, 5, 6].map((n) => ({ subject: `Item ${n}` })) },
+		undefined,
+		undefined,
+		freshCtx,
+	);
+	const { component } = widget();
+	(shortcuts.get("alt+o") ?? shortcuts.get("ctrl+alt+o"))!.handler(freshCtx);
+
+	// 6 items with 5 visible rows -> "↓ 1 more" is shown at the bottom.
+	const initial = component.render(80);
+	const downRow = initial.findIndex((line) => line.includes("↓ 1 more"));
+	assert.ok(downRow > 0, "the ↓ 1 more counter is visible");
+
+	// Simulate real Pi mouse dispatch: press -> render -> release -> click at the same coordinates.
+	component.handleMouse({ type: "press", button: "left", x: 4, y: downRow, width: 80, height: initial.length });
+	const afterDown = component.render(80);
+	assert.ok(!afterDown.some((line) => line.includes("↓")), "scrolling past 1 more removes the bottom counter");
+	component.handleMouse({ type: "release", button: "left", x: 4, y: downRow, width: 80, height: afterDown.length });
+	component.handleMouse({ type: "click", button: "left", x: 4, y: downRow, clickCount: 1, width: 80, height: afterDown.length });
+	assert.ok(component.render(80).length > 3, "box stays expanded after clicking ↓ 1 more");
+
+	// Symmetric check for "↑ 1 more" at the top.
+	const upRow = component.render(80).findIndex((line) => line.includes("↑ 1 more"));
+	assert.ok(upRow > 0, "the ↑ 1 more counter is visible");
+	component.handleMouse({ type: "press", button: "left", x: 4, y: upRow, width: 80, height: afterDown.length });
+	const afterUp = component.render(80);
+	assert.ok(!afterUp.some((line) => line.includes("↑")), "scrolling past ↑ 1 more removes the top counter");
+	component.handleMouse({ type: "release", button: "left", x: 4, y: upRow, width: 80, height: afterUp.length });
+	component.handleMouse({ type: "click", button: "left", x: 4, y: upRow, clickCount: 1, width: 80, height: afterUp.length });
+	assert.ok(component.render(80).length > 3, "box stays expanded after clicking ↑ 1 more");
+});
