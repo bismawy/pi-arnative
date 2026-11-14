@@ -10,6 +10,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Budget screen labels (`Today`, `30d`, `Total`) now use `dim` while the spend values beside them stay in the default `text` color.** Added `[R] Reset` in `/arnative` -> Budget to reset `budgetDay`, `budgetMonth`, and `budgetEnforce` back to `off` (`extensions/budget.ts`, `resetBudget`, `BudgetModalComponent`).
+
 ## [0.11.1] - 2026-11-13
 
 ### Fixed

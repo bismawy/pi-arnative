@@ -86,6 +86,12 @@ export function setBudgetEnforce(on: boolean): void {
 	saveChoice(BUDGET_ENFORCE_KEY, on ? "on" : "off");
 }
 
+export function resetBudget(): void {
+	setBudgetDay(undefined);
+	setBudgetMonth(undefined);
+	setBudgetEnforce(false);
+}
+
 /** The next cap choice after `current` (unset reads as 0); past the largest choice it wraps to off. */
 export function nextCap(current: number | undefined): number {
 	const cur = current ?? 0;
@@ -188,7 +194,7 @@ export function budgetLevelNow(): BudgetLevel {
 const BUDGET_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Budget"),
 	description: "Warn-only caps on the UTC day and the rolling 30d — enforce on blocks the next turn.",
-	legend: "[↑↓] Move  [Space] Change  [Esc] Back",
+	legend: "[↑↓] Move  [Space] Change  [R] Reset  [Esc] Back",
 };
 
 const ENFORCE_ON_NOTE = "on — blocks the next turn over a cap";
@@ -275,7 +281,7 @@ export function budgetWindows(spend: BudgetSpend | null, caps: { day?: number; m
 class BudgetModalComponent implements Component {
 	private readonly theme: { fg(c: string, t: string): string; bold?(t: string): string };
 	private readonly rows: ListRow[];
-	private readonly hooks: { change(index: number): void; done(back: boolean): void; requestRender(): void };
+	private readonly hooks: { change(index: number): void; reset(): void; done(back: boolean): void; requestRender(): void };
 	private readonly text: ListPickerText;
 	private readonly edge: (s: string) => string;
 	private selected = 0;
@@ -283,7 +289,7 @@ class BudgetModalComponent implements Component {
 	constructor(
 		theme: { fg(c: string, t: string): string; bold?(t: string): string },
 		rows: ListRow[],
-		hooks: { change(index: number): void; done(back: boolean): void; requestRender(): void },
+		hooks: { change(index: number): void; reset(): void; done(back: boolean): void; requestRender(): void },
 		text: ListPickerText,
 		thinkingLevel?: string,
 	) {
@@ -324,6 +330,11 @@ class BudgetModalComponent implements Component {
 		if (matchesKey(keyData, "space")) {
 			this.hooks.change(this.selected);
 			this.hooks.requestRender();
+			return;
+		}
+		if (keyData === "R" || matchesKey(keyData, "r")) {
+			this.hooks.reset();
+			this.hooks.requestRender();
 		}
 	}
 
@@ -346,7 +357,7 @@ class BudgetModalComponent implements Component {
 		const capText = (w: BudgetWindow): string => (w.cap !== undefined && w.cap > 0 ? `${formatCost(w.total)} of ${formatCost(w.cap)}` : "");
 		const partW = Math.max(0, ...windows.map((w) => visibleWidth(capText(w))));
 		for (const w of windows) {
-			const label = th.fg("text", w.label.padEnd(5));
+			const label = dim(w.label.padEnd(5));
 			if (w.unknown) {
 				body.push(`${label} · ${dim("unknown — no day buckets yet")}`);
 				continue;
@@ -364,7 +375,7 @@ class BudgetModalComponent implements Component {
 		// The estimated part of both windows, once: an estimate-only provider shows $0 billed
 		// per window, so the total is the only place the guess is summed.
 		const estimated = (spend?.estimatedToday ?? 0) + (spend?.estimatedMonth ?? 0);
-		if (estimated > 0) body.push(`${dim(`Total · ${formatCost(estimated)} est.`)}`);
+		if (estimated > 0) body.push(`${dim("Total")} · ${th.fg("text", `${formatCost(estimated)} est.`)}`);
 		body.push("");
 
 		// Editable rows — the same rows the headless picker offers.
@@ -403,6 +414,11 @@ export async function openBudget(ctx: ExtensionCommandContext): Promise<boolean 
 				change: (index) => {
 					changeBudgetRow(index);
 					announce(ctx.ui, `Budget: ${rowText(budgetRows()[index]!)}.`);
+					tui.requestRender();
+				},
+				reset: () => {
+					resetBudget();
+					announce(ctx.ui, "Budget reset to defaults.");
 					tui.requestRender();
 				},
 				done: (back) => done(back),
@@ -589,7 +605,7 @@ if (isMain(import.meta.url)) {
 		BUDGET_PICKER_TEXT.description === "Warn-only caps on the UTC day and the rolling 30d — enforce on blocks the next turn.",
 		"the Budget screen description is pinned",
 	);
-	assert(BUDGET_PICKER_TEXT.legend === "[↑↓] Move  [Space] Change  [Esc] Back", "the Budget legend is pinned");
+	assert(BUDGET_PICKER_TEXT.legend === "[↑↓] Move  [Space] Change  [R] Reset  [Esc] Back", "the Budget legend is pinned");
 	assert(rowText(rows[0]!) === "Day cap · $5.00", "the headless row text is pinned: " + rowText(rows[0]!));
 
 	// The dashboard: the two spend-vs-cap windows, pure and pinned.
@@ -603,10 +619,11 @@ if (isMain(import.meta.url)) {
 	// The modal render: status bars above the editable rows, through the shared screen frame.
 	const modalTheme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };
 	const changed: number[] = [];
+	let resets = 0;
 	const modal = new BudgetModalComponent(
 		modalTheme as never,
 		budgetRows(),
-		{ change: (i) => void changed.push(i), done: () => {}, requestRender: () => {} },
+		{ change: (i) => void changed.push(i), reset: () => void resets++, done: () => {}, requestRender: () => {} },
 		BUDGET_PICKER_TEXT as never,
 	);
 	const rendered = modal.render(80).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
@@ -618,6 +635,9 @@ if (isMain(import.meta.url)) {
 	modal.handleInput("\x1b[B"); // down
 	modal.handleInput(" "); // space
 	assert(changed.length === 1 && changed[0] === 1, "down+space changes the second row (30d cap), not the first");
+	modal.handleInput("R");
+	modal.handleInput("r");
+	assert(resets === 2, "R/r triggers budget reset");
 	assert(modal.render(40).length > 0, "the modal renders on a narrow terminal");
 
 	// Both windows capped: the bars share one column however long the spend-of-cap text is.
@@ -633,14 +653,18 @@ if (isMain(import.meta.url)) {
 	// truncate the render.
 	const calls: { slot: string; text: string }[] = [];
 	const slotTheme = { fg: (c: string, t: string) => (calls.push({ slot: c, text: t }), t), bold: (t: string) => t };
-	const slotModal = new BudgetModalComponent(slotTheme as never, budgetRows(), { change: () => {}, done: () => {}, requestRender: () => {} }, BUDGET_PICKER_TEXT as never);
+	const slotModal = new BudgetModalComponent(slotTheme as never, budgetRows(), { change: () => {}, reset: () => {}, done: () => {}, requestRender: () => {} }, BUDGET_PICKER_TEXT as never);
 	slotModal.render(80); // today OVER (120% of $5), 30d OK (60% of $10)
+	assert(calls.find((c) => c.text === "Today")?.slot === "dim", "Today label uses dim");
+	assert(calls.find((c) => c.text === "30d  ")?.slot === "dim", "30d label uses dim");
 	assert(calls.find((c) => c.text === "OVER")?.slot === "error", "OVER paints with the theme's error slot");
 	assert(calls.find((c) => c.text === "OK")?.slot === "accent", "OK paints with the theme's accent slot");
 	setBudgetMonth(7); // 30d $6 of $7 = 85% → WARN
 	slotModal.render(80);
 	assert(calls.filter((c) => c.text === "WARN").pop()?.slot === "warning", "WARN paints with the theme's warning slot");
-	setBudgetMonth(undefined);
+	setBudgetEnforce(true);
+	resetBudget();
+	assert(activeBudgetDay() === undefined && activeBudgetMonth() === undefined && activeBudgetEnforce() === false, "resetBudget clears caps and enforce");
 
 	// An estimated-cost entry adds the `Total · $X est.` line under the windows.
 	writeFileSync(
@@ -648,8 +672,11 @@ if (isMain(import.meta.url)) {
 		JSON.stringify({ message: { role: "assistant", provider: "google", model: "m", timestamp: Date.now(), usage: { input: 1, output: 1, cost: { total: 2 } } } }) + "\n",
 	);
 	resetUsageCache();
-	const estRendered = modal.render(80).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+	calls.length = 0;
+	const estRendered = slotModal.render(80).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
 	assert(estRendered.some((l) => l.includes("Total · $4.00 est.")), "the estimated total line renders: " + estRendered.filter((l) => l.includes("Total")).join(" | "));
+	assert(calls.find((c) => c.text === "Total")?.slot === "dim", "Total label uses dim");
+	assert(calls.find((c) => c.text === "$4.00 est.")?.slot === "text", "Total value beside label uses default text color");
 	rmSync(join(fixture, "sessions", "p", "e.jsonl"));
 	resetUsageCache();
 
