@@ -41,6 +41,11 @@ import {
 /** pi widget key; the extension owns it, so a reload replaces its own box. */
 export const TODO_WIDGET_KEY = "arnative-todos";
 
+/** Delay before holding a `↑`/`↓ n more` row starts repeating, so a normal click scrolls once. */
+const HOLD_DELAY_MS = 250;
+/** Step interval while holding a `↑`/`↓ n more` counter row. */
+const HOLD_REPEAT_MS = 90;
+
 const STORE_KEY = Symbol.for("pi-arnative.todos.widget");
 
 interface WidgetStore {
@@ -285,12 +290,49 @@ function refresh(ctx: ExtensionContext, force = false): void {
 			/** Swallows the follow-up release/click after a press on the hint or a counter, because
 			 *  the re-render between press and click can remove `↑ 1 more` / `↓ 1 more` at that row. */
 			let swallowClick = false;
+			let holdDelay: ReturnType<typeof setTimeout> | undefined;
+			let holdRepeat: ReturnType<typeof setInterval> | undefined;
+			const stopHold = (): void => {
+				if (holdDelay) {
+					clearTimeout(holdDelay);
+					holdDelay = undefined;
+				}
+				if (holdRepeat) {
+					clearInterval(holdRepeat);
+					holdRepeat = undefined;
+				}
+			};
 			/** Move the five-row window by `delta` rows and repaint. `top` stays absolute, so the
 			 *  window parks at the end of the list instead of drifting. */
 			const scroll = (delta: number): void => {
 				const { start } = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
 				s.top = start + delta;
 				s.tui?.requestRender(true);
+			};
+			const startHold = (delta: -1 | 1): void => {
+				stopHold();
+				const step = (): void => {
+					if (!s.expanded) {
+						stopHold();
+						return;
+					}
+					const win = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
+					if ((delta < 0 && win.above <= 0) || (delta > 0 && win.below <= 0)) {
+						stopHold();
+						return;
+					}
+					scroll(delta);
+				};
+				holdDelay = setTimeout(() => {
+					holdDelay = undefined;
+					step();
+					if (s.expanded && holdRepeat === undefined) {
+						const win = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
+						if ((delta < 0 && win.above > 0) || (delta > 0 && win.below > 0)) {
+							holdRepeat = setInterval(step, HOLD_REPEAT_MS);
+						}
+					}
+				}, HOLD_DELAY_MS);
 			};
 			return {
 				render: (width: number): string[] => {
@@ -312,8 +354,12 @@ function refresh(ctx: ExtensionContext, force = false): void {
 				// only synthesizes a click when the pointer did not move at all.
 				handleMouse: (event: TuiMouseEvent) => {
 					if (event.button !== "left") return undefined;
-					if (event.type === "press") swallowClick = false;
+					if (event.type === "press") {
+						stopHold();
+						swallowClick = false;
+					}
 					if (swallowClick && event.type !== "press") {
+						if (event.type === "release" || event.type === "click") stopHold();
 						if (event.type === "click") swallowClick = false;
 						return { handled: true, render: false };
 					}
@@ -336,7 +382,9 @@ function refresh(ctx: ExtensionContext, force = false): void {
 					if (event.type !== "press") return { handled: true, render: false };
 					swallowClick = true;
 					if (onCounter) {
-						scroll(event.y === layout.up ? -1 : 1);
+						const delta: -1 | 1 = event.y === layout.up ? -1 : 1;
+						scroll(delta);
+						startHold(delta);
 						return { handled: true, render: true };
 					}
 					s.expanded = !s.expanded;
@@ -346,7 +394,9 @@ function refresh(ctx: ExtensionContext, force = false): void {
 					s.tui?.requestRender(true);
 					return { handled: true, render: true };
 				},
-				dispose: (): void => {},
+				dispose: (): void => {
+					stopHold();
+				},
 			};
 		},
 		{ placement: "aboveEditor" },

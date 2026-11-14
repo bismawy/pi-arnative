@@ -13,6 +13,9 @@
 - Fix Todos auto-hide cancellation when a body click opens a finished task list.
 - Fix Todos collapsing when clicking a `↑ 1 more` / `↓ 1 more` counter row that disappears after scrolling (`extensions/todos.ts`, `test/todos-widget.test.ts`).
 
+### Added
+- **Auto-scroll when holding left-click on Todos `↑ N more` / `↓ N more` counter rows.** Holding a counter row past 250 ms repeats the scroll every 90 ms until mouse release or the list boundary, while a quick click still scrolls one row (`extensions/todos.ts`, `test/todos-widget.test.ts`).
+
 - **Expanded `[show]` tool boxes now cap their viewport height with clickable `↑ N more` / `↓ N more` border scroll indicators in `primary`, and single-clicking anywhere on a boxed tool toggles expand/collapse.** Expanding a large tool output no longer fills the entire terminal (`6-12` body lines scaled to terminal height); clicking `↑ N more` or `↓ N more` on the top or bottom border scrolls up or down, and single-clicking text or borders on the box toggles `[show]`/`[hide]` on synthesized `click` (`clickCount === 1`) so drag and double-click text selection keep working (`extensions/tools.ts`).
 
 ### Added

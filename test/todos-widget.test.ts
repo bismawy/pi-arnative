@@ -333,3 +333,35 @@ test("clicking a 1-more counter that disappears on render does not collapse the 
 	component.handleMouse({ type: "click", button: "left", x: 4, y: upRow, clickCount: 1, width: 80, height: afterUp.length });
 	assert.ok(component.render(80).length > 3, "box stays expanded after clicking ↑ 1 more");
 });
+
+test("holding a counter row auto-scrolls until release", async () => {
+	const freshCtx = { ...ctx, sessionManager: { getSessionId: () => "widget-hold-scroll-session" } };
+	await handlers.get("session_start")!({ reason: "new" }, freshCtx);
+	await registered!.execute(
+		"call-3",
+		{ action: "create", tasks: Array.from({ length: 12 }, (_, i) => ({ subject: `Hold ${i + 1}` })) },
+		undefined,
+		undefined,
+		freshCtx,
+	);
+	const { component } = widget();
+	(shortcuts.get("alt+o") ?? shortcuts.get("ctrl+alt+o"))!.handler(freshCtx);
+
+	const initial = component.render(80);
+	const downRow = initial.findIndex((line) => line.includes("↓"));
+	assert.ok(downRow > 0, "the ↓ counter is visible");
+	component.handleMouse({ type: "press", button: "left", x: 4, y: downRow, width: 80, height: initial.length });
+	const afterPress = component.render(80);
+	assert.ok(afterPress.some((line) => line.includes("Hold 6")), "press moves down 1 row immediately");
+
+	// Hold past HOLD_DELAY_MS (250ms) + a couple of repeat ticks (90ms each).
+	await new Promise((resolve) => setTimeout(resolve, 460));
+	const afterHold = component.render(80);
+	assert.ok(afterHold.some((line) => line.includes("Hold 8")), "holding auto-scrolls further down");
+
+	component.handleMouse({ type: "release", button: "left", x: 4, y: downRow, width: 80, height: afterHold.length });
+	component.handleMouse({ type: "click", button: "left", x: 4, y: downRow, clickCount: 1, width: 80, height: afterHold.length });
+	const afterRelease = component.render(80);
+	await new Promise((resolve) => setTimeout(resolve, 150));
+	assert.deepEqual(component.render(80), afterRelease, "releasing stops auto-scroll and keeps box open");
+});
