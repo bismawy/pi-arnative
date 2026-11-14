@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+- Fix Todos auto-hide cancellation when a body click opens a finished task list.
+
 - **Expanded `[show]` tool boxes now cap their viewport height with clickable `↑ N more` / `↓ N more` border scroll indicators in `primary`, and single-clicking anywhere on a boxed tool toggles expand/collapse.** Expanding a large tool output no longer fills the entire terminal (`6-12` body lines scaled to terminal height); clicking `↑ N more` or `↓ N more` on the top or bottom border scrolls up or down, and single-clicking text or borders on the box toggles `[show]`/`[hide]` on synthesized `click` (`clickCount === 1`) so drag and double-click text selection keep working (`extensions/tools.ts`).
 
 ## [0.11.1] - 2026-11-13

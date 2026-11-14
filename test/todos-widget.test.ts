@@ -254,6 +254,28 @@ test("a task reopened during the wait keeps the box", async () => {
 	assert.equal(widgets.get("arnative-todos"), undefined, "the box leaves once the wait is over");
 });
 
+test("a body click keeps a finished box open until it is collapsed again", async () => {
+	await call({ action: "update", id: 1, status: "in_progress" });
+	await call({ action: "update", id: 1, status: "completed" });
+	const { component } = widget();
+	const folded = component.render(80);
+	const file = join(agentDir, "arnative", "todos", "widget-test.json");
+	const stored = readFileSync(file, "utf8");
+	assert.equal(folded.length, 3, "the finished box starts collapsed");
+
+	assert.equal(click(component, 1)?.handled, true, "a single body click opens the box");
+	assert.ok(component.render(80).length > folded.length, "the task list is expanded");
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.ok(widgets.get("arnative-todos"), "opening by body click cancels the pending hide");
+	assert.equal(readFileSync(file, "utf8"), stored, "opening the box preserves the saved tasks");
+
+	click(component, 1);
+	assert.equal(component.render(80).length, folded.length, "a second body click collapses the box");
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.equal(widgets.get("arnative-todos"), undefined, "collapsing the finished box starts a new hide timer");
+	assert.equal(readFileSync(file, "utf8"), stored, "hiding the widget preserves the saved tasks");
+});
+
 test("/todos shows the recap in the screen chrome", async () => {
 	screen = undefined;
 	await commands.get("todos")!.handler("", ctx);

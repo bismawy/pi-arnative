@@ -316,7 +316,7 @@ function refresh(ctx: ExtensionContext, force = false): void {
 							s.expanded = !s.expanded;
 							s.top = null;
 							if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
-							else cancelHide(ctx);
+							else cancelHide(s);
 							s.tui?.requestRender(true);
 							return { handled: true, render: true };
 						}
