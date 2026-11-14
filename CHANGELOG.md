@@ -10,6 +10,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Chatbox preset menu (`/arnative chatbox`) with `Box` (`Arnative` default vs `Pi (system)`), `[i] Icon` cycling (`❯`, `>`, `›`, `▸`, `→`, `\uf44f`, `\udb82\udf79`, `\uf51b`, `\udb80\udf7d`, `\uf120`, `\uf489`, `\udb80\udd7a`), and `[D] Dialog` status placement (`Left`, `Center`, `Right`, `Inside`, `Outside`).** `Arnative` renders the rounded input box with the selected prompt icon (`primary` while actively typing, `dim` after 3s idle, with 2 trailing spaces on Nerd Font PUA glyphs so wide icons never crowd the text) and clickable `↑ N more` / `↓ N more` scroll indicators painted in `primary`, trims Pi's leading `Spacer(1)` in `widgetContainerAbove` so chatbox/notices/widgets sit without an extra blank row above them, and renders all five status dialog positions relative to the chatbox (`Left`/`Center`/`Right` on the top border, `Inside` on line 1 right corner, `Outside` left-aligned above the editor with breathing space above/below and inline notices beside it). Choices persist in `config.json` as `chatboxPreset`, `chatboxPrompt`, and `chatboxDialog` (`lib/preset-store.ts`, `lib/list-picker.ts`, `extensions/footer.ts`, `extensions/arnative.ts`, `test/profile.test.ts`).
+
 ## [0.11.1] - 2026-11-13
 
 ### Fixed

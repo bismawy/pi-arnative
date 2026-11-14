@@ -6,19 +6,23 @@
  * or "Pi (system)".
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, FooterComponent, InteractiveMode, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { softOf, softSecondaryOf, stripAnsi } from "../lib/ansi.ts";
+import { inSpans, textSpans, type TextSpan } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
-import { markPatched, originalOf } from "../lib/patch.ts";
+import { markPatched, originalOf, patchOnce } from "../lib/patch.ts";
 import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../lib/usage-store.ts";
 import {
+	CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY,
+	CHATBOX_PRESET_KEY as CHATBOX_PRESET_CONFIG_KEY,
+	CHATBOX_PROMPT_KEY as CHATBOX_PROMPT_CONFIG_KEY,
 	FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY,
 	FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY,
 	loadChoice,
@@ -39,6 +43,153 @@ import { spinnerPainter } from "../lib/spinner.ts";
 // in both — pi's `setEditorComponent()` would close the picker mid-preview). The picker
 // lives in arnative.ts, so the choice is shared through globalThis like the header preset.
 // Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
+export const CHATBOX_PRESETS = ["Pi (system)", "Arnative"] as const;
+export type ChatboxPreset = (typeof CHATBOX_PRESETS)[number];
+export const DEFAULT_CHATBOX_PRESET: ChatboxPreset = "Arnative";
+const CHATBOX_PRESET_KEY = Symbol.for("pi-arnative.chatboxPreset");
+
+export const CHATBOX_PROMPTS = ["❯", ">", "›", "▸", "→", "\uf44f", "\udb82\udf79", "\uf51b", "\udb80\udf7d", "\uf120", "\uf489", "\udb80\udd7a"] as const;
+export type ChatboxPrompt = (typeof CHATBOX_PROMPTS)[number];
+export const DEFAULT_CHATBOX_PROMPT: ChatboxPrompt = "❯";
+const CHATBOX_PROMPT_KEY = Symbol.for("pi-arnative.chatboxPrompt");
+
+export const CHATBOX_DIALOGS = ["Left", "Center", "Right", "Inside", "Outside"] as const;
+export type ChatboxDialog = (typeof CHATBOX_DIALOGS)[number];
+export const DEFAULT_CHATBOX_DIALOG: ChatboxDialog = "Left";
+const CHATBOX_DIALOG_KEY = Symbol.for("pi-arnative.chatboxDialog");
+
+export const PROMPT_IDLE_MS = 3_000;
+const PROMPT_TYPED_AT_KEY = Symbol.for("pi-arnative.promptTypedAt");
+const PROMPT_IDLE_TIMER_KEY = Symbol.for("pi-arnative.promptIdleTimer");
+
+export function activeChatboxPreset(): ChatboxPreset {
+	const stored = (globalThis as Record<symbol, unknown>)[CHATBOX_PRESET_KEY] ?? loadChoice(CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PRESETS);
+	return CHATBOX_PRESETS.includes(stored as ChatboxPreset) ? (stored as ChatboxPreset) : DEFAULT_CHATBOX_PRESET;
+}
+
+export function setChatboxPreset(name: ChatboxPreset): void {
+	(globalThis as Record<symbol, unknown>)[CHATBOX_PRESET_KEY] = name;
+	saveChoice(CHATBOX_PRESET_CONFIG_KEY, name);
+	poke();
+}
+
+export function activeChatboxPrompt(): ChatboxPrompt {
+	const stored = (globalThis as Record<symbol, unknown>)[CHATBOX_PROMPT_KEY] ?? loadChoice(CHATBOX_PROMPT_CONFIG_KEY, CHATBOX_PROMPTS);
+	return CHATBOX_PROMPTS.includes(stored as ChatboxPrompt) ? (stored as ChatboxPrompt) : DEFAULT_CHATBOX_PROMPT;
+}
+
+export function setChatboxPrompt(prompt: ChatboxPrompt): void {
+	(globalThis as Record<symbol, unknown>)[CHATBOX_PROMPT_KEY] = prompt;
+	saveChoice(CHATBOX_PROMPT_CONFIG_KEY, prompt);
+	poke();
+}
+
+export function nextChatboxPrompt(current: ChatboxPrompt = activeChatboxPrompt()): ChatboxPrompt {
+	const idx = CHATBOX_PROMPTS.indexOf(current);
+	return CHATBOX_PROMPTS[(idx + 1) % CHATBOX_PROMPTS.length]!;
+}
+
+export function activeChatboxDialog(): ChatboxDialog {
+	const stored = (globalThis as Record<symbol, unknown>)[CHATBOX_DIALOG_KEY] ?? loadChoice(CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_DIALOGS);
+	return CHATBOX_DIALOGS.includes(stored as ChatboxDialog) ? (stored as ChatboxDialog) : DEFAULT_CHATBOX_DIALOG;
+}
+
+export function setChatboxDialog(dialog: ChatboxDialog): void {
+	(globalThis as Record<symbol, unknown>)[CHATBOX_DIALOG_KEY] = dialog;
+	saveChoice(CHATBOX_DIALOG_CONFIG_KEY, dialog);
+	poke();
+}
+
+export function nextChatboxDialog(current: ChatboxDialog = activeChatboxDialog()): ChatboxDialog {
+	const idx = CHATBOX_DIALOGS.indexOf(current);
+	return CHATBOX_DIALOGS[(idx + 1) % CHATBOX_DIALOGS.length]!;
+}
+
+export function isPromptActive(
+	now: number = Date.now(),
+	lastTyped: number = ((globalThis as Record<symbol, unknown>)[PROMPT_TYPED_AT_KEY] as number | undefined) ?? 0,
+): boolean {
+	return lastTyped > 0 && now - lastTyped <= PROMPT_IDLE_MS;
+}
+
+export function stopPromptIdle(): void {
+	const g = globalThis as Record<symbol, ReturnType<typeof setTimeout> | null | undefined>;
+	if (g[PROMPT_IDLE_TIMER_KEY]) clearTimeout(g[PROMPT_IDLE_TIMER_KEY]!);
+	g[PROMPT_IDLE_TIMER_KEY] = null;
+}
+
+export function markPromptTyped(now: number = Date.now()): void {
+	const g = globalThis as Record<symbol, unknown>;
+	g[PROMPT_TYPED_AT_KEY] = now;
+	stopPromptIdle();
+	const timer = setTimeout(() => {
+		g[PROMPT_IDLE_TIMER_KEY] = null;
+		poke();
+	}, PROMPT_IDLE_MS + 25);
+	timer.unref?.();
+	g[PROMPT_IDLE_TIMER_KEY] = timer;
+	poke();
+}
+
+export function chatboxPrimaryPaint(
+	th: { fg?(color: string, text: string): string } | null | undefined,
+): (text: string) => string {
+	if (!th?.fg) return (t) => t;
+	for (const token of ["mdHeading", "accent"]) {
+		try {
+			const probe = th.fg(token, "x");
+			if (typeof probe === "string" && probe.includes("x")) return (t) => th.fg!(token, t);
+		} catch {
+			// try next
+		}
+	}
+	return (t) => t;
+}
+
+export function isWideNerdPrompt(glyph: string): boolean {
+	const cp = glyph.codePointAt(0) ?? 0;
+	return (cp >= 0xe000 && cp <= 0xf8ff) || cp >= 0xf0000;
+}
+
+export function paintChatboxPrompt(
+	promptGlyph: string,
+	th: { fg?(color: string, text: string): string } | null | undefined,
+	active: boolean,
+): string {
+	const text = isWideNerdPrompt(promptGlyph) ? ` ${promptGlyph}  ` : ` ${promptGlyph} `;
+	if (!th?.fg) return text;
+	try {
+		if (!active) return th.fg("dim", text);
+		return chatboxPrimaryPaint(th)(text);
+	} catch {
+		return text;
+	}
+}
+
+export function renderChatboxScrollBorder(
+	direction: "\u2191" | "\u2193",
+	hiddenLineCount: number,
+	width: number,
+	borderColor: (text: string) => string,
+	primaryColor: (text: string) => string,
+): string {
+	const availableWidth = Math.max(0, width);
+	if (hiddenLineCount <= 0) return borderColor("\u2500".repeat(availableWidth));
+	const core = `${direction} ${hiddenLineCount} more`;
+	const labelWidth = visibleWidth(core) + 2;
+	if (labelWidth + 2 <= availableWidth) {
+		const leftWidth = Math.floor((availableWidth - labelWidth) / 2);
+		const rightWidth = availableWidth - leftWidth - labelWidth;
+		return `${borderColor(`${"\u2500".repeat(leftWidth)} `)}${primaryColor(core)}${borderColor(` ${"\u2500".repeat(rightWidth)}`)}`;
+	}
+	const prefix = "\u2500\u2500\u2500 ";
+	const remaining = availableWidth - visibleWidth(prefix) - visibleWidth(core) - 1;
+	if (remaining >= 0) {
+		return `${borderColor(prefix)}${primaryColor(core)}${borderColor(` ${"\u2500".repeat(remaining)}`)}`;
+	}
+	return borderColor(".".repeat(Math.min(3, availableWidth)) + "\u2500".repeat(Math.max(0, availableWidth - 3)));
+}
+
 export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
@@ -536,6 +687,19 @@ export function formatDuration(ms: number): string {
 // already rendered at width - 5 (2 sides + 3 prompt) and the border is patched with
 // dashes to match. `visible` = content line count (private `renderedVisibleLineCount`);
 // autocomplete lines stay outside the box. JetBrainsMono NF has the round glyphs.
+export function renderChatboxLines(
+	preset: ChatboxPreset,
+	renderInner: (w: number) => string[],
+	width: number,
+	visible: number | undefined,
+	color: (text: string) => string,
+	prompt = " > ",
+): string[] {
+	const promptW = visibleWidth(prompt);
+	if (preset === "Pi (system)" || typeof visible !== "number" || width < promptW + 8) return renderInner(width);
+	return boxEditorLines(renderInner(width - (2 + promptW)), visible, color, prompt);
+}
+
 export function boxEditorLines(
 	lines: readonly string[],
 	visible: number,
@@ -553,6 +717,204 @@ export function boxEditorLines(
 	out[0] = color("\u256d") + lines[0]! + patch + color("\u256e");
 	out[visible + 1] = color("\u2570") + lines[visible + 1]! + patch + color("\u256f");
 	return out;
+}
+
+function formatTopBorderDialog(
+	innerW: number,
+	hiddenLineCount: number,
+	dialog: "Left" | "Center" | "Right",
+	status: string,
+	spinnerOnly: string,
+	color: (text: string) => string,
+	primaryColor: (text: string) => string = (t) => t,
+): string {
+	const scrollCore = hiddenLineCount > 0 ? `\u2191 ${hiddenLineCount} more` : "";
+	const scrollW = scrollCore ? visibleWidth(scrollCore) + 2 : 0;
+	const scrollPainted = scrollCore ? `${color(" ")}${primaryColor(scrollCore)}${color(" ")}` : "";
+	const tryPlace = (label: string): string | null => {
+		const lw = visibleWidth(label);
+		if (lw === 0 || innerW < lw + 4) return null;
+		if (dialog === "Left") {
+			if (scrollW > 0) {
+				const centerStart = Math.floor((innerW - scrollW) / 2);
+				if (centerStart >= 4 + lw + 1) {
+					return `${color("\u2500\u2500 ")}${label}${color(` ${"\u2500".repeat(centerStart - (4 + lw))}`)}${scrollPainted}${color("\u2500".repeat(innerW - centerStart - scrollW))}`;
+				}
+				return null;
+			}
+			return color("\u2500\u2500 ") + label + color(` ${"\u2500".repeat(innerW - lw - 4)}`);
+		}
+		if (dialog === "Center") {
+			const leftD = Math.floor((innerW - lw - 2) / 2);
+			const rightD = innerW - lw - 2 - leftD;
+			if (scrollW > 0) {
+				const leftEnd = 2 + scrollW;
+				if (leftD >= leftEnd + 1) {
+					return `${color("\u2500\u2500")}${scrollPainted}${color(`${"\u2500".repeat(leftD - leftEnd)} `)}${label}${color(` ${"\u2500".repeat(rightD)}`)}`;
+				}
+				return null;
+			}
+			return color(`${"\u2500".repeat(leftD)} `) + label + color(` ${"\u2500".repeat(rightD)}`);
+		}
+		// Right
+		if (scrollW > 0) {
+			const centerStart = Math.floor((innerW - scrollW) / 2);
+			if (centerStart + scrollW + 1 <= innerW - lw - 4) {
+				return `${color("\u2500".repeat(centerStart))}${scrollPainted}${color(`${"\u2500".repeat(innerW - lw - 4 - centerStart - scrollW)} `)}${label}${color(" \u2500\u2500")}`;
+			}
+			return null;
+		}
+		return color(`${"\u2500".repeat(innerW - lw - 4)} `) + label + color(" \u2500\u2500");
+	};
+	const placed = tryPlace(status) ?? (spinnerOnly ? tryPlace(spinnerOnly) : null);
+	if (placed) return placed;
+	const fallback = spinnerOnly || status;
+	const fw = visibleWidth(fallback);
+	if (innerW >= fw + 4) {
+		if (dialog === "Right") return color(`${"\u2500".repeat(innerW - fw - 4)} `) + fallback + color(" \u2500\u2500");
+		if (dialog === "Center") {
+			const leftD = Math.floor((innerW - fw - 2) / 2);
+			return color(`${"\u2500".repeat(leftD)} `) + fallback + color(` ${"\u2500".repeat(innerW - fw - 2 - leftD)}`);
+		}
+		return color("\u2500\u2500 ") + fallback + color(` ${"\u2500".repeat(innerW - fw - 4)}`);
+	}
+	const sw = Math.min(fw, innerW);
+	const prefixW = dialog === "Right" ? Math.max(0, innerW - sw) : dialog === "Center" ? Math.max(0, Math.floor((innerW - sw) / 2)) : Math.min(2, Math.max(0, innerW - sw));
+	return color("\u2500".repeat(prefixW)) + truncateToWidth(fallback, sw, "") + color("\u2500".repeat(Math.max(0, innerW - prefixW - sw)));
+}
+
+/** Places the active working/status dialog relative to the chatbox per the user's Dialog preset. */
+export function applyChatboxDialog(
+	lines: readonly string[],
+	boxed: boolean,
+	width: number,
+	hiddenLineCount: number,
+	dialog: ChatboxDialog,
+	status: string,
+	spinnerOnly: string,
+	color: (text: string) => string,
+	primaryColor: (text: string) => string = (t) => t,
+): string[] {
+	const sw = visibleWidth(status);
+	if (sw === 0 || lines.length === 0) return [...lines];
+	const out = [...lines];
+	// Outside renders onto the existing above-editor widget row (no extra line added here).
+	if (dialog === "Outside") return out;
+	if (dialog === "Inside") {
+		if (out.length < 2) return out;
+		const side = boxed ? color("\u2502") : "";
+		if (boxed && (!out[1]!.startsWith(side) || !out[1]!.endsWith(side))) return out;
+		const inner = boxed ? out[1]!.slice(side.length, out[1]!.length - side.length) : out[1]!;
+		const innerW = boxed ? width - 2 : width;
+		const trimmed = inner.replace(/ +$/, "");
+		const gap = innerW - visibleWidth(trimmed);
+		if (gap >= sw + 2) {
+			out[1] = side + trimmed + " ".repeat(gap - sw - 1) + status + " " + side;
+		} else if (innerW >= sw + 6) {
+			const kept = truncateToWidth(trimmed, innerW - sw - 2, "");
+			const pad = Math.max(1, innerW - visibleWidth(kept) - sw - 1);
+			out[1] = side + kept + " ".repeat(pad) + status + " " + side;
+		}
+		return out;
+	}
+	const innerW = boxed ? Math.max(1, width - 2) : width;
+	const topInner = formatTopBorderDialog(innerW, hiddenLineCount, dialog, status, spinnerOnly, color, primaryColor);
+	out[0] = boxed ? color("\u256d") + topInner + color("\u256e") : topInner;
+	return out;
+}
+
+/** Left-aligns the Outside dialog status in the above-editor slot with 1 blank line
+ *  above and below so it never crowds adjacent messages, Todos, or the chatbox, while
+ *  keeping inline notices beside it on the same row. */
+export function overlayOutsideDialogOnWidgetLines(lines: readonly string[], width: number, status: string): string[] {
+	const sw = visibleWidth(status);
+	if (sw === 0) return [...lines];
+	const leftRow = truncateToWidth(` ${status}`, width, "");
+	if (lines.length === 0) return ["", leftRow, ""];
+	const out = [...lines];
+	const lastIdx = out.length - 1;
+	const last = out[lastIdx]!;
+	const plainLast = stripAnsi(last).trim();
+	if (plainLast.length === 0) {
+		return ["", leftRow, ""];
+	}
+	if (!/^[╭╰│]/.test(plainLast)) {
+		const trimmed = last.replace(/ +$/, "");
+		const rest = trimmed.startsWith(" ") ? trimmed : ` ${trimmed}`;
+		out[lastIdx] = truncateToWidth(` ${status} ${rest}`, width, "");
+		if (stripAnsi(out[0]!).trim().length > 0) out.unshift("");
+		out.push("");
+		return out;
+	}
+	const boxStart = out.findIndex((line) => /^[╭╰│]/.test(stripAnsi(line).trim()));
+	const prefix = out.slice(0, boxStart).filter((line) => stripAnsi(line).trim().length > 0);
+	const boxed = out.slice(boxStart);
+	return prefix.length > 0 ? ["", leftRow, "", ...prefix, "", ...boxed] : ["", leftRow, "", ...boxed];
+}
+
+const OUTSIDE_HOOK_KEY = Symbol.for("pi-arnative.outsideDialogHook");
+const ABOVE_WRAPPED_KEY = Symbol.for("pi-arnative.aboveWidgetWrapped");
+
+function installAboveEditorHook(widgetContainer: { render?: (w: number) => string[] } | undefined, mode: unknown): void {
+	if (!widgetContainer || typeof widgetContainer.render !== "function") return;
+	if ((widgetContainer as unknown as Record<symbol, boolean>)[ABOVE_WRAPPED_KEY]) return;
+	(widgetContainer as unknown as Record<symbol, boolean>)[ABOVE_WRAPPED_KEY] = true;
+	const origRender = widgetContainer.render;
+	widgetContainer.render = function (this: unknown, width: number): string[] {
+		if (activeChatboxPreset() === "Arnative") {
+			trimLeadingSpacerAboveWidget(this as { children?: Array<{ constructor?: { name?: string }; render?(w: number): string[] }> });
+		}
+		const lines = origRender.call(this, width);
+		try {
+			const hook = (globalThis as Record<symbol, ((l: string[], w: number, m: unknown) => string[]) | undefined>)[OUTSIDE_HOOK_KEY];
+			return hook ? hook(lines, width, mode) : lines;
+		} catch {
+			return lines;
+		}
+	};
+}
+
+export function trimLeadingSpacerAboveWidget(
+	widgetContainer: { children?: Array<{ constructor?: { name?: string }; render?(w: number): string[] }> } | undefined,
+): boolean {
+	const children = widgetContainer?.children;
+	if (!Array.isArray(children) || children.length === 0) return false;
+	if (children[0]?.constructor?.name !== "Spacer") return false;
+	children.shift();
+	return true;
+}
+
+if (InteractiveMode?.prototype) {
+	const modeProto = InteractiveMode.prototype as unknown as {
+		renderWidgetContainer?: (container: unknown, widgets: unknown, spacerWhenEmpty: boolean, leadingSpacer: boolean) => void;
+		showStatusIndicator?: (indicator: unknown) => void;
+	};
+	if (typeof modeProto.renderWidgetContainer === "function") {
+		patchOnce(modeProto, "renderWidgetContainer", (orig) => function (
+			this: any,
+			container: unknown,
+			widgets: unknown,
+			spacerWhenEmpty: boolean,
+			leadingSpacer: boolean,
+		): void {
+			if (container && container === this.widgetContainerAbove) {
+				installAboveEditorHook(container as { render?: (w: number) => string[] }, this);
+			}
+			orig.call(this, container, widgets, spacerWhenEmpty, leadingSpacer);
+			if (container && container === this.widgetContainerAbove && activeChatboxPreset() === "Arnative") {
+				trimLeadingSpacerAboveWidget(container as { children?: Array<{ constructor?: { name?: string }; render?(w: number): string[] }> });
+			}
+		});
+	}
+	if (typeof modeProto.showStatusIndicator === "function") {
+		patchOnce(modeProto, "showStatusIndicator", (orig) => function (this: any, indicator: unknown): void {
+			installAboveEditorHook(this.widgetContainerAbove, this);
+			if (activeChatboxPreset() === "Arnative") {
+				trimLeadingSpacerAboveWidget(this.widgetContainerAbove);
+			}
+			orig.call(this, indicator);
+		});
+	}
 }
 
 /**
@@ -888,9 +1250,12 @@ export function getUsage(
 	return parts.join(" ");
 }
 
+let editorTui: { requestRender?: () => void } | null = null;
+
 function poke(): void {
 	try {
-		rerender?.();
+		if (rerender) rerender();
+		else editorTui?.requestRender?.();
 	} catch {
 		// ignore
 	}
@@ -1310,8 +1675,14 @@ export default function (pi: ExtensionAPI) {
 			(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = registerArnative;
 			applyFooterPreset(ctx);
 			class ArnativeEditor extends CustomEditor {
+				private lastHiddenLineCount = 0;
+				private lastBottomHiddenCount = 0;
+				private topMoreSpans: TextSpan[] = [];
+				private bottomMoreSpans: TextSpan[] = [];
+
 				constructor(tui: any, editorTheme: any, keybindings: any, options?: any) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
+					editorTui = tui;
 					// Published so `/arnative` → Animations can repaint the live spinner without
 					// waiting for the next session, and so workUI has a handle to the Loader.
 					(globalThis as Record<symbol, any>)[EDITOR_KEY] = this;
@@ -1344,8 +1715,91 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				renderTopBorder(width: number, hiddenLineCount: number): string {
+					this.lastHiddenLineCount = hiddenLineCount;
 					this.applyFixedIndicatorColors((this as any).workingStatusIndicator);
-					return super.renderTopBorder(width, hiddenLineCount);
+					if (activeChatboxPreset() === "Arnative") {
+						return renderChatboxScrollBorder(
+							"\u2191",
+							hiddenLineCount,
+							width,
+							(t) => this.borderColor(t),
+							chatboxPrimaryPaint(this.getActiveTheme()),
+						);
+					}
+					// Plain/scroll border only; render() positions the status dialog after boxing.
+					const editorProto = Object.getPrototypeOf(CustomEditor.prototype) as {
+						renderTopBorder?: (w: number, h: number) => string;
+					};
+					if (typeof editorProto?.renderTopBorder === "function") {
+						return editorProto.renderTopBorder.call(this, width, hiddenLineCount);
+					}
+					return this.borderColor("\u2500".repeat(width));
+				}
+
+				renderBottomBorder(width: number, hiddenLineCount: number): string {
+					this.lastBottomHiddenCount = hiddenLineCount;
+					if (activeChatboxPreset() === "Arnative") {
+						return renderChatboxScrollBorder(
+							"\u2193",
+							hiddenLineCount,
+							width,
+							(t) => this.borderColor(t),
+							chatboxPrimaryPaint(this.getActiveTheme()),
+						);
+					}
+					const editorProto = Object.getPrototypeOf(CustomEditor.prototype) as {
+						renderBottomBorder?: (w: number, h: number) => string;
+					};
+					if (typeof editorProto?.renderBottomBorder === "function") {
+						return editorProto.renderBottomBorder.call(this, width, hiddenLineCount);
+					}
+					return this.borderColor("\u2500".repeat(width));
+				}
+
+				private scrollByBorderClick(direction: -1 | 1): void {
+					const ed = this as unknown as {
+						lastWidth?: number;
+						scrollOffset?: number;
+						renderedVisibleLineCount?: number;
+						buildVisualLineMap?(w: number): unknown[];
+						findCurrentVisualLine?(vls: unknown[]): number;
+						moveToVisualLine?(vls: unknown[], cur: number, target: number): void;
+						pageScroll?(dir: number): void;
+					};
+					if (
+						typeof ed.buildVisualLineMap === "function" &&
+						typeof ed.findCurrentVisualLine === "function" &&
+						typeof ed.moveToVisualLine === "function"
+					) {
+						const vls = ed.buildVisualLineMap(ed.lastWidth ?? 80);
+						if (vls.length > 0) {
+							const cur = ed.findCurrentVisualLine(vls);
+							const vis = Math.max(1, ed.renderedVisibleLineCount ?? 5);
+							const step = Math.max(1, Math.floor(vis / 2));
+							const scrollOff = Math.max(0, ed.scrollOffset ?? 0);
+							const target =
+								direction < 0
+									? Math.max(0, scrollOff - step)
+									: Math.min(vls.length - 1, scrollOff + vis - 1 + step);
+							ed.moveToVisualLine(vls, cur, target);
+							return;
+						}
+					}
+					ed.pageScroll?.(direction);
+				}
+
+				handleMouse(event: TuiMouseEvent) {
+					if (activeChatboxPreset() === "Arnative" && event.type === "click" && event.button === "left") {
+						if (inSpans(this.topMoreSpans, event.y, event.x)) {
+							this.scrollByBorderClick(-1);
+							return { handled: true, focus: true };
+						}
+						if (inSpans(this.bottomMoreSpans, event.y, event.x)) {
+							this.scrollByBorderClick(1);
+							return { handled: true, focus: true };
+						}
+					}
+					return super.handleMouse(event);
 				}
 
 				handleInput(data: string) {
@@ -1356,24 +1810,58 @@ export default function (pi: ExtensionAPI) {
 						}
 						return;
 					}
+					if (!isPointerOrFocusInput(data)) markPromptTyped();
 					super.handleInput(data);
 				}
 
 				render(width: number): string[] {
-					// The box eats 5 columns: 2 sides + the 3-column " > " prompt, so the
+					const preset = activeChatboxPreset();
+					const dialog = activeChatboxDialog();
+					const indicator = (this as any).workingStatusIndicator as
+						| { renderInBorder?(w: number): string; renderSpinnerInBorder?(w: number): string }
+						| undefined;
+					this.applyFixedIndicatorColors(indicator);
+					// The box eats 5 columns: 2 sides + the 3-column prompt, so the
 					// content is rendered 5 columns narrower.
 					const visible = (this as unknown as { renderedVisibleLineCount?: number }).renderedVisibleLineCount;
-					if (typeof visible !== "number" || width < 11) return super.render(width);
-					let prompt = " > ";
-					try {
-						prompt = this.getActiveTheme()?.fg("dim", prompt) ?? prompt;
-					} catch {
-						// theme not ready -> uncolored prompt
-					}
-					return boxEditorLines(super.render(width - 5), visible, (t) => this.borderColor(t), prompt);
+					const prompt = paintChatboxPrompt(activeChatboxPrompt(), this.getActiveTheme(), isPromptActive());
+					const promptW = visibleWidth(prompt);
+					const lines = renderChatboxLines(preset, (w) => super.render(w), width, visible, (t) => this.borderColor(t), prompt);
+					const boxed = preset === "Arnative" && typeof visible === "number" && width >= promptW + 8 && lines.length >= visible + 2;
+					const statusMax = Math.max(1, width - (boxed ? promptW + 4 : 5));
+					const status = indicator?.renderInBorder?.(statusMax) ?? "";
+					const spinnerOnly = status ? (indicator?.renderSpinnerInBorder?.(width) ?? "") : "";
+					const primary = chatboxPrimaryPaint(this.getActiveTheme());
+					const out = applyChatboxDialog(lines, boxed, width, this.lastHiddenLineCount, dialog, status, spinnerOnly, (t) => this.borderColor(t), primary);
+					const visNow = (this as unknown as { renderedVisibleLineCount?: number }).renderedVisibleLineCount ?? 0;
+					this.topMoreSpans =
+						this.lastHiddenLineCount > 0 && out.length > 0
+							? textSpans([out[0]!], `\u2191 ${this.lastHiddenLineCount} more`)
+							: [];
+					const botRow = visNow + 1;
+					this.bottomMoreSpans =
+						this.lastBottomHiddenCount > 0 && botRow < out.length
+							? textSpans([out[botRow]!], `\u2193 ${this.lastBottomHiddenCount} more`).map((s) => ({ ...s, row: botRow }))
+							: [];
+					return out;
 				}
 			}
 			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
+			(globalThis as Record<symbol, unknown>)[OUTSIDE_HOOK_KEY] = (lines: string[], width: number, mode: any): string[] => {
+				if (activeChatboxDialog() !== "Outside") return lines;
+				const editor = (globalThis as Record<symbol, any>)[EDITOR_KEY] as
+					| { workingStatusIndicator?: { renderInBorder?(w: number): string }; applyFixedIndicatorColors?: (ind: any) => void }
+					| undefined;
+				if (!editor || mode?.editor !== editor) return lines;
+				const children = mode?.editorContainer?.children;
+				if (Array.isArray(children) && !children.includes(editor)) return lines;
+				const indicator = editor.workingStatusIndicator;
+				if (!indicator) return lines;
+				editor.applyFixedIndicatorColors?.(indicator);
+				const status = indicator.renderInBorder?.(Math.max(1, width - 5)) ?? "";
+				if (!status || visibleWidth(status) === 0) return lines;
+				return overlayOutsideDialogOnWidgetLines(lines, width, status);
+			};
 		} catch {
 			// fallback
 		}
@@ -1483,7 +1971,10 @@ export default function (pi: ExtensionAPI) {
 		usageScanLeaf = undefined;
 		stopWorkingClock();
 		stopIdleProbe();
+		stopPromptIdle();
 		stopClockTick();
+		editorTui = null;
+		(globalThis as Record<symbol, unknown>)[OUTSIDE_HOOK_KEY] = null;
 		try {
 			ctx.ui?.setWorkingIndicator?.();
 		} catch {
@@ -1552,6 +2043,12 @@ if (isMain(import.meta.url)) {
 	const boxedDim = boxEditorLines([D, "  hi    ", D], 1, plain, dimP(" > "));
 	assert(visibleWidth(boxedDim[1]!) === visibleWidth(D) + 5, "ANSI (dim) prompt does not shift the width");
 	assert(boxedDim[1]!.startsWith(`\u2502${dimP(" > ")}`), "dim prompt kept as-is");
+
+	const widthsSeen: number[] = [];
+	const piChatbox = renderChatboxLines("Pi (system)", (w) => (widthsSeen.push(w), [D, "  hi    ", D]), 16, 1, plain);
+	assert(widthsSeen[0] === 16 && piChatbox[0] === D, "Pi (system) chatbox renders stock lines at full width");
+	const arnativeChatbox = renderChatboxLines("Arnative", (w) => (widthsSeen.push(w), [D, "  hi    ", D]), 16, 1, plain);
+	assert(widthsSeen[1] === 11 && arnativeChatbox[0]!.startsWith("\u256d"), "Arnative chatbox renders boxed lines at width - 5");
 
 	// Self-check: getToolWorkingMessage
 	assert(getToolWorkingMessage("edit") === "Editing", "edit -> Editing");
@@ -1864,6 +2361,95 @@ if (isMain(import.meta.url)) {
 	delete (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY];
 	resetPresetCache();
 	assert(activeFooterPreset() === "Pi (system)", "a restart reads the non-default footer preset back from disk");
+
+	// Chatbox presets & prompt arrows: Arnative + ❯ are the defaults; Pi (system) and prompt choice persist across restarts.
+	assert(DEFAULT_CHATBOX_PRESET === "Arnative" && CHATBOX_PRESETS.join(" | ") === "Pi (system) | Arnative", "chatbox presets are Pi (system) then Arnative");
+	assert(activeChatboxPreset() === "Arnative", "Arnative is the default chatbox preset");
+	assert(DEFAULT_CHATBOX_PROMPT === "❯" && CHATBOX_PROMPTS[0] === "❯" && CHATBOX_PROMPTS.length === 12, "chatbox prompts default to ❯ with 12 choices");
+	assert(CHATBOX_PROMPTS.every((g) => visibleWidth(g) === 1), "every chatbox prompt glyph is 1 cell wide");
+	assert(nextChatboxPrompt("❯") === ">" && nextChatboxPrompt("\udb80\udd7a") === "❯", "nextChatboxPrompt cycles through every arrow and wraps");
+	assert(DEFAULT_CHATBOX_DIALOG === "Left" && CHATBOX_DIALOGS.join(" | ") === "Left | Center | Right | Inside | Outside", "chatbox dialog defaults to Left with 5 positions");
+	assert(nextChatboxDialog("Left") === "Center" && nextChatboxDialog("Outside") === "Left", "nextChatboxDialog cycles through every position and wraps");
+	setChatboxPreset("Pi (system)");
+	setChatboxPrompt("▸");
+	setChatboxDialog("Outside");
+	assert(loadChoice(CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PRESETS) === "Pi (system)", "the chatbox preset is persisted to disk");
+	assert(loadChoice(CHATBOX_PROMPT_CONFIG_KEY, CHATBOX_PROMPTS) === "▸", "the chatbox prompt is persisted to disk");
+	assert(loadChoice(CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_DIALOGS) === "Outside", "the chatbox dialog is persisted to disk");
+	delete (globalThis as Record<symbol, unknown>)[CHATBOX_PRESET_KEY];
+	delete (globalThis as Record<symbol, unknown>)[CHATBOX_PROMPT_KEY];
+	delete (globalThis as Record<symbol, unknown>)[CHATBOX_DIALOG_KEY];
+	resetPresetCache();
+	assert(activeChatboxPreset() === "Pi (system)", "a restart reads the non-default chatbox preset back from disk");
+	assert(activeChatboxPrompt() === "▸", "a restart reads the non-default chatbox prompt back from disk");
+	assert(activeChatboxDialog() === "Outside", "a restart reads the non-default chatbox dialog back from disk");
+	delete (globalThis as Record<symbol, unknown>)[CHATBOX_PRESET_KEY];
+	delete (globalThis as Record<symbol, unknown>)[CHATBOX_PROMPT_KEY];
+	delete (globalThis as Record<symbol, unknown>)[CHATBOX_DIALOG_KEY];
+
+	// Chatbox dialog placement: Left, Center, Right, Inside, and Outside keep exact box width.
+	const dW = 36;
+	const dBox = boxEditorLines(["\u2500".repeat(dW - 5), "hi" + " ".repeat(dW - 7), "\u2500".repeat(dW - 5)], 1, plain, " ❯ ");
+	const dStatus = "Working (1s)";
+	for (const pos of CHATBOX_DIALOGS) {
+		const rendered = applyChatboxDialog(dBox, true, dW, 0, pos, dStatus, "*", plain);
+		assert(rendered.every((r) => visibleWidth(r) <= dW), `dialog ${pos} never exceeds width`);
+		if (pos === "Outside") {
+			assert(rendered.length === dBox.length && rendered[0] === dBox[0], "Outside dialog leaves editor box unchanged");
+		} else if (pos === "Inside") {
+			assert(rendered.length === dBox.length && rendered[0] === dBox[0] && rendered[1]!.includes(dStatus) && rendered[1]!.endsWith("│"), "Inside dialog sits inside line 1 at the right corner");
+		} else if (pos === "Left") {
+			assert(rendered[0]!.startsWith("╭── Working (1s) ") && visibleWidth(rendered[0]!) === dW, "Left dialog sits on the left of the top border");
+		} else if (pos === "Center") {
+			const idx = rendered[0]!.indexOf(dStatus);
+			assert(idx > 4 && idx < dW - dStatus.length - 4 && visibleWidth(rendered[0]!) === dW, "Center dialog sits centered on the top border");
+		} else if (pos === "Right") {
+			assert(rendered[0]!.endsWith(" Working (1s) ──╮") && visibleWidth(rendered[0]!) === dW, "Right dialog sits on the right of the top border");
+		}
+	}
+	const outZero = overlayOutsideDialogOnWidgetLines([], dW, dStatus);
+	assert(outZero.length === 3 && outZero[0] === "" && outZero[1] === ` ${dStatus}` && outZero[2] === "", "Outside dialog renders with 1 blank line above and below even when widgetContainerAbove is empty");
+	const outEmpty = overlayOutsideDialogOnWidgetLines([""], dW, dStatus);
+	assert(outEmpty.length === 3 && outEmpty[0] === "" && outEmpty[1] === ` ${dStatus}` && outEmpty[2] === "", "Outside dialog pads 1 blank line above and below when no widget is shown");
+	const outNotice = overlayOutsideDialogOnWidgetLines(["", " \ueb1b Chatbox: Arnative."], 60, dStatus);
+	assert(outNotice.length === 3 && outNotice[0] === "" && outNotice[1] === ` ${dStatus}  \ueb1b Chatbox: Arnative.` && outNotice[2] === "", "Outside dialog sits on the left with the notice beside it and 1 blank line below");
+	const outTodos = overlayOutsideDialogOnWidgetLines(["", "\u256d" + "\u2500".repeat(58) + "\u256e", "\u2570" + "\u2500".repeat(58) + "\u256f"], 60, dStatus);
+	assert(outTodos.length === 5 && outTodos[0] === "" && outTodos[1] === ` ${dStatus}` && outTodos[2] === "" && outTodos[3]!.startsWith("\u256d"), "Outside dialog leaves 1 blank line above and below when Todos is visible");
+	const fakeAbove = { children: [{ constructor: { name: "Spacer" }, render: () => [""] }, { render: () => ["\u256d\u2500\u256e", "\u2570\u2500\u256f"] }] };
+	assert(trimLeadingSpacerAboveWidget(fakeAbove) === true && fakeAbove.children.length === 1, "leading Spacer above boxed widget (e.g. Todos) is trimmed cleanly");
+	const fakePlainAbove = { children: [{ constructor: { name: "Spacer" }, render: () => [""] }, { render: () => ["plain status"] }] };
+	assert(trimLeadingSpacerAboveWidget(fakePlainAbove) === true && fakePlainAbove.children.length === 1, "leading Spacer above notice widget is trimmed cleanly");
+	const fakeEmptyAbove = { children: [{ constructor: { name: "Spacer" }, render: () => [""] }] };
+	assert(trimLeadingSpacerAboveWidget(fakeEmptyAbove) === true && fakeEmptyAbove.children.length === 0, "leading Spacer when widgetContainerAbove is empty is trimmed cleanly");
+
+	const scrollBorder = renderChatboxScrollBorder("\u2191", 3, 24, (t) => `<bdr>${t}</bdr>`, (t) => `<pri>${t}</pri>`);
+	assert(scrollBorder.includes("<pri>↑ 3 more</pri>") && visibleWidth(stripAnsi(scrollBorder.replace(/<\/?(bdr|pri)>/g, ""))) === 24, "chatbox scroll border paints N more in primary at exact width");
+	const dialogWithScroll = applyChatboxDialog(dBox, true, dW, 2, "Left", dStatus, "*", (t) => `<bdr>${t}</bdr>`, (t) => `<pri>${t}</pri>`);
+	assert(dialogWithScroll[0]!.includes("<pri>↑ 2 more</pri>"), "top border dialog keeps ↑ N more painted in primary");
+
+	// Prompt idle/active coloring: idle uses dim, active typing uses primary (mdHeading, accent fallback).
+	assert(isPromptActive(10_000, 0) === false, "untyped prompt starts idle");
+	assert(isPromptActive(10_000, 8_000) === true, "prompt stays active within 3s of typing");
+	assert(isPromptActive(10_000, 7_000) === true, "prompt is still active at exact 3s boundary");
+	assert(isPromptActive(10_001, 7_000) === false, "prompt turns idle past 3s without typing");
+	const promptTheme = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
+	assert(paintChatboxPrompt("❯", promptTheme, false) === "<dim> ❯ </dim>", "idle prompt paints with dim");
+	assert(paintChatboxPrompt("❯", promptTheme, true) === "<mdHeading> ❯ </mdHeading>", "active prompt paints with primary (mdHeading)");
+	assert(paintChatboxPrompt("\udb80\udf7d", promptTheme, false) === "<dim> \udb80\udf7d  </dim>", "Nerd Font PUA prompt gets 2 trailing spaces");
+	const nerdBox = renderChatboxLines("Arnative", (w) => ["\u2500".repeat(w), "hi" + " ".repeat(w - 2), "\u2500".repeat(w)], 30, 1, (t) => t, " \udb80\udf7d  ");
+	assert(nerdBox.length === 3 && nerdBox.every((l) => visibleWidth(l) === 30) && nerdBox[1]!.startsWith("\u2502 \udb80\udf7d  hi"), "4-col Nerd Font prompt preserves exact box width");
+	const fallbackTheme = {
+		fg: (c: string, t: string) => {
+			if (c === "mdHeading") throw new Error("missing");
+			return `<${c}>${t}</${c}>`;
+		},
+	};
+	assert(paintChatboxPrompt("❯", fallbackTheme, true) === "<accent> ❯ </accent>", "active prompt falls back to accent when mdHeading is absent");
+	markPromptTyped(Date.now());
+	assert(isPromptActive() === true && (globalThis as Record<symbol, unknown>)[PROMPT_IDLE_TIMER_KEY] != null, "markPromptTyped activates prompt and arms idle timer");
+	stopPromptIdle();
+	assert((globalThis as Record<symbol, unknown>)[PROMPT_IDLE_TIMER_KEY] == null, "stopPromptIdle clears the prompt idle timer");
+	delete (globalThis as Record<symbol, unknown>)[PROMPT_TYPED_AT_KEY];
 	rmSync(presetFixture, { recursive: true, force: true });
 	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
