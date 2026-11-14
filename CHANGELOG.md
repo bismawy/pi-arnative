@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-14
+
 - Fix Todos auto-hide cancellation when a body click opens a finished task list.
 - Fix Todos collapsing when clicking a `↑ 1 more` / `↓ 1 more` counter row that disappears after scrolling (`extensions/todos.ts`, `test/todos-widget.test.ts`).
 
