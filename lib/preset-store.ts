@@ -19,6 +19,9 @@ export const HEADER_PRESET_KEY = "headerPreset";
 export const FOOTER_PRESET_KEY = "footerPreset";
 /** Footer cost cell: `"on"`/`"off"`, absent reads as off. */
 export const FOOTER_COST_KEY = "footerCost";
+export const CHATBOX_PRESET_KEY = "chatboxPreset";
+export const CHATBOX_PROMPT_KEY = "chatboxPrompt";
+export const CHATBOX_DIALOG_KEY = "chatboxDialog";
 /** Budget guardrail — day/month caps are amount strings (`"5"`, `""` = unset), enforce is `"on"`/`"off"`. */
 export const BUDGET_DAY_KEY = "budgetDay";
 export const BUDGET_MONTH_KEY = "budgetMonth";
@@ -90,7 +93,7 @@ export function loadNumber(key: string, range: { min: number; max: number }): nu
 /** Reading order of `config.json`: the presets in the order the settings menu shows them,
  *  then `layoutVersion`, then anything else (a key from another module or a newer version).
  *  Times a user edits the file by hand or reads it back. */
-const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
+const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"];
 
 /** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
 function ordered(record: Record<string, unknown>): Record<string, unknown> {
