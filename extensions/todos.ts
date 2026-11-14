@@ -311,7 +311,17 @@ function refresh(ctx: ExtensionContext, force = false): void {
 					if (event.button !== "left" || event.y >= height) return undefined;
 					const onHint = inSpans(spans, event.y, event.x);
 					const onCounter = event.y === layout.up || event.y === layout.down;
-					if (!onHint && !onCounter) return undefined;
+					if (!onHint && !onCounter) {
+						if (event.type === "click" && (event.clickCount ?? 1) === 1) {
+							s.expanded = !s.expanded;
+							s.top = null;
+							if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
+							else cancelHide(s);
+							s.tui?.requestRender(true);
+							return { handled: true, render: true };
+						}
+						return undefined;
+					}
 					// The press already did it, so the release and the click that may follow are
 					// swallowed: toggling again on the click would undo the press.
 					if (event.type !== "press") return { handled: true, render: false };

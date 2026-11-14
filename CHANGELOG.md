@@ -10,7 +10,12 @@
 
 ## [Unreleased]
 
+- Fix Todos auto-hide cancellation when a body click opens a finished task list.
+
+- **Expanded `[show]` tool boxes now cap their viewport height with clickable `↑ N more` / `↓ N more` border scroll indicators in `primary`, and single-clicking anywhere on a boxed tool toggles expand/collapse.** Expanding a large tool output no longer fills the entire terminal (`6-12` body lines scaled to terminal height); clicking `↑ N more` or `↓ N more` on the top or bottom border scrolls up or down, and single-clicking text or borders on the box toggles `[show]`/`[hide]` on synthesized `click` (`clickCount === 1`) so drag and double-click text selection keep working (`extensions/tools.ts`).
+
 ### Fixed
+- **Model heal caches synced channels and probed efforts locally instead of re-running on fixed timers or external catalog refreshes.** Per-model `compat` flags now land in `modelOverrides` so external writers that replace `models[]` (such as Magpie) leave healed flags intact. Automatic `healMeta` and `healEffort` runs keep successful results cached in `model-heal.json` until a new model ID, changed endpoint, or changed effort map appears (failed checks still retry after 1h, and `/model-heal` still forces all passes). Effort cache lookup also matches model IDs case-insensitively and stops re-probing legacy identity entries (`lib/model-heal.ts`, `healFlags`, `healMeta`, `healEffort`, `findEffort`, `metaFresh`; pinned in `test/model-heal-cache.test.ts`).
 - **The providers nested under a project are dim, like every other row under a group.** In `/usage` → **Project**, an expanded project listed its providers in the plain text color while the Provider and Prices views already dimmed their children, so a folder's contents read as another group heading. The child rows now take `dim`; the project row keeps `text` and the expand arrow keeps the accent (`extensions/usage.ts`, the `resting` paint in `render`).
 
 ## [0.11.1] - 2026-11-13

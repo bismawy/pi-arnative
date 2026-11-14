@@ -124,7 +124,10 @@ test("a finished list folds to one row", () => {
 	assert.equal(allDone(state), true, "every task done");
 	assert.equal(collapsedText(state), `Todos (3/3) · ${COLLAPSED_DONE}`, "the row says nothing is left");
 	const box = renderTodoBox(plain, state, false, 80);
-	assert.ok(box[1]!.includes("Todos (3/3) · All tasks finished [click to expand]"), `the collapsed row, got ${box[1]}`);
+	assert.ok(
+		box[1]!.includes("Todos (3/3) · All tasks finished") && box[1]!.includes("[show]"),
+		`the collapsed row, got ${box[1]}`,
+	);
 	assert.ok(box[1]!.includes(HINT_EXPAND), "it still opens on a click");
 });
 

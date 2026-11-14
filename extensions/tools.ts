@@ -39,7 +39,7 @@ import {
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../lib/box.ts";
-import { stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
+import { getActiveTheme, stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
 import { actionWord } from "../lib/todos.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
@@ -275,9 +275,89 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 // target: every other cell of the box keeps pi's text selection, so the output stays
 // copyable. Recomputed on every render, because the label moves with the width and the key.
 const HINT_SPANS = Symbol.for("pi-arnative.toolBoxHintSpans");
+const SCROLL_OFFSET = Symbol.for("pi-arnative.toolBoxScrollOffset");
+const SCROLL_UP_SPANS = Symbol.for("pi-arnative.toolBoxScrollUpSpans");
+const SCROLL_DOWN_SPANS = Symbol.for("pi-arnative.toolBoxScrollDownSpans");
+const SCROLL_META = Symbol.for("pi-arnative.toolBoxScrollMeta");
 // A press already toggled this box; the release and the synthesized click that follow it
 // must not toggle it a second time.
 const PRESS_TOGGLED = Symbol.for("pi-arnative.toolBoxPressToggled");
+const STRIPPED_BOX = Symbol.for("pi-arnative.toolBoxStripped");
+
+export function expandedBoxBodyLimit(rows = process.stdout.rows || 28): number {
+	return Math.min(12, Math.max(6, Math.floor(rows * 0.35)));
+}
+
+function boxTokenPaint(tokens: readonly string[]): (text: string) => string {
+	const th = getActiveTheme<{ fg?(c: string, t: string): string }>();
+	if (!th?.fg) return (s) => s;
+	for (const token of tokens) {
+		try {
+			const probe = th.fg(token, "x");
+			if (typeof probe === "string" && probe.includes("x")) return (s) => th.fg!(token, s);
+		} catch {
+			// try next token
+		}
+	}
+	return (s) => s;
+}
+
+export function paintScrollEdge(
+	edgeLine: string,
+	leftCorner: string,
+	rightCorner: string,
+	label: string,
+	width: number,
+	borderPaint: (text: string) => string,
+	primaryPaint: (text: string) => string,
+): string {
+	const inner = width - 2;
+	const labelW = visibleWidth(label);
+	if (inner < labelW + 4) return edgeLine;
+	const bgOpen = edgeLine.match(/^(\x1b\[48;[0-9;]*m)+/)?.[0] ?? "";
+	const bgClose = bgOpen ? "\x1b[49m" : "";
+	const totalDashes = inner - (labelW + 2);
+	const leftDashes = Math.floor(totalDashes / 2);
+	const rightDashes = totalDashes - leftDashes;
+	const content = `${borderPaint(`${leftCorner}${"\u2500".repeat(leftDashes)} `)}${primaryPaint(label)}${borderPaint(` ${"\u2500".repeat(rightDashes)}${rightCorner}`)}`;
+	return `${bgOpen}${content}${bgClose}`;
+}
+
+export function capExpandedToolBox(
+	drawn: string[],
+	scrollOffset: number,
+	maxBody: number,
+	width: number,
+	borderPaint: (text: string) => string,
+	primaryPaint: (text: string) => string,
+): { lines: string[]; maxOffset: number; aboveLabel: string; belowLabel: string; botRow: number } {
+	if (drawn.length < 4 || !stripAnsi(drawn[0] ?? "").trimStart().startsWith("\u256d")) {
+		return { lines: drawn, maxOffset: 0, aboveLabel: "", belowLabel: "", botRow: -1 };
+	}
+	let botIdx = -1;
+	for (let i = drawn.length - 1; i >= 2; i--) {
+		const p = stripAnsi(drawn[i]!).trim();
+		if (p.startsWith("\u2570") && p.endsWith("\u256f")) {
+			botIdx = i;
+			break;
+		}
+	}
+	if (botIdx < 3) return { lines: drawn, maxOffset: 0, aboveLabel: "", belowLabel: "", botRow: -1 };
+	const body = drawn.slice(2, botIdx);
+	if (body.length <= maxBody) return { lines: drawn, maxOffset: 0, aboveLabel: "", belowLabel: "", botRow: botIdx };
+
+	const maxOffset = body.length - maxBody;
+	const offset = Math.max(0, Math.min(scrollOffset, maxOffset));
+	const visible = body.slice(offset, offset + maxBody);
+	const above = offset;
+	const below = body.length - (offset + visible.length);
+	const aboveLabel = above > 0 ? `\u2191 ${above} more` : "";
+	const belowLabel = below > 0 ? `\u2193 ${below} more` : "";
+	const top = aboveLabel ? paintScrollEdge(drawn[0]!, "\u256d", "\u256e", aboveLabel, width, borderPaint, primaryPaint) : drawn[0]!;
+	const bot = belowLabel ? paintScrollEdge(drawn[botIdx]!, "\u2570", "\u256f", belowLabel, width, borderPaint, primaryPaint) : drawn[botIdx]!;
+	const lines = [top, drawn[1]!, ...visible, bot, ...drawn.slice(botIdx + 1)];
+	return { lines, maxOffset, aboveLabel, belowLabel, botRow: 2 + visible.length };
+}
 
 // The patches below reinstall on every module load (pi's /reload re-evaluates the
 // extension in the same process), so a UI fix applies without restarting pi; see
@@ -288,7 +368,32 @@ if (ToolExecutionComponent?.prototype?.render) {
 	proto.render = markPatched(function (this: any, width: number): string[] {
 		const lines = origRender.call(this, width);
 		const stripped = OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this);
-		const drawn = stripped ? stripEdgesKeepingImages(lines) : lines;
+		this[STRIPPED_BOX] = stripped;
+		let drawn = stripped ? stripEdgesKeepingImages(lines) : lines;
+		if (stripped && this.expanded) {
+			const maxBody = expandedBoxBodyLimit();
+			const capped = capExpandedToolBox(
+				drawn,
+				Number(this[SCROLL_OFFSET] ?? 0),
+				maxBody,
+				width,
+				boxTokenPaint(["dim"]),
+				boxTokenPaint(["mdHeading", "accent"]),
+			);
+			drawn = capped.lines;
+			this[SCROLL_OFFSET] = Math.max(0, Math.min(Number(this[SCROLL_OFFSET] ?? 0), capped.maxOffset));
+			this[SCROLL_META] = { maxOffset: capped.maxOffset, step: Math.max(1, Math.floor(maxBody / 2)) };
+			this[SCROLL_UP_SPANS] = capped.aboveLabel ? textSpans([drawn[0]!], capped.aboveLabel) : [];
+			this[SCROLL_DOWN_SPANS] =
+				capped.belowLabel && capped.botRow >= 0
+					? textSpans([drawn[capped.botRow]!], capped.belowLabel).map((s) => ({ ...s, row: capped.botRow }))
+					: [];
+		} else {
+			this[SCROLL_OFFSET] = 0;
+			this[SCROLL_UP_SPANS] = [];
+			this[SCROLL_DOWN_SPANS] = [];
+			this[SCROLL_META] = undefined;
+		}
 		// Only a box this module laid out is measured here; a renderer pi owns keeps pi's
 		// own mouse path, since its row offsets come from a layout it did not show us.
 		// Title rows only (frame + title): a [show] inside the output must not become a button.
@@ -298,29 +403,57 @@ if (ToolExecutionComponent?.prototype?.render) {
 		return drawn;
 	});
 
-	// Click to expand, on the hint text alone. pi toggles on the "click" it synthesizes from
-	// a press and a release at the same cell, so a one-cell drift made the hint look inert,
-	// and the stripped row above the box left its top border dead. A left press on the hint
-	// toggles at once and the release plus the click that follow are swallowed; the click
-	// clears the flag, not the release, or that click would toggle the box back. Any other
-	// cell is left to pi: a press there starts a selection, so the output can be copied.
+	// Click to expand/collapse or scroll, on the hint/more text alone. pi toggles on the
+	// "click" it synthesizes from a press and a release at the same cell, so a one-cell
+	// drift made the hint look inert, and the stripped row above the box left its top
+	// border dead. A left press on the button acts at once and the release plus the click
+	// that follow are swallowed; the click clears the flag, not the release, or that click
+	// would trigger twice. Any other cell is left to pi: a press there starts a selection,
+	// so the output can be copied.
 	const origMouse = originalOf<(this: any, event: any) => any>(proto, "handleMouse");
 	proto.handleMouse = markPatched(function (this: any, event: any): any {
 		const onHint = (this[HINT_SPANS] as TextSpan[] | undefined)?.length
 			? inSpans(this[HINT_SPANS] as TextSpan[], event.y, event.x)
 			: false;
-		if (onHint && event.type === "press" && event.button === "left") {
+		const onUp = (this[SCROLL_UP_SPANS] as TextSpan[] | undefined)?.length
+			? inSpans(this[SCROLL_UP_SPANS] as TextSpan[], event.y, event.x)
+			: false;
+		const onDown = (this[SCROLL_DOWN_SPANS] as TextSpan[] | undefined)?.length
+			? inSpans(this[SCROLL_DOWN_SPANS] as TextSpan[], event.y, event.x)
+			: false;
+		if ((onHint || onUp || onDown) && event.type === "press" && event.button === "left") {
 			// A child of the box (an image preview) keeps its own press.
 			const childHit = origMouse.call(this, event);
 			if (childHit) return childHit;
-			if (!this.result) return undefined;
-			this.setExpanded(!this.expanded);
+			if (onHint) {
+				if (!this.result) return undefined;
+				this.setExpanded(!this.expanded);
+				this[PRESS_TOGGLED] = true;
+				return { handled: true, render: true };
+			}
+			const meta = (this[SCROLL_META] as { maxOffset: number; step: number } | undefined) ?? { maxOffset: 0, step: 6 };
+			const cur = Number(this[SCROLL_OFFSET] ?? 0);
+			const next = Math.max(0, Math.min(meta.maxOffset, cur + (onUp ? -meta.step : meta.step)));
+			this[SCROLL_OFFSET] = next;
 			this[PRESS_TOGGLED] = true;
+			this.ui?.requestRender?.();
 			return { handled: true, render: true };
 		}
 		if (this[PRESS_TOGGLED] && (event.type === "release" || event.type === "click")) {
 			if (event.type === "click") this[PRESS_TOGGLED] = false;
 			return { handled: true, render: false };
+		}
+		if (
+			this[STRIPPED_BOX] &&
+			this.result &&
+			event.type === "click" &&
+			event.button === "left"
+		) {
+			if ((event.clickCount ?? 1) !== 1) return undefined;
+			const origHit = origMouse.call(this, event);
+			if (origHit) return origHit;
+			this.setExpanded(!this.expanded);
+			return { handled: true, render: true };
 		}
 		return origMouse.call(this, event);
 	});
@@ -1682,13 +1815,64 @@ if (isMain(import.meta.url)) {
 		assert(box.expanded === false, "mouse: the swallowed click does not reopen it");
 	}
 	{
-		// Every cell off the hint stays with pi, which is what keeps the output copyable.
+		// Every cell off the hint keeps press uncaptured for text selection, while a plain
+		// single click anywhere on the box still toggles expand/collapse.
 		const box = mouseBox();
 		const taken = mouse(box, "press", 2, 6);
 		assert(taken === undefined && box.expanded === false, "mouse: a press off the hint is left to pi (text selection)");
 		mouse(box, "move", 2, 14);
 		mouse(box, "release", 2, 14);
 		assert(box.expanded === false, "mouse: a drag over the output does not expand the box");
+		click(box, 1, 6);
+		assert(box.expanded === true, "mouse: single click on box title text expands without blocking drag select");
+		click(box, 0, 6);
+		assert(box.expanded === false, "mouse: single click on top border collapses without blocking drag select");
+		box.handleMouse({
+			type: "click",
+			button: "left",
+			x: 6,
+			y: 2,
+			screenX: 6,
+			screenY: 2,
+			width: 60,
+			height: (box.render(60) as string[]).length,
+			clickCount: 2,
+			shift: false,
+			alt: false,
+			ctrl: false,
+		});
+		assert(box.expanded === false, "mouse: double-click selection does not toggle box");
+	}
+	{
+		// Expanded long output caps body height and offers clickable primary ↑/↓ N more borders.
+		const prevRows = process.stdout.rows;
+		Object.defineProperty(process.stdout, "rows", { value: 28, configurable: true });
+		try {
+			const maxBody = expandedBoxBodyLimit(28);
+			assert(maxBody === 9, "expanded body viewport adapts cleanly (9 rows at 28-line terminal)");
+			const longText = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
+			const longBox: any = new ToolExecutionComponent("bash", "9", { command: "seq 20" }, {}, {}, { requestRender() {} }, cwd);
+			longBox.updateResult({ content: [{ type: "text", text: longText }], details: {} }, false);
+			longBox.setExpanded(true);
+			const topView = (longBox.render(60) as string[]).map(stripAnsi);
+			assert(topView.length === maxBody + 3, `expanded long box caps height to ${maxBody + 3} lines`);
+			assert(!topView[0]!.includes("↑") && topView[topView.length - 1]!.includes("↓ 12 more"), "top of expanded box shows only ↓ N more");
+			const [downBtn] = textSpans(longBox.render(60) as string[], "↓ 12 more");
+			assert(downBtn !== undefined, "↓ N more is clickable on bottom border");
+			click(longBox, downBtn!.row, downBtn!.start);
+			const midView = (longBox.render(60) as string[]).map(stripAnsi);
+			assert(midView[0]!.includes("↑ 4 more") && midView[midView.length - 1]!.includes("↓ 8 more"), "clicking ↓ N more scrolls body down");
+			assert(midView.some((l) => l.includes("line 4")) && !midView.some((l) => l.includes("󱞩 line 1")), "scrolled viewport hides scrolled-past rows");
+			const [upBtn] = textSpans(longBox.render(60) as string[], "↑ 4 more");
+			assert(upBtn !== undefined, "↑ N more is clickable on top border");
+			click(longBox, upBtn!.row, upBtn!.start);
+			const backView = (longBox.render(60) as string[]).map(stripAnsi);
+			assert(!backView[0]!.includes("↑") && backView.some((l) => l.includes("line 1")), "clicking ↑ N more scrolls back to top");
+			const edge = paintScrollEdge("\x1b[48;2;10;20;30m\x1b[2m╭──────────╮\x1b[39m\x1b[49m", "\u256d", "\u256e", "\u2191 1 more", 24, (t) => `<bdr>${t}</bdr>`, (t) => `<pri>${t}</pri>`);
+			assert(edge.startsWith("\x1b[48;2;10;20;30m") && edge.endsWith("\x1b[49m") && edge.includes("<pri>↑ 1 more</pri>"), "scroll edge preserves background and paints N more in primary");
+		} finally {
+			Object.defineProperty(process.stdout, "rows", { value: prevRows, configurable: true });
+		}
 	}
 
 	// Capped timings map self-check

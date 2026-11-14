@@ -112,19 +112,27 @@ test("the tool fills the list and registers the box above the editor", async () 
 test("a click on the hint expands the box, the next click collapses it", () => {
 	const { component } = widget();
 	const collapsed = component.render(80);
-	assert.equal(clickHint(component, "[click to expand]")?.handled, true, "the hint takes the click");
+	assert.equal(clickHint(component, "[show]")?.handled, true, "the hint takes the click");
 	const expanded = component.render(80);
 	assert.ok(expanded.length > collapsed.length, "the click expanded the box");
 	assert.ok(expanded.some((line) => line.includes("· menulis tes")), "the note shows while expanded");
-	clickHint(component, "[click to collapse]");
+	clickHint(component, "[hide]");
 	assert.equal(component.render(80).length, collapsed.length, "a second click collapses it");
 });
 
-test("a press on a task row is left to pi for selection", () => {
+test("a press on a task row is left to pi for selection while single click toggles", () => {
 	const { component } = widget();
 	const before = component.render(80).length;
-	assert.equal(click(component, 1)?.handled, undefined, "the row beside the hint stays selectable");
-	assert.equal(component.render(80).length, before, "and nothing toggled");
+	assert.equal(
+		component.handleMouse({ type: "press", button: "left", x: 6, y: 1 })?.handled,
+		undefined,
+		"the press beside the hint stays selectable",
+	);
+	assert.equal(component.render(80).length, before, "and press alone did not toggle");
+	assert.equal(click(component, 1)?.handled, true, "single click on row toggles");
+	assert.ok(component.render(80).length > before, "and expanded the box");
+	click(component, 1);
+	assert.equal(component.render(80).length, before, "second click collapses it back");
 });
 
 test("a click below the box belongs to the editor", () => {
@@ -233,10 +241,10 @@ test("a task reopened during the wait keeps the box", async () => {
 	for (let id = 1; id <= 9; id++) await call({ action: "update", id, status: "completed" });
 	assert.ok(widgets.get("arnative-todos"), "the finished box is still on screen");
 	// Opening the finished box to read it cancels the wait; closing it starts the wait again.
-	clickHint(widget().component, "[click to expand]");
+	clickHint(widget().component, "[show]");
 	await new Promise((resolve) => setTimeout(resolve, 80));
 	assert.ok(widgets.get("arnative-todos"), "an expanded box stays on screen while the user reads it");
-	clickHint(widget().component, "[click to collapse]");
+	clickHint(widget().component, "[hide]");
 	await call({ action: "update", id: 1, status: "in_progress" });
 	await new Promise((resolve) => setTimeout(resolve, 80));
 	assert.ok(widgets.get("arnative-todos"), "the wait was cancelled, the box stays");
@@ -244,6 +252,28 @@ test("a task reopened during the wait keeps the box", async () => {
 	await call({ action: "update", id: 1, status: "completed" });
 	await new Promise((resolve) => setTimeout(resolve, 80));
 	assert.equal(widgets.get("arnative-todos"), undefined, "the box leaves once the wait is over");
+});
+
+test("a body click keeps a finished box open until it is collapsed again", async () => {
+	await call({ action: "update", id: 1, status: "in_progress" });
+	await call({ action: "update", id: 1, status: "completed" });
+	const { component } = widget();
+	const folded = component.render(80);
+	const file = join(agentDir, "arnative", "todos", "widget-test.json");
+	const stored = readFileSync(file, "utf8");
+	assert.equal(folded.length, 3, "the finished box starts collapsed");
+
+	assert.equal(click(component, 1)?.handled, true, "a single body click opens the box");
+	assert.ok(component.render(80).length > folded.length, "the task list is expanded");
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.ok(widgets.get("arnative-todos"), "opening by body click cancels the pending hide");
+	assert.equal(readFileSync(file, "utf8"), stored, "opening the box preserves the saved tasks");
+
+	click(component, 1);
+	assert.equal(component.render(80).length, folded.length, "a second body click collapses the box");
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.equal(widgets.get("arnative-todos"), undefined, "collapsing the finished box starts a new hide timer");
+	assert.equal(readFileSync(file, "utf8"), stored, "hiding the widget preserves the saved tasks");
 });
 
 test("/todos shows the recap in the screen chrome", async () => {
