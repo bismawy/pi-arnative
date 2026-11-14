@@ -62,8 +62,8 @@ export const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_prog
 export const STATUS_COLOR: Record<TodoStatus, string> = { pending: "dim", in_progress: "mdHeading", completed: "accent" };
 /** Tried when the theme has no such token; pi throws on an unknown color. */
 const STATUS_FALLBACK: Record<TodoStatus, string> = { pending: "dim", in_progress: "accent", completed: "accent" };
-export const HINT_EXPAND = "[click to expand]";
-export const HINT_COLLAPSE = "[click to collapse]";
+export const HINT_EXPAND = "[show]";
+export const HINT_COLLAPSE = "[hide]";
 /** Longest subject or note kept; longer input is cut so one task cannot fill the box. */
 const MAX_FIELD = 120;
 
@@ -233,8 +233,11 @@ export function widgetRows(theme: FgTheme, state: TodoState, expanded: boolean, 
 	// The hint is how the box gets opened, so it survives and the text before it gives way.
 	const withHint = (text: string, hint: string): string => {
 		const painted = fg(theme, "dim", hint);
-		const room = Math.max(0, width - 4 - visibleWidth(painted) - 1);
-		return fit(`${truncateToWidth(text, room, "…")} ${painted}`);
+		const inner = Math.max(0, width - 4);
+		const room = Math.max(0, inner - visibleWidth(painted) - 1);
+		const left = truncateToWidth(text, room, "…");
+		const gap = Math.max(1, inner - visibleWidth(left) - visibleWidth(painted));
+		return fit(`${left}${" ".repeat(gap)}${painted}`);
 	};
 	const icon = fg(theme, "accent", LIST_ICON);
 	// The count is a label, so it takes the soft accent tier the footer labels use, while the
