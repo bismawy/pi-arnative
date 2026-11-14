@@ -74,6 +74,8 @@ interface ListPickerHooks {
 	/** Description re-read on every render, so the line under the title can follow screen
 	 *  state (the model list shows the API flavor `a` switched to). */
 	description?: () => string;
+	/** Optional status block rendered above the row list (separated by a blank line). */
+	summary?: (width: number) => string[];
 	// What the rows are ("models"): shows a filter line under the description, the way
 	// vision-watcher filters its model list. Slash focuses it, Enter keeps it, Esc clears it.
 	search?: string;
@@ -295,6 +297,8 @@ export class ListPicker implements Component {
 			const line = this.typing ? this.field.render(Math.max(1, width - 4)) : [truncateToWidth(idle, width - 4, "")];
 			body.unshift(...line, "");
 		}
+		const summary = this.hooks.summary?.(Math.max(1, width - 4));
+		if (summary && summary.length > 0) body.unshift(...summary.map((line) => truncateToWidth(line, width - 4, "")), "");
 		return renderScreen(
 			th,
 			width,
@@ -496,6 +500,10 @@ if (isMain(import.meta.url)) {
 	assert(hits.join() === "press 0,toggle", "Esc while typing ends typing and keeps the filter, so the screen stays open");
 	filtered.handleInput("\x1b");
 	assert(hits.join().endsWith("done"), "a second Esc, outside typing, leaves the screen");
+
+	const summarized = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet, summary: () => ["Box · a"] }, { title: "T", description: "d", legend: "l" }, false);
+	const sumLines = summarized.render(40).map(plain);
+	assert(sumLines.some((l) => l.includes("Box · a")) && sumLines.indexOf(sumLines.find((l) => l.includes("Box · a"))!) < sumLines.indexOf(sumLines.find((l) => l.includes("→ a"))!), "summary renders above the picker rows");
 
 	console.log("list-picker.ts self-check OK");
 }

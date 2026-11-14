@@ -24,8 +24,8 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, ensureChoices } from "../lib/preset-store.ts";
-import { FOOTER_PRESETS, activeFooterCost, activeFooterPreset, setFooterCost, setFooterPreset, type FooterPreset } from "./footer.ts";
+import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset, type FooterPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
 import {
@@ -59,7 +59,7 @@ export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): 
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
 export const MENU_TITLE = screenTitle("Settings");
 /** One-line description under the menu title. */
-export const MENU_DESC = "Themes, headers, footers, animations, auto-compact, providers, usage, budget";
+export const MENU_DESC = "Themes, headers, footers, chatbox, animations, auto-compact, providers, usage, budget";
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
@@ -215,6 +215,85 @@ const openHeaders = async (ctx: ExtensionCommandContext): Promise<boolean | void
 				requestRender: () => tui.requestRender(),
 			},
 			HEADERS_PICKER_TEXT,
+			true,
+			ctx.thinkingLevel,
+		),
+	);
+	return goBack === true;
+};
+
+const CHATBOX_PICKER_TEXT: ListPickerText = {
+	title: screenTitle("Chatbox"),
+	description: "Selection applies when confirmed — rounded arnative box or built-in editor.",
+	legend: "[↑↓] Preview  [i] Icon  [D] Dialog  [Enter] Select  [Esc] Back",
+};
+
+const CHATBOX_NOTES: Record<ChatboxPreset, string> = {
+	"Pi (system)": "built-in top and bottom lines",
+	Arnative: "rounded arnative box with prompt & status placement",
+};
+
+export const chatboxRows = (): ListRow[] => CHATBOX_PRESETS.map((c) => ({ label: c, note: CHATBOX_NOTES[c] }));
+
+export const chatboxSummary = (theme: { fg(c: string, t: string): string }): string[] => {
+	const dim = (s: string) => theme.fg("dim", s);
+	const txt = (s: string) => theme.fg("text", s);
+	const acc = (s: string) => theme.fg("accent", s);
+	const activeIcon = activeChatboxPrompt();
+	const icons = CHATBOX_PROMPTS.map((p) => (p === activeIcon ? acc(p) : dim(p))).join("  ");
+	const dialog = activeChatboxDialog();
+	const dialogTag = dialog === DEFAULT_CHATBOX_DIALOG ? ` ${dim("(default)")}` : "";
+	return [
+		`${dim("Box   ")}${dim(" · ")}${txt(activeChatboxPreset())}`,
+		`${dim("Icon  ")}${dim(" · ")}${icons}`,
+		`${dim("Dialog")}${dim(" · ")}${txt(dialog.toLowerCase())}${dialogTag}`,
+	];
+};
+
+const openChatbox = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	const opened = activeChatboxPreset();
+
+	if (ctx.mode !== "tui") {
+		const labels = markedLabels(CHATBOX_PRESETS, opened);
+		const pick = await ctx.ui.select(CHATBOX_PICKER_TEXT.title, labels);
+		if (pick === undefined) return;
+		const name = CHATBOX_PRESETS[labels.indexOf(pick)]!;
+		setChatboxPreset(name);
+		ctx.ui.notify(`[arnative] Chatbox: ${name}`, "info");
+		return;
+	}
+
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
+		new ListPicker(
+			theme,
+			chatboxRows(),
+			opened,
+			{
+				preview: (name) => setChatboxPreset(name as ChatboxPreset),
+				revert: () => setChatboxPreset(opened),
+				done: () => {
+					announce(ctx.ui, `Chatbox: ${activeChatboxPreset()}.`);
+					done(false);
+				},
+				back: () => {
+					if (activeChatboxPreset() !== opened) setChatboxPreset(opened);
+					done(true);
+				},
+				press: (keyData) => {
+					if (matchesKey(keyData, "i") || keyData === "I") {
+						setChatboxPrompt(nextChatboxPrompt());
+						tui.requestRender();
+						return;
+					}
+					if (matchesKey(keyData, "d") || keyData === "D") {
+						setChatboxDialog(nextChatboxDialog());
+						tui.requestRender();
+					}
+				},
+				summary: () => chatboxSummary(theme),
+				requestRender: () => tui.requestRender(),
+			},
+			CHATBOX_PICKER_TEXT,
 			true,
 			ctx.thinkingLevel,
 		),
@@ -438,6 +517,12 @@ export const MENUS: ArnativeMenu[] = [
 		open: openFooters,
 	},
 	{
+		value: "chatbox",
+		label: "Chatbox",
+		description: "choose the input box preset",
+		open: openChatbox,
+	},
+	{
 		value: "animations",
 		label: "Animations",
 		description: "choose the working spinner",
@@ -564,7 +649,7 @@ export function shouldApplyDefaultTheme(
  *  set without starting a session. */
 export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): void {
 	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, animations, auto-compact, model heal, providers, usage, budget",
+		description: "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, providers, usage, budget",
 		getArgumentCompletions: arnativeCompletions,
 		handler: arnativeHandler,
 	});
@@ -583,6 +668,9 @@ export function recordProfile(): void {
 		[HEADER_PRESET_KEY]: activeHeaderPreset(),
 		[FOOTER_PRESET_KEY]: activeFooterPreset(),
 		[FOOTER_COST_KEY]: activeFooterCost() ? "on" : "off",
+		[CHATBOX_PRESET_KEY]: activeChatboxPreset(),
+		[CHATBOX_PROMPT_KEY]: activeChatboxPrompt(),
+		[CHATBOX_DIALOG_KEY]: activeChatboxDialog(),
 		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
@@ -624,10 +712,10 @@ if (isMain(import.meta.url)) {
 	assert(rowText(labels[0]!) === "Themes · arnative themes only (all themes: /settings → Theme)", "menu row text format");
 	assert(labels[0]!.label === "Themes" && labels[0]!.note === "arnative themes only (all themes: /settings → Theme)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
-	assert(MENU_DESC === "Themes, headers, footers, animations, auto-compact, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
+	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 9, "nine settings screens");
+	assert(MENUS.length === 10, "ten settings screens");
 	{
 		const values = MENUS.map((m) => m.value);
 		assert(values.indexOf("heal") === values.indexOf("compact") + 1, "Model heal row sits right after Auto-compact");
@@ -635,7 +723,7 @@ if (isMain(import.meta.url)) {
 		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
 		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
 	}
-	for (const label of ["Themes", "Headers", "Footers", "Animations", "Auto-compact", "Providers", "Usage", "Budget"]) {
+	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
@@ -648,6 +736,8 @@ if (isMain(import.meta.url)) {
 	assert(arnativeCompletions("he")![0]!.value === "headers", "headers menu has completions");
 	assert(arnativeCompletions("fo")![0]!.value === "footers", "footers menu has completions");
 	assert(MENUS.some((m) => m.value === "footers"), "footers menu registered");
+	assert(arnativeCompletions("ch")![0]!.value === "chatbox", "chatbox menu has completions");
+	assert(MENUS.some((m) => m.value === "chatbox"), "chatbox menu registered");
 	assert(arnativeCompletions("co")![0]!.value === "compact", "compact menu has completions");
 	assert(MENUS.some((m) => m.value === "compact"), "compact menu registered");
 
@@ -667,7 +757,7 @@ if (isMain(import.meta.url)) {
 		assert(typeof registered.get("providers")!.handler === "function", "/providers has a handler");
 		assert(MENUS.some((m) => m.value === "providers"), "/providers routes to a menu row that exists");
 		assert(
-			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, animations, auto-compact, model heal, providers, usage, budget",
+			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, providers, usage, budget",
 			"the /arnative command description names every screen: " + registered.get("arnative")!.description,
 		);
 	}
@@ -765,14 +855,14 @@ if (isMain(import.meta.url)) {
 		cancel: () => { menuCancelled = true; },
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
-	// 80 columns: the description names the screens (a tripwire — a screen added to MENUS must
-	// be added to the copy too), and that one-liner no longer fits 60.
-	const menuLines = mainPicker.render(80);
+	// 100 columns: the description names the screens (a tripwire — a screen added to MENUS must
+	// be added to the copy too), and that one-liner no longer fits 80.
+	const menuLines = mainPicker.render(100);
 	assert(menuLines.some((l) => l.includes(MENU_TITLE)), "the main menu renders its title");
 	assert(menuLines.some((l) => l.includes("[Esc] Close") && !l.includes("←")), "the root menu legend renders without a back key");
 	assert(menuLines.some((l) => l.includes(MENU_DESC)), "the main menu renders the description under the title");
 	assert(menuLines.findIndex((l) => l.includes(MENU_TITLE)) < menuLines.findIndex((l) => l.includes(MENU_DESC)), "description sits below the title");
-	assert(menuLines.every((l) => visibleWidth(l) === 80), "main menu lines fit the width");
+	assert(menuLines.every((l) => visibleWidth(l) === 100), "main menu lines fit the width");
 	// The pinned /arnative layout: `→ Themes  ·  note`, every `·` in one column (skill rule 10).
 	const plainMenu = menuLines.map(stripAnsi);
 	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("→ Themes"))!;
@@ -864,6 +954,23 @@ if (isMain(import.meta.url)) {
 	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
 	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
 	assert(/\[c\] Cost (on|off)/.test(footersPickerText().legend), "footers legend advertises the cost switch and its live state");
+
+	// Chatbox reuses the same picker with summary rows (Box/Icon/Dialog), Pi (system) first and Arnative second.
+	assert(CHATBOX_PRESETS[0] === "Pi (system)" && CHATBOX_PRESETS[1] === "Arnative", "chatbox presets list Pi (system) then Arnative");
+	assert(CHATBOX_DIALOGS.includes(activeChatboxDialog()), "active chatbox dialog is valid");
+	const chatboxTagTheme = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
+	const chatboxTagged = chatboxSummary(chatboxTagTheme);
+	assert(chatboxTagged.some((l) => l.includes("<dim>Box   </dim><dim> · </dim><text>")), "chatbox summary renders dim Box label and separator");
+	assert(chatboxTagged.some((l) => l.startsWith("<dim>Icon  </dim><dim> · </dim>") && l.includes(`<accent>${activeChatboxPrompt()}</accent>`) && l.includes("  ") && !l.includes("|")), "chatbox summary highlights the active icon in accent with double spacing and no |");
+	const expectedDialogTag = activeChatboxDialog() === DEFAULT_CHATBOX_DIALOG ? " <dim>(default)</dim>" : "";
+	assert(chatboxTagged.some((l) => l === `<dim>Dialog</dim><dim> · </dim><text>${activeChatboxDialog().toLowerCase()}</text>${expectedDialogTag}`), "chatbox summary renders dim Dialog label, separator, and default tag");
+	const chatboxPicker = new ListPicker(fakeTheme, chatboxRows(), "Arnative", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {}, summary: () => chatboxSummary(fakeTheme) }, CHATBOX_PICKER_TEXT);
+	const chatboxLines = chatboxPicker.render(84);
+	assert(chatboxLines.some((l) => l.includes(screenTitle("Chatbox"))), "chatbox picker title");
+	assert(chatboxLines.some((l) => l.includes("Box    · Arnative")), "chatbox picker shows Box summary");
+	assert(chatboxLines.some((l) => l.includes("→ Arnative")), "chatbox picker cursors the active preset");
+	assert(chatboxLines.some((l) => l.includes("  Pi (system)")), "chatbox picker lists the built-in preset");
+	assert(CHATBOX_PICKER_TEXT.legend.includes("[i] Icon  [D] Dialog"), "chatbox legend advertises [i] Icon and [D] Dialog");
 
 	// Animations picker: "Pi (system)" carries a note AND renders "(system)" in dim
 	const animPicker = new ListPicker(
