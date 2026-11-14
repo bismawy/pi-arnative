@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { afterEach, beforeEach } from "node:test";
 import { buildEffortMap } from "../lib/compat.ts";
-import { healEffort, healMeta, type HealDeps, type RtModel } from "../lib/model-heal.ts";
+import { healEffort, healFlags, healMeta, type HealDeps, type RtModel } from "../lib/model-heal.ts";
 
 const HOUR_MS = 60 * 60 * 1000;
 const map = buildEffortMap(["minimal", "low", "medium", "high", "xhigh", "max"])!;
@@ -83,7 +83,7 @@ test("effort: reordered keys keep a successful cache fresh", async () => {
 	assert.equal(calls, 0, "key order is not a change in supported levels");
 });
 
-test("effort: a successful probe expires after 24 hours", async (t) => {
+test("effort: a successful probe stays cached past 24 hours until forced", async (t) => {
 	let now = Date.now();
 	t.mock.method(Date, "now", () => now);
 	seedEffort({ at: now, map, exact: true });
@@ -96,8 +96,49 @@ test("effort: a successful probe expires after 24 hours", async (t) => {
 	assert.equal(calls, 0);
 	now += 24 * HOUR_MS + 1;
 	await healEffort(deps, false);
-	assert.equal(calls, 7);
+	assert.equal(calls, 0, "an automatic run must keep the local cache instead of re-probing");
+	await healEffort(deps, true);
+	assert.equal(calls, 7, "forcing still probes on demand");
 	assert.equal(readState().efforts["relay\0m"].exact, true);
+});
+
+test("effort: a case-changed model ID reuses its cached probe", async () => {
+	seedEffort({ at: Date.now(), map, exact: true });
+	let calls = 0;
+	await healEffort(depsFor(async () => {
+		calls++;
+		return new Response("unauthorized", { status: 401 });
+	}, { ...model, id: "M" }), false);
+	assert.equal(calls, 0);
+});
+
+test("effort: a legacy identity entry without exact:true is not re-probed automatically", async () => {
+	const identity = { low: "low", medium: "medium", high: "high", xhigh: "xhigh" };
+	seedEffort({ at: Date.now(), map: identity });
+	let calls = 0;
+	await healEffort(depsFor(async () => {
+		calls++;
+		return new Response("unauthorized", { status: 401 });
+	}, { ...model, thinkingLevelMap: { ...identity, off: "none" } }), false);
+	assert.equal(calls, 0);
+});
+
+test("effort: a newly added model is probed while cached siblings stay skipped", async () => {
+	seedEffort({ at: Date.now(), map, exact: true });
+	const added: RtModel = { ...model, id: "m-new", thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh" } };
+	let calls = 0;
+	const deps: HealDeps = {
+		models: () => [model, added],
+		ownsModels: () => false,
+		fetchImpl: async () => {
+			calls++;
+			return new Response("pong");
+		},
+	};
+	const res = await healEffort(deps, false);
+	assert.equal(calls, 7);
+	assert.equal(res.changed, true);
+	assert.equal(readState().efforts["relay\0m-new"].exact, true);
 });
 
 test("effort: an older successful remap still migrates before the TTL", async () => {
@@ -146,7 +187,7 @@ test("metadata: a failed catalog waits one hour before trying again", async () =
 	assert.equal(readFileSync(join(dir, "models.json"), "utf8"), before);
 });
 
-test("metadata: an expired failure retries and restores the six-hour success TTL", async (t) => {
+test("metadata: an expired failure retries and stays cached until a new model appears", async (t) => {
 	let now = Date.now();
 	t.mock.method(Date, "now", () => now);
 	let calls = 0;
@@ -158,12 +199,57 @@ test("metadata: an expired failure retries and restores the six-hour success TTL
 	now += HOUR_MS + 1;
 	assert.equal((await healMeta(deps, false)).changed, true);
 	assert.equal(readState().providers.relay.failed, undefined);
-	now += HOUR_MS + 1;
+	now += 7 * HOUR_MS;
 	await healMeta(deps, false);
-	assert.equal(calls, 2);
-	now += 5 * HOUR_MS;
-	await healMeta(deps, false);
-	assert.equal(calls, 3);
+	assert.equal(calls, 2, "unchanged model ids stay cached past 6 hours");
+
+	const added: RtModel = { ...model, id: "m-new" };
+	const config = JSON.parse(readFileSync(join(dir, "models.json"), "utf8"));
+	config.providers.relay.models.push({ id: "m-new", reasoning: true, thinkingLevelMap: map });
+	writeFileSync(join(dir, "models.json"), JSON.stringify(config));
+	await healMeta({
+		models: () => [model, added],
+		ownsModels: () => false,
+		fetchImpl: async () => {
+			calls++;
+			return new Response(JSON.stringify({ data: [{ id: "m-new", context_length: 256_000, max_output_tokens: 16_000 }] }));
+		},
+	}, false);
+	assert.equal(calls, 3, "a newly added model triggers catalog sync");
+});
+
+test("flags: per-model compat in modelOverrides survives a rewrite of models[]", () => {
+	const config = {
+		providers: {
+			relay: {
+				api: model.api,
+				baseUrl: model.baseUrl,
+				models: [
+					{ id: "chat-only", reasoning: false },
+					{ id: "deepseek-r", reasoning: true, thinkingLevelMap: map },
+				],
+			},
+		},
+	};
+	writeFileSync(join(dir, "models.json"), JSON.stringify(config));
+	const runtime: RtModel[] = [
+		{ provider: "relay", id: "chat-only", api: model.api, baseUrl: model.baseUrl, reasoning: false },
+		{ provider: "relay", id: "deepseek-r", api: model.api, baseUrl: model.baseUrl, reasoning: true, thinkingLevelMap: map },
+	];
+	const first = healFlags({ models: () => runtime, ownsModels: () => false });
+	assert.equal(first.changed, true);
+
+	// Simulate an external provider sync (e.g. Magpie) rewriting models[] without compat.
+	const saved = JSON.parse(readFileSync(join(dir, "models.json"), "utf8"));
+	saved.providers.relay.models = config.providers.relay.models;
+	writeFileSync(join(dir, "models.json"), JSON.stringify(saved));
+
+	const mergedRuntime: RtModel[] = runtime.map((r) => ({
+		...r,
+		compat: { ...(saved.providers.relay.compat ?? {}), ...(saved.providers.relay.modelOverrides?.[r.id]?.compat ?? {}) },
+	}));
+	const afterRefresh = healFlags({ models: () => mergedRuntime, ownsModels: () => false });
+	assert.equal(afterRefresh.changed, false);
 });
 
 test("metadata: force bypasses a failed catalog cooldown", async () => {
