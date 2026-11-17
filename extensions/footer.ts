@@ -1601,10 +1601,13 @@ export default function (pi: ExtensionAPI) {
 								if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
 							}
 							// Payload pressure sits beside the extension statuses: the right rows
-							// already carry speed, cache, tokens and cost.
+							// already carry speed, cache, tokens and cost. The denominator is the shed
+							// trigger from the snapshot (900KB), not the 1MB proxy wall: showing /1MB
+							// understated pressure by 10 points right before the trim starts.
 							const wire = wireBytesSnapshot();
 							if (wire && wire.bytes > 0 && isByteLimitedModel(ctx.model)) {
-								groups.push(`${acc("\udb80\udd93")} ${secondarySoft(`${(wire.bytes / 1024 / 1024).toFixed(2)}MB/1MB`)}`);
+								const mb = (n: number) => `${(n / 1024 / 1024).toFixed(2)}MB`;
+								groups.push(`${acc("\udb80\udd93")} ${secondarySoft(`${mb(wire.bytes)}/${Math.round(wire.limit / 1024)}KB`)}`);
 							}
 
 							let usageStr = "";
