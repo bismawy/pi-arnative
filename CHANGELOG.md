@@ -22,7 +22,7 @@
 - **Remote 1 MB byte protection is now silent and decoupled from `ctx.compact()`.** For `remote/*`, `remote-magpie/*`, and models that saw HTTP 413, payloads approaching ~900 KB are trimmed in-memory (with hysteresis down to ~760 KB; 820→680 KB after a 413) by dropping older images → older thinking blocks (keeping the latest turn intact) → bulky old tool outputs → old `toolCall` args → head turns. The transcript, UI, and `render-cache` stay untouched, and byte pressure alone never triggers session compaction anymore — only token thresholds do (`extensions/autocompact.ts`).
 
 ### Fixed
-- **`model-heal.ts` crash: `ReferenceError: DEBOUNCE_MS is not defined` exited pi.** The widget→notify refactor removed the `DEBOUNCE_MS` constant but left its use in the `models.json` `FSWatcher` debounce; a heal pass writing `models.json` crashed pi via uncaught exception. The constant is restored (`extensions/model-heal.ts`).
+- **`model-heal.ts` crash: `ReferenceError: DEBOUNCE_MS is not defined` exited pi.** The widget→notify refactor removed the `DEBOUNCE_MS` constant but left its use in the `models.json` `FSWatcher` debounce; a heal pass writing `models.json` crashed pi via uncaught exception. The constant is restored, the watcher now handles async `error` events (a lock error such as `EPERM` is an uncaught exception otherwise), and a regression test drives the real watcher so removing the constant fails the suite (`extensions/model-heal.ts`, `test/model-heal-watcher.test.ts`).
 - **`renderCache` key order is pinned in `config.json`.** `KEY_ORDER` in `lib/preset-store.ts` now includes `renderCache` after `modelHeal`, so partial configs keep a stable order (`test/profile.test.ts`).
 
 ### Changed
