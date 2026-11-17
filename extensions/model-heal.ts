@@ -156,6 +156,14 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 					runFlags(ctx);
 				}, DEBOUNCE_MS);
 			});
+			// A missing models.json throws ENOENT synchronously (caught below), but lock
+			// errors (EPERM while a write holds the file) arrive as an async "error" event
+			// that no try/catch can intercept: without this handler that event is an
+			// uncaughtException and pi exits. Losing the watcher is fine — a later
+			// session_start retries it.
+			watcher.on("error", () => {
+				stopWatcher();
+			});
 		} catch {
 			// models.json missing or not watchable
 		}
