@@ -13,6 +13,7 @@
 - **`renderCache` key order is pinned in `config.json`.** `KEY_ORDER` in `lib/preset-store.ts` now includes `renderCache` after `modelHeal`, so partial configs keep a stable order (`test/profile.test.ts`).
 
 ### Changed
+- **The footer hourly rate renders `dim`.** `$19.98 (~$7.06/h)` painted both values the same, so the cost read as one number. The rate suffix now takes `dim` while the amount keeps `soft`; an active budget cap still paints the whole cell one alert colour (`extensions/footer.ts`, `test/footer-rate.test.ts`).
 - **Byte measurement is incremental and skipped where it cannot matter.** Models with no byte wall never stringify payloads (a 4.6 MB session paid ~11 ms per turn across both hooks); byte-limited sessions measure with per-message `WeakMap` sizing so repeat `context` events cost O(new messages). A/B on a 3.6 MB session: ~15 ms/event full stringify to 0.024 ms warm, with a 0.43% overestimate absorbed by the shed safety gaps (`extensions/autocompact.ts`).
 - **Render-cache width LRU holds 3 widths.** A 3-way width toggle (font-size steps, tmux pane alternation) thrashed the 2-slot LRU at ~710 us/render; 3 slots keep it warm at ~35 us/render (`extensions/render-cache.ts`, `test/render-cache.test.ts`).
 - **Arnative notices now render as transcript notifies instead of the widget slot above the editor.** The old `setWidget` notice covered the prompt; `announce()` now emits a `notify` line that stays visible in scrollback without blocking anything (`lib/status-widget.ts`).
