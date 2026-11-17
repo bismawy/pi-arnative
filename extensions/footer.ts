@@ -30,6 +30,7 @@ import {
 	saveChoice,
 } from "../lib/preset-store.ts";
 import { formatCost } from "./usage.ts";
+import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
 import { budgetLevelNow } from "./budget.ts";
 import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../lib/spinner.ts";
@@ -1140,7 +1141,11 @@ export function costCell(
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
 // without this every frame rescans the whole branch (O(N) per frame).
 export function getUsage(
-	ctx: { sessionManager: { getBranch(): readonly unknown[] }; getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined },
+	ctx: {
+		sessionManager: { getBranch(): readonly unknown[] };
+		getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | undefined;
+		model?: { id?: string; provider?: string };
+	},
 	acc: (t: string) => string,
 	soft: (t: string) => string,
 	/** Off by default: the cost cell is opt-in (`/arnative` → Footers → `[c]`). */
@@ -1227,6 +1232,12 @@ export function getUsage(
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
+	}
+	// Payload pressure for byte-limited models (remote/* proxies with a 1 MB wall).
+	// Only one context icon renders; the wire segment is dropped when space is tight.
+	const wire = wireBytesSnapshot();
+	if (wire && wire.bytes > 0 && isByteLimitedModel(ctx.model)) {
+		parts.push(`${acc("\u25c6")} ${soft(`${(wire.bytes / 1024 / 1024).toFixed(2)}MB/1MB`)}`);
 	}
 	if (showCost) {
 		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);

@@ -497,6 +497,15 @@ export function trimCompactionInput(messagesToSummarize: MessageLike[] | undefin
 // through a getter so the self-check can assert the i1 guard never touches it for plain models.
 let trackedOverheadBytes = -1;
 
+/** Last observed wire size (messages + overhead) for byte-limited models, or null.
+ *  Consumed by the footer to show payload pressure against the 1 MB proxy wall. */
+export function wireBytesSnapshot(): { bytes: number; limit: number } | null {
+	const state = (globalThis as Record<symbol, AutoCompactState | undefined>)[Symbol.for("pi-arnative.autocompactState")];
+	if (!state || state.lastMessagesBytes <= 0) return null;
+	const overhead = state.overheadBytes > 0 ? state.overheadBytes : DEFAULT_OVERHEAD_BYTES;
+	return { bytes: state.lastMessagesBytes + overhead, limit: SHED_TRIGGER_BYTES };
+}
+
 export default function registerAutoCompact(pi: ExtensionAPI): void {
 	const state = freshAutoCompactState();
 	Object.defineProperty(state, "overheadBytes", {
@@ -509,14 +518,8 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 		},
 	});
 	(state as { _overheadBytes?: number })._overheadBytes = 0;
-	if (isMain(import.meta.url)) {
-		// The self-check re-registers handlers against a fake pi; keep its symbol off production state.
-		Object.defineProperty(globalThis, Symbol.for("pi-arnative.autocompactState"), {
-			value: state,
-			configurable: true,
-			writable: true,
-		});
-	}
+	// Production and self-check both read this snapshot symbol (footer uses wireBytesSnapshot).
+	(globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")] = state;
 
 	const resetByteTracking = (): void => {
 		state.lastMessagesBytes = 0;
