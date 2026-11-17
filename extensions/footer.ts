@@ -1116,7 +1116,8 @@ export const RATE_MIN_WIDTH = 80;
  *  is hidden below RATE_MIN_ACTIVE_MS of active time and below RATE_MIN_WIDTH columns.
  *  `bandPaint` paints the whole cell (icon and text) when a budget cap is near or over —
  *  amber at `warn`, red at `over` (see `budgetLevelNow`); without it the icon keeps `acc` and
- *  the text `soft`. */
+ *  the text `soft`. The rate suffix is secondary information, so it renders `dim` (or the band
+ *  paint when a cap is active, keeping the alert one colour). */
 export function costCell(
 	costBilled: number,
 	costEstimated: number,
@@ -1124,18 +1125,21 @@ export function costCell(
 	soft: (t: string) => string,
 	width: number = RATE_MIN_WIDTH,
 	bandPaint?: (t: string) => string,
+	dim?: (t: string) => string,
 ): string {
 	if (!(costBilled > 0) && !(costEstimated > 0)) return "";
 	const parts: string[] = [];
 	if (costBilled > 0) parts.push(formatCost(costBilled));
 	if (costEstimated > 0) parts.push(`~${formatCost(costEstimated)}`);
-	let text = parts.join(" + ");
+	const text = parts.join(" + ");
+	let rate = "";
 	const activeMs = clock.total();
 	if (activeMs >= RATE_MIN_ACTIVE_MS && width >= RATE_MIN_WIDTH) {
-		const rate = (costBilled + costEstimated) / (activeMs / 3_600_000);
-		text += ` (${costEstimated > 0 ? "~" : ""}${formatCost(rate)}/h)`;
+		const perHour = (costBilled + costEstimated) / (activeMs / 3_600_000);
+		rate = `(${costEstimated > 0 ? "~" : ""}${formatCost(perHour)}/h)`;
 	}
-	return `${(bandPaint ?? acc)("\uf155")} ${(bandPaint ?? soft)(text)}`;
+	const cell = `${(bandPaint ?? acc)("\uf155")} ${(bandPaint ?? soft)(text)}`;
+	return rate ? `${cell} ${(bandPaint ?? dim ?? soft)(rate)}` : cell;
 }
 
 // 2s cache + branch length: the footer renders on every poke/stream tick, so
@@ -1234,7 +1238,7 @@ export function getUsage(
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	if (showCost) {
-		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
+		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint, dim);
 		// The dollar icon opens a new group, so it takes the same divider the footer uses
 		// between cells; the token and context parts stay a space apart.
 		if (cell) parts.push(parts.length > 0 ? `${dim("·")} ${cell}` : cell);
