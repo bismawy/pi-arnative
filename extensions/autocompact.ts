@@ -432,8 +432,31 @@ export function trimCompactionInput(messagesToSummarize: MessageLike[] | undefin
 	return changed;
 }
 
+// Registered handlers against a fake pi: Smart + Render cache On uses 90% on 1M (~943k tokens),
+// while Render cache Off falls back to ~200k tokens. The registrar's byte tracking is exposed
+// through a getter so the self-check can assert the i1 guard never touches it for plain models.
+let trackedOverheadBytes = -1;
+
 export default function registerAutoCompact(pi: ExtensionAPI): void {
 	const state = freshAutoCompactState();
+	Object.defineProperty(state, "overheadBytes", {
+		get(): number {
+			return this._overheadBytes;
+		},
+		set(v: number) {
+			this._overheadBytes = v;
+			trackedOverheadBytes = v;
+		},
+	});
+	(state as { _overheadBytes?: number })._overheadBytes = 0;
+	if (isMain(import.meta.url)) {
+		// The self-check re-registers handlers against a fake pi; keep its symbol off production state.
+		Object.defineProperty(globalThis, Symbol.for("pi-arnative.autocompactState"), {
+			value: state,
+			configurable: true,
+			writable: true,
+		});
+	}
 
 	const resetByteTracking = (): void => {
 		state.lastMessagesBytes = 0;
@@ -460,13 +483,15 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 	});
 
 	pi.on("context", async (event, ctx) => {
+		// Skip the full-transcript JSON.stringify entirely for models with no byte wall:
+		// measurement is the only cost here, and non-remote sessions pay it every turn.
+		if (!state.saw413 && !isByteLimitedModel(ctx?.model)) return;
 		const messages = (event as { messages?: MessageLike[] } | undefined)?.messages;
 		if (!Array.isArray(messages)) return;
 		const msgBytes = jsonByteLength(messages);
 		state.lastMessagesBytes = msgBytes;
 		state.awaitingContextPayload = true;
 
-		if (!state.saw413 && !isByteLimitedModel(ctx?.model)) return;
 		const triggerBytes = state.saw413 ? SHED_TRIGGER_AFTER_413_BYTES : SHED_TRIGGER_BYTES;
 		const targetBytes = state.saw413 ? SHED_TARGET_AFTER_413_BYTES : SHED_TARGET_BYTES;
 		const effectiveOverhead = state.overheadBytes > 0 ? state.overheadBytes : DEFAULT_OVERHEAD_BYTES;
@@ -482,11 +507,12 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", async (event) => {
 		if (state.inFlight || state.compacting) return;
+		if (!state.awaitingContextPayload || state.lastMessagesBytes <= 0) return;
 		const payload = (event as { payload?: unknown } | undefined)?.payload;
 		const bytes = jsonByteLength(payload);
 		if (bytes <= 0) return;
 
-		if (state.awaitingContextPayload && state.lastMessagesBytes > 0 && bytes >= state.lastMessagesBytes) {
+		if (bytes >= state.lastMessagesBytes) {
 			state.overheadBytes = bytes - state.lastMessagesBytes;
 		}
 		state.awaitingContextPayload = false;
@@ -800,6 +826,16 @@ if (isMain(import.meta.url)) {
 		"saw413 activates tighter silent shedding on any model",
 	);
 	setAutoCompact("Smart");
+
+	// i1 guard: models with no byte wall never measure payload bytes at all.
+	await handlers.session_start!({}, undefined);
+	const plainCtx = ctxOf(210000, 1_048_576, { id: "auto/zaicoding_glm-5.3" });
+	const plainMsgs: MessageLike[] = [{ role: "user", content: [{ type: "text", text: "plain" }] }];
+	const plainResult = (await handlers.context!({ messages: plainMsgs }, plainCtx)) as { messages?: MessageLike[] } | undefined;
+	assert(plainResult === undefined, "non-remote context hook skips byte measurement entirely");
+	const overheadBefore = trackedOverheadBytes;
+	const plainReq = await handlers.before_provider_request!({ payload: { blob: "p".repeat(4 * 1024 * 1024) } }, plainCtx);
+	assert(plainReq === undefined && trackedOverheadBytes === overheadBefore, "non-remote before_provider_request skips the 4 MB stringify");
 
 	// The 128k case from the field: Smart defers the whole window to pi's own
 	// compaction — no percent, however close to full, ever fires ours.
