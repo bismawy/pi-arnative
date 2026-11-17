@@ -874,7 +874,9 @@ if (isMain(import.meta.url)) {
 	const previews: string[] = [];
 	let reverted = 0;
 	let done = 0;
-	const picker = new ListPicker(fakeTheme, nameRows(["arnative", "arnative-cyberpunk"]), "arnative", {
+	// Wrap means one step down from the last row lands on the initial value, leaving
+	// nothing for Esc to revert, so the list carries a third row for this assertion.
+	const picker = new ListPicker(fakeTheme, nameRows(["arnative", "arnative-cyberpunk", "arnative-mono"]), "arnative", {
 		preview: (n) => previews.push(n),
 		revert: () => reverted++,
 		done: () => done++,
