@@ -40,6 +40,8 @@ function byteWallBytes(): number {
 	return Number.isFinite(mb) && mb > 0 ? Math.round(mb * 1024 * 1024) : 1024 * 1024;
 }
 const WALL_SCALE = byteWallBytes() / (1024 * 1024);
+/** Trim markers name the real ceiling, so a raised wall does not report 1MB. */
+const TRIM_LABEL = WALL_SCALE === 1 ? "trimmed for 1MB limit" : `trimmed for ${Math.round(WALL_SCALE)}MB limit`;
 
 export const SHED_TRIGGER_BYTES = Math.round(900 * 1024 * WALL_SCALE);
 export const SHED_TARGET_BYTES = Math.round(760 * 1024 * WALL_SCALE);
@@ -395,7 +397,7 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 			i,
 			mapContentBlocks(out[i], (b) => {
 				if (b.type === "text" && typeof b.text === "string" && b.text.length > 600) {
-					return { ...b, text: truncateStringHead(b.text, 600, "trimmed for 1MB limit") };
+					return { ...b, text: truncateStringHead(b.text, 600, TRIM_LABEL) };
 				}
 				if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.length > 300) {
 					return { ...b, thinking: truncateStringHead(b.thinking, 300, "trimmed") };
@@ -414,9 +416,9 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 					return { ...b, thinking: truncateStringHead(b.thinking, 300, "trimmed") };
 				}
 				if (b.type === "text" && typeof b.text === "string" && b.text.length > 8000) {
-					return { ...b, text: truncateStringHead(b.text, 8000, "trimmed for 1MB limit") };
+					return { ...b, text: truncateStringHead(b.text, 8000, TRIM_LABEL) };
 				}
-				return shrinkToolCallArgs(b, 4000, "trimmed for 1MB limit");
+				return shrinkToolCallArgs(b, 4000, TRIM_LABEL);
 			}),
 		);
 	}
