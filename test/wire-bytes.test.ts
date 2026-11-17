@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resetPresetCache } from "../lib/preset-store.ts";
-import registerAutoCompact, { wireBytesSnapshot } from "../extensions/autocompact.ts";
+import registerAutoCompact, { SHED_TRIGGER_BYTES, wireBytesSnapshot } from "../extensions/autocompact.ts";
 
 // Wire-bytes footer segment (i3): byte-limited models expose payload pressure
 // through wireBytesSnapshot(); plain models never populate it.
@@ -35,18 +35,19 @@ test("wireBytesSnapshot reports payload pressure only after byte-limited context
 		const snap = wireBytesSnapshot();
 		assert.ok(snap, "remote context event populates the snapshot");
 		assert.ok(snap.bytes > 4096, "bytes include the message payload");
-		assert.equal(snap.limit, 900 * 1024, "limit is the shed trigger (~900 KB)");
+		assert.equal(snap.limit, SHED_TRIGGER_BYTES, "limit is the live shed trigger, which follows PI_ARNATIVE_BYTE_WALL_MB");
 
-		// A shed (over trigger) is reflected: bytes drop under the target.
+		// A shed (over trigger) is reflected: bytes drop under the target. The fixture is
+		// sized from the live ceiling, so it keeps meaning something when the wall scales.
 		const bigMsgs = [
-			{ role: "user", content: [{ type: "text", text: "x".repeat(950 * 1024) }] },
+			{ role: "user", content: [{ type: "text", text: "x".repeat(SHED_TRIGGER_BYTES + 50 * 1024) }] },
 			{ role: "assistant", content: [{ type: "text", text: "ok" }] },
 		];
 		const shed = (await handlers.context!({ messages: bigMsgs }, remoteCtx)) as { messages?: unknown[] } | undefined;
 		assert.ok(Array.isArray(shed?.messages), "oversized remote payload sheds");
 		const after = wireBytesSnapshot();
 		assert.ok(after, "snapshot survives the shed");
-		assert.ok(after.bytes < 900 * 1024, `shed snapshot under trigger, got ${(after.bytes / 1024).toFixed(0)}KB`);
+		assert.ok(after.bytes < SHED_TRIGGER_BYTES, `shed snapshot under trigger, got ${(after.bytes / 1024).toFixed(0)}KB`);
 	} finally {
 		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevDir;

@@ -66,17 +66,17 @@ test("wire bytes render on the left beside the extension statuses", async () => 
 	const line = await renderLeftRow({ id: "remote/auto/glm-5.3", provider: "magpie" });
 	console.log("LINE:\n" + line);
 	assert.match(line, /● ON \(Jev\)/, "status renders");
-	// The denominator is the shed trigger (900KB), so pressure reads true right before
-	// the trim starts. /1MB understated it: 758KB showed 74% while the wall was at 84%.
-	assert.match(line, /\udb80\udd93 0\.2[0-9]MB\/900KB/, "wire cell shows the real wall");
-	assert.ok(!line.includes("MB/1MB"), "the 1MB proxy wall is not the denominator");
+	// The denominator is the live shed trigger, so the assertion follows the wall
+	// instead of pinning 900KB: the same label shape must survive PI_ARNATIVE_BYTE_WALL_MB.
+	assert.match(line, /\udb80\udd93 0\.2[0-9]MB\/\d+(\.\d+)?(KB|MB)/, "wire cell shows payload against the live ceiling");
+	assert.ok(!line.includes("/1MB "), "the raw proxy wall is not the denominator");
 });
 
 test("a model without a byte wall never renders the wire cell", async () => {
 	const line = await renderLeftRow({ id: "gpt-6.1-sol", provider: "agentrouter" });
 	console.log("LINE:\n" + line);
 	assert.match(line, /\u25cf ON \(Jev\)/, "status still renders");
-	assert.ok(!line.includes("MB/900KB"), "no wire cell for a plain model");
+	assert.ok(!line.includes("MB/"), "no wire cell for a plain model");
 });
 
 test("the wire cell keeps the dim pipe separator", async () => {
