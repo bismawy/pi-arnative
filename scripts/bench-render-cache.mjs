@@ -23,6 +23,9 @@ import {
 import { Container } from "@earendil-works/pi-tui";
 import { attachChatContainer, clearRenderCache, setRenderCache } from "../extensions/render-cache.ts";
 
+/** Measured chars per token for this generator's code-heavy text (see targetChars). */
+const CHARS_PER_TOKEN = 2.26;
+
 function parseArgs(argv) {
 	let targetTokens = 300_000;
 	let outPath = join(tmpdir(), "pi-arnative-bench-300k.jsonl");
@@ -55,10 +58,16 @@ function makeAssistantUsage(contextTokens, outputTokens) {
 
 function buildSyntheticTurns(targetTokens) {
 	const turns = [];
-	// ~4 chars per token approximation for realistic transcript density.
-	const targetChars = targetTokens * 4;
+	// Code, hashes and punctuation tokenize far denser than prose. Measured on a
+	// generated 890k session: the provider reported 1,675,111 tokens for 3,779,390
+	// chars, so 4 char/token overstates the label by 1.88x and produced sessions
+	// that were silently over the model window.
+	const targetChars = Math.round(targetTokens * CHARS_PER_TOKEN);
 	let totalChars = 0;
 	let idx = 0;
+	// Start one hour back, but never let the last turn land in the future: a
+	// synthetic timestamp ahead of the wall clock breaks compaction and export
+	// logic that compares entry times. Spacing shrinks when the session is long.
 	const baseTime = Date.now() - 3600_000;
 
 	const sampleCode = [
@@ -107,7 +116,7 @@ function buildSyntheticTurns(targetTokens) {
 		const turnChars =
 			userText.length + assistantCallText.length + toolOutput.length + assistantFinalText.length;
 		totalChars += turnChars;
-		const runningTokens = Math.min(targetTokens, Math.round(totalChars / 4));
+		const runningTokens = Math.min(targetTokens, Math.round(totalChars / CHARS_PER_TOKEN));
 
 		turns.push({
 			idx,
@@ -121,7 +130,17 @@ function buildSyntheticTurns(targetTokens) {
 		});
 	}
 
-	return { turns, approxTokens: Math.round(totalChars / 4) };
+	// A long session can push the last synthetic turn past the wall clock, which
+	// breaks anything comparing entry times (compaction, export). Pull the whole run
+	// back so it ends at most a minute ago.
+	const lastTs = turns.length > 0 ? turns[turns.length - 1].ts : 0;
+	const latestAllowed = Date.now() - 60_000;
+	if (lastTs > latestAllowed) {
+		const shift = lastTs - latestAllowed;
+		for (const turn of turns) turn.ts -= shift;
+	}
+
+	return { turns, approxTokens: Math.round(totalChars / CHARS_PER_TOKEN) };
 }
 
 function writeSessionJsonl(outPath, turns) {
