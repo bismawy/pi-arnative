@@ -1234,10 +1234,12 @@ export function getUsage(
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	// Payload pressure for byte-limited models (remote/* proxies with a 1 MB wall).
-	// Only one context icon renders; the wire segment is dropped when space is tight.
+	// The diamond takes the same dim divider the cost cell uses, so the wire reading
+	// reads as its own group after the token and context parts.
 	const wire = wireBytesSnapshot();
 	if (wire && wire.bytes > 0 && isByteLimitedModel(ctx.model)) {
-		parts.push(`${acc("\u25c6")} ${soft(`${(wire.bytes / 1024 / 1024).toFixed(2)}MB/1MB`)}`);
+		const cell = `${acc("\udb80\udd93")} ${soft(`${(wire.bytes / 1024 / 1024).toFixed(2)}MB/1MB`)}`;
+		parts.push(parts.length > 0 ? `${dim("·")} ${cell}` : cell);
 	}
 	if (showCost) {
 		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
