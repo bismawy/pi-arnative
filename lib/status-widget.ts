@@ -55,24 +55,13 @@ export function statusRows(th: FgTheme, rows: string[], width = Number.POSITIVE_
 	return Number.isFinite(width) ? lines.map((line) => truncateToWidth(line, width, "")) : lines;
 }
 
-/** Key for the one-line change notice above the editor. */
-export const NOTICE_KEY = "arnative-notice";
-/** How long a change notice stays before it clears itself. */
-export const NOTICE_MS = 6_000;
-let noticeTimer: ReturnType<typeof setTimeout> | undefined;
-
 /**
- * State what the last change did, in the status slot above the editor, and clear it after
- * {@link NOTICE_MS}. The next change replaces the line instead of stacking. A UI without
- * widgets (RPC/headless) is left alone.
+ * State what the last change did, as a transcript notify (like pi-jev-eye) instead of the
+ * widget slot above the editor: the widget covered the prompt, while a scrollback line
+ * stays visible without blocking anything. A UI without notify (RPC/headless) is left alone.
  */
-export function announce(ui: { setWidget?(key: string, content: string[] | undefined): void } | undefined, message: string): void {
-	if (!ui?.setWidget) return;
-	ui.setWidget(NOTICE_KEY, [message]);
-	if (noticeTimer) clearTimeout(noticeTimer);
-	noticeTimer = setTimeout(() => ui.setWidget?.(NOTICE_KEY, undefined), NOTICE_MS);
-	// Do not hold the process open just to hide a notice.
-	(noticeTimer as { unref?(): void }).unref?.();
+export function announce(ui: { notify?(message: string, type?: string): void } | undefined, message: string): void {
+	ui?.notify?.("[arnative] " + message, "info");
 }
 
 if (isMain(import.meta.url)) {

@@ -29,7 +29,13 @@ export function markPatched<T extends AnyFn>(fn: T): T {
 
 /** pi's own method for `key`, recorded once per prototype and returned on every load. */
 export function originalOf<T extends AnyFn>(proto: Record<symbol | string, any>, key: string): T {
-	const originals = (proto[ORIGINALS_KEY] ??= {} as Record<string, Marked>);
+	// Own property only: an instance without its own map must never read or mutate its
+	// prototype's recorded originals across reloads.
+	let originals = Object.hasOwn(proto, ORIGINALS_KEY) ? (proto[ORIGINALS_KEY] as Record<string, Marked>) : undefined;
+	if (!originals) {
+		originals = {};
+		Object.defineProperty(proto, ORIGINALS_KEY, { value: originals, configurable: true });
+	}
 	const current: Marked | undefined = proto[key];
 	if (current && !current[PATCHED_KEY]) originals[key] = current;
 	const original = originals[key];
@@ -82,6 +88,25 @@ if (isMain(import.meta.url)) {
 		return `${orig.call(this)}?`;
 	});
 	assert(twice.render() === "pi?", "patchOnce: the second load patches pi's method again, not the first patch");
+
+	// Instance vs prototype isolation: recording an original on a child object must never
+	// overwrite its prototype's recorded original.
+	class Parent {
+		render(): string { return "parent"; }
+	}
+	patchOnce(Parent.prototype, "render", (orig) => function (this: any): string {
+		return `[${orig.call(this)}]`;
+	});
+	const child = new Parent() as any;
+	child.render = () => "stale-instance";
+	patchOnce(child, "render", (orig) => function (this: any): string {
+		return `(${orig.call(this)})`;
+	});
+	patchOnce(Parent.prototype, "render", (orig) => function (this: any): string {
+		return `<${orig.call(this)}>`;
+	});
+	assert(new Parent().render() === "<parent>", "prototype original stays untouched when a child instance is patched");
+	assert(child.render() === "(stale-instance)", "instance keeps its own recorded original");
 
 	console.log("OK");
 }

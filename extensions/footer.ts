@@ -854,34 +854,27 @@ export function overlayOutsideDialogOnWidgetLines(lines: readonly string[], widt
 
 const OUTSIDE_HOOK_KEY = Symbol.for("pi-arnative.outsideDialogHook");
 const ABOVE_WRAPPED_KEY = Symbol.for("pi-arnative.aboveWidgetWrapped");
+const ABOVE_MODE_KEY = Symbol.for("pi-arnative.aboveWidgetMode");
 
 function installAboveEditorHook(widgetContainer: { render?: (w: number) => string[] } | undefined, mode: unknown): void {
 	if (!widgetContainer || typeof widgetContainer.render !== "function") return;
-	if ((widgetContainer as unknown as Record<symbol, boolean>)[ABOVE_WRAPPED_KEY]) return;
-	(widgetContainer as unknown as Record<symbol, boolean>)[ABOVE_WRAPPED_KEY] = true;
-	const origRender = widgetContainer.render;
-	widgetContainer.render = function (this: unknown, width: number): string[] {
-		if (activeChatboxPreset() === "Arnative") {
-			trimLeadingSpacerAboveWidget(this as { children?: Array<{ constructor?: { name?: string }; render?(w: number): string[] }> });
-		}
-		const lines = origRender.call(this, width);
+	const box = widgetContainer as Record<symbol, unknown> & { render: (w: number) => string[] };
+	box[ABOVE_MODE_KEY] = mode;
+	if (box[ABOVE_WRAPPED_KEY]) return;
+	box[ABOVE_WRAPPED_KEY] = true;
+	const ownOrig = Object.hasOwn(box, "render") ? box.render : null;
+	box.render = function (this: Record<symbol, unknown>, width: number): string[] {
+		// Delegate to the live prototype render when not overridden on the instance so `/reload`
+		// changes to Container.prototype.render still apply without touching prototype originals.
+		const baseRender = ownOrig ?? (Object.getPrototypeOf(this) as { render: (w: number) => string[] }).render;
+		const lines = baseRender.call(this, width);
 		try {
 			const hook = (globalThis as Record<symbol, ((l: string[], w: number, m: unknown) => string[]) | undefined>)[OUTSIDE_HOOK_KEY];
-			return hook ? hook(lines, width, mode) : lines;
+			return hook ? hook(lines, width, this[ABOVE_MODE_KEY]) : lines;
 		} catch {
 			return lines;
 		}
 	};
-}
-
-export function trimLeadingSpacerAboveWidget(
-	widgetContainer: { children?: Array<{ constructor?: { name?: string }; render?(w: number): string[] }> } | undefined,
-): boolean {
-	const children = widgetContainer?.children;
-	if (!Array.isArray(children) || children.length === 0) return false;
-	if (children[0]?.constructor?.name !== "Spacer") return false;
-	children.shift();
-	return true;
 }
 
 if (InteractiveMode?.prototype) {
@@ -901,17 +894,11 @@ if (InteractiveMode?.prototype) {
 				installAboveEditorHook(container as { render?: (w: number) => string[] }, this);
 			}
 			orig.call(this, container, widgets, spacerWhenEmpty, leadingSpacer);
-			if (container && container === this.widgetContainerAbove && activeChatboxPreset() === "Arnative") {
-				trimLeadingSpacerAboveWidget(container as { children?: Array<{ constructor?: { name?: string }; render?(w: number): string[] }> });
-			}
 		});
 	}
 	if (typeof modeProto.showStatusIndicator === "function") {
 		patchOnce(modeProto, "showStatusIndicator", (orig) => function (this: any, indicator: unknown): void {
 			installAboveEditorHook(this.widgetContainerAbove, this);
-			if (activeChatboxPreset() === "Arnative") {
-				trimLeadingSpacerAboveWidget(this.widgetContainerAbove);
-			}
 			orig.call(this, indicator);
 		});
 	}
@@ -2415,12 +2402,6 @@ if (isMain(import.meta.url)) {
 	assert(outNotice.length === 3 && outNotice[0] === "" && outNotice[1] === ` ${dStatus}  \ueb1b Chatbox: Arnative.` && outNotice[2] === "", "Outside dialog sits on the left with the notice beside it and 1 blank line below");
 	const outTodos = overlayOutsideDialogOnWidgetLines(["", "\u256d" + "\u2500".repeat(58) + "\u256e", "\u2570" + "\u2500".repeat(58) + "\u256f"], 60, dStatus);
 	assert(outTodos.length === 5 && outTodos[0] === "" && outTodos[1] === ` ${dStatus}` && outTodos[2] === "" && outTodos[3]!.startsWith("\u256d"), "Outside dialog leaves 1 blank line above and below when Todos is visible");
-	const fakeAbove = { children: [{ constructor: { name: "Spacer" }, render: () => [""] }, { render: () => ["\u256d\u2500\u256e", "\u2570\u2500\u256f"] }] };
-	assert(trimLeadingSpacerAboveWidget(fakeAbove) === true && fakeAbove.children.length === 1, "leading Spacer above boxed widget (e.g. Todos) is trimmed cleanly");
-	const fakePlainAbove = { children: [{ constructor: { name: "Spacer" }, render: () => [""] }, { render: () => ["plain status"] }] };
-	assert(trimLeadingSpacerAboveWidget(fakePlainAbove) === true && fakePlainAbove.children.length === 1, "leading Spacer above notice widget is trimmed cleanly");
-	const fakeEmptyAbove = { children: [{ constructor: { name: "Spacer" }, render: () => [""] }] };
-	assert(trimLeadingSpacerAboveWidget(fakeEmptyAbove) === true && fakeEmptyAbove.children.length === 0, "leading Spacer when widgetContainerAbove is empty is trimmed cleanly");
 
 	const scrollBorder = renderChatboxScrollBorder("\u2191", 3, 24, (t) => `<bdr>${t}</bdr>`, (t) => `<pri>${t}</pri>`);
 	assert(scrollBorder.includes("<pri>↑ 3 more</pri>") && visibleWidth(stripAnsi(scrollBorder.replace(/<\/?(bdr|pri)>/g, ""))) === 24, "chatbox scroll border paints N more in primary at exact width");

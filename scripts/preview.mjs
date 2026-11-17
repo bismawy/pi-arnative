@@ -14,6 +14,7 @@ const EXTENSIONS = [
 	"footer.ts",
 	"timestamps.ts",
 	"ui-render-tweaks.ts",
+	"render-cache.ts",
 	"usage.ts",
 	"usage-export.ts",
 	"budget.ts",
