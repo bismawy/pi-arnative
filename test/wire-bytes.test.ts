@@ -4,10 +4,79 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resetPresetCache } from "../lib/preset-store.ts";
-import registerAutoCompact, { SHED_TRIGGER_BYTES, wireBytesSnapshot } from "../extensions/autocompact.ts";
+import registerAutoCompact, { SHED_TRIGGER_BYTES, cachedArrayBytes, jsonByteLength, shedMessagesForByteLimit, wireBytesSnapshot } from "../extensions/autocompact.ts";
 
-// Wire-bytes footer segment (i3): byte-limited models expose payload pressure
-// through wireBytesSnapshot(); plain models never populate it.
+// Byte-limited models expose payload pressure through wireBytesSnapshot();
+// plain models never populate it.
+
+test("cachedArrayBytes matches serialized UTF-8 bytes for all message content", () => {
+	for (const text of ["ASCII", "界".repeat(100), "😀".repeat(100), 'quote " and slash \\', "\n\t\0", "\ud800"]) {
+		const messages = [{ role: "user", content: [{ type: "text", text }], optional: undefined }];
+		const expected = Buffer.byteLength(JSON.stringify(messages), "utf8");
+		assert.equal(cachedArrayBytes(messages), expected);
+		assert.equal(cachedArrayBytes(structuredClone(messages)), expected, "cloned requests retain exact sizes");
+	}
+});
+
+test("cachedArrayBytes measures changed transcripts without stale identity caches", () => {
+	const messages = [{ role: "user", content: [{ type: "text", text: "start" }] }];
+	assert.equal(cachedArrayBytes(messages), jsonByteLength(messages));
+	messages[0]!.content[0]!.text = "界".repeat(500);
+	assert.equal(cachedArrayBytes(messages), jsonByteLength(messages), "nested mutation is measured");
+	messages.push({ role: "assistant", content: [{ type: "text", text: "ok" }] });
+	assert.equal(cachedArrayBytes(messages), jsonByteLength(messages), "appended message is measured");
+	messages[0] = { role: "user", content: [{ type: "text", text: "replacement" }] };
+	assert.equal(cachedArrayBytes(messages), jsonByteLength(messages), "same-length replacement is measured");
+	messages.pop();
+	assert.equal(cachedArrayBytes(messages), jsonByteLength(messages), "shorter transcript is measured");
+});
+
+test("shed byte totals include JSON array separators before and after reduction", () => {
+	const messages = [
+		{ role: "user", content: [{ type: "text", text: "start" }] },
+		{ role: "assistant", content: [{ type: "toolCall", id: "call_size", name: "read", arguments: { path: "file" } }] },
+		{ role: "toolResult", toolCallId: "call_size", content: [{ type: "text", text: "界".repeat(1000) }] },
+		{ role: "user", content: [{ type: "text", text: "continue" }] },
+		{ role: "assistant", content: [{ type: "text", text: "ok" }] },
+	];
+	const unchanged = shedMessagesForByteLimit(messages, jsonByteLength(messages));
+	assert.equal(unchanged.changed, false);
+	assert.equal(unchanged.bytes, jsonByteLength(unchanged.messages));
+	const reduced = shedMessagesForByteLimit(messages, 1024);
+	assert.equal(reduced.changed, true);
+	assert.equal(reduced.bytes, jsonByteLength(reduced.messages));
+});
+
+test("Unicode payload over the byte trigger sheds on the first context event", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "arnative-wirebytes-unicode-"));
+	const prevDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	resetPresetCache();
+	t.after(() => {
+		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevDir;
+		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")];
+		resetPresetCache();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> = {};
+	registerAutoCompact({
+		on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => void (handlers[name] = fn),
+	} as never);
+	const messages = [
+		{ role: "user", content: [{ type: "text", text: "start" }] },
+		{ role: "assistant", content: [{ type: "toolCall", id: "call_unicode", name: "read", arguments: { path: "file" } }] },
+		{ role: "toolResult", toolCallId: "call_unicode", content: [{ type: "text", text: "界".repeat(Math.ceil(SHED_TRIGGER_BYTES / 2)) }] },
+		{ role: "user", content: [{ type: "text", text: "continue" }] },
+		{ role: "assistant", content: [{ type: "text", text: "ok" }] },
+	];
+	const original = structuredClone(messages);
+	assert.ok(jsonByteLength(messages) > SHED_TRIGGER_BYTES);
+	const result = await handlers.context!({ messages }, { model: { id: "remote/test" } }) as { messages?: unknown[] } | undefined;
+	assert.ok(Array.isArray(result?.messages), "UTF-8 size triggers shedding without a previous request");
+	assert.ok(jsonByteLength(result.messages) < SHED_TRIGGER_BYTES);
+	assert.deepEqual(messages, original, "source transcript remains intact");
+});
 
 test("wireBytesSnapshot reports payload pressure only after byte-limited context events", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "arnative-wirebytes-"));
@@ -34,7 +103,7 @@ test("wireBytesSnapshot reports payload pressure only after byte-limited context
 		await handlers.context!({ messages: remoteMsgs }, remoteCtx);
 		const snap = wireBytesSnapshot();
 		assert.ok(snap, "remote context event populates the snapshot");
-		assert.ok(snap.bytes > 4096, "bytes include the message payload");
+		assert.equal(snap.bytes, jsonByteLength(remoteMsgs) + 64 * 1024, "bytes are exact messages plus default overhead");
 		assert.equal(snap.limit, SHED_TRIGGER_BYTES, "limit is the live shed trigger, which follows PI_ARNATIVE_BYTE_WALL_MB");
 
 		// A shed (over trigger) is reflected: bytes drop under the target. The fixture is
