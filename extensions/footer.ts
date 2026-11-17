@@ -1610,8 +1610,13 @@ export default function (pi: ExtensionAPI) {
 							// understated pressure by 10 points right before the trim starts.
 							const wire = wireBytesSnapshot();
 							if (wire && wire.bytes > 0 && isByteLimitedModel(ctx.model)) {
-								const mb = (n: number) => `${(n / 1024 / 1024).toFixed(2)}MB`;
-								groups.push(`${acc("\udb80\udd93")} ${secondarySoft(`${mb(wire.bytes)}/${Math.round(wire.limit / 1024)}KB`)}`);
+								// Under a 1 MB wall the label keeps the approved shape `0.74MB/900KB`: the
+								// payload in MB, the ceiling in KB. A bigger wall scales both to MB so the
+								// ceiling stays readable instead of printing 14336KB.
+								const label = wire.limit >= 1024 * 1024
+									? `${(wire.bytes / 1024 / 1024).toFixed(2)}MB/${(wire.limit / 1024 / 1024).toFixed(2)}MB`
+									: `${(wire.bytes / 1024 / 1024).toFixed(2)}MB/${Math.round(wire.limit / 1024)}KB`;
+								groups.push(`${acc("\udb80\udd93")} ${secondarySoft(label)}`);
 							}
 
 							let usageStr = "";

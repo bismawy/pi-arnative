@@ -30,12 +30,22 @@ export type AutoCompactChoice = (typeof AUTO_COMPACT_CHOICES)[number];
 export const DEFAULT_AUTO_COMPACT: AutoCompactChoice = "Off";
 export const AUTO_COMPACT_KEY = "autoCompact";
 
-/** Byte ceilings for 1 MB-capped proxies (e.g. `remote/*` endpoints). */
-export const SHED_TRIGGER_BYTES = 900 * 1024;
-export const SHED_TARGET_BYTES = 760 * 1024;
-export const COMPACT_INPUT_BYTES = 720 * 1024;
-const SHED_TRIGGER_AFTER_413_BYTES = 820 * 1024;
-const SHED_TARGET_AFTER_413_BYTES = 680 * 1024;
+/** Byte ceilings for byte-capped proxies (e.g. `remote/*` endpoints).
+ *  The ratios target a 1 MB HTTP body wall. Raise `PI_ARNATIVE_BYTE_WALL_MB` when the
+ *  proxy accepts more, or the shed fires at a fraction of the real wall and caps the
+ *  context long before the token window is used. Read once at module load: a shell
+ *  override must be set before pi starts. */
+function byteWallBytes(): number {
+	const mb = Number(process.env.PI_ARNATIVE_BYTE_WALL_MB);
+	return Number.isFinite(mb) && mb > 0 ? Math.round(mb * 1024 * 1024) : 1024 * 1024;
+}
+const WALL_SCALE = byteWallBytes() / (1024 * 1024);
+
+export const SHED_TRIGGER_BYTES = Math.round(900 * 1024 * WALL_SCALE);
+export const SHED_TARGET_BYTES = Math.round(760 * 1024 * WALL_SCALE);
+export const COMPACT_INPUT_BYTES = Math.round(720 * 1024 * WALL_SCALE);
+const SHED_TRIGGER_AFTER_413_BYTES = Math.round(820 * 1024 * WALL_SCALE);
+const SHED_TARGET_AFTER_413_BYTES = Math.round(680 * 1024 * WALL_SCALE);
 const DEFAULT_OVERHEAD_BYTES = 64 * 1024;
 const MIN_MSG_BUDGET_BYTES = 64 * 1024;
 const TRIMMED_TOOL_STUB = "[earlier output omitted; full output in session]";
