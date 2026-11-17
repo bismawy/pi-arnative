@@ -17,6 +17,7 @@ import { activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFo
 import { activeHeaderPreset } from "../extensions/section-headers.ts";
 import { activeSpinnerGradient, activeSpinnerPreset } from "../extensions/animations.ts";
 import { activeModelHeal } from "../lib/model-heal.ts";
+import { activeRenderCache } from "../extensions/render-cache.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";
 
 /** Fresh fixture per case; the agent dir env var is restored either way. */
@@ -44,7 +45,7 @@ test("the file keeps one key order", () => {
 		recordProfile();
 		assert.deepEqual(
 			Object.keys(configOf(dir)),
-			["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal"],
+			["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal", "renderCache"],
 			"header first, then the rest of the menu, the budget keys after chatboxDialog, layoutVersion before the newer keys",
 		);
 	});
@@ -66,6 +67,7 @@ test("the profile in use is recorded, defaults included", () => {
 		assert.equal(stored.spinnerGradient, activeSpinnerGradient() ? "on" : "off", "spinner gradient recorded");
 		assert.equal(stored.autoCompact, activeAutoCompact(), "auto-compact recorded");
 		assert.equal(stored.modelHeal, activeModelHeal(), "model heal recorded");
+		assert.equal(stored.renderCache, activeRenderCache(), "render cache recorded");
 		assert.equal(stored.budgetDay, activeBudgetDay() === undefined ? "" : String(activeBudgetDay()), "day cap recorded (" + JSON.stringify(stored.budgetDay) + ")");
 		assert.equal(stored.budgetMonth, activeBudgetMonth() === undefined ? "" : String(activeBudgetMonth()), "month cap recorded");
 		assert.equal(stored.budgetEnforce, activeBudgetEnforce() ? "on" : "off", "budget enforcement recorded, off by default");

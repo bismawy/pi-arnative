@@ -276,6 +276,51 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 // copyable. Recomputed on every render, because the label moves with the width and the key.
 const HINT_SPANS = Symbol.for("pi-arnative.toolBoxHintSpans");
 const SCROLL_OFFSET = Symbol.for("pi-arnative.toolBoxScrollOffset");
+const SCROLL_HOLD = Symbol.for("pi-arnative.toolBoxScrollHold");
+const HOLD_DELAY_MS = 250;
+const HOLD_REPEAT_MS = 90;
+
+type HoldTimers = { delay?: ReturnType<typeof setTimeout>; repeat?: ReturnType<typeof setInterval> };
+
+function stopScrollHold(comp: Record<symbol, unknown>): void {
+	const timers = comp[SCROLL_HOLD] as HoldTimers | undefined;
+	if (!timers) return;
+	if (timers.delay) clearTimeout(timers.delay);
+	if (timers.repeat) clearInterval(timers.repeat);
+	comp[SCROLL_HOLD] = undefined;
+}
+
+function startScrollHold(
+	comp: Record<symbol, unknown> & { expanded?: boolean; ui?: { requestRender?: () => void } },
+	dir: -1 | 1,
+): void {
+	stopScrollHold(comp);
+	const timers: HoldTimers = {};
+	comp[SCROLL_HOLD] = timers;
+	const stepOnce = (): boolean => {
+		if (!comp.expanded) {
+			stopScrollHold(comp);
+			return false;
+		}
+		const meta = (comp[SCROLL_META] as { maxOffset: number; step: number } | undefined) ?? { maxOffset: 0, step: 6 };
+		const cur = Number(comp[SCROLL_OFFSET] ?? 0);
+		const next = Math.max(0, Math.min(meta.maxOffset, cur + dir * meta.step));
+		if (next === cur) {
+			stopScrollHold(comp);
+			return false;
+		}
+		comp[SCROLL_OFFSET] = next;
+		comp.ui?.requestRender?.();
+		return true;
+	};
+	timers.delay = setTimeout(() => {
+		timers.delay = undefined;
+		if (!stepOnce()) return;
+		if (comp[SCROLL_HOLD] === timers && timers.repeat === undefined) {
+			timers.repeat = setInterval(stepOnce, HOLD_REPEAT_MS);
+		}
+	}, HOLD_DELAY_MS);
+}
 const SCROLL_UP_SPANS = Symbol.for("pi-arnative.toolBoxScrollUpSpans");
 const SCROLL_DOWN_SPANS = Symbol.for("pi-arnative.toolBoxScrollDownSpans");
 const SCROLL_META = Symbol.for("pi-arnative.toolBoxScrollMeta");
@@ -378,7 +423,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 				maxBody,
 				width,
 				boxTokenPaint(["dim"]),
-				boxTokenPaint(["mdHeading", "accent"]),
+				boxTokenPaint(["dim"]),
 			);
 			drawn = capped.lines;
 			this[SCROLL_OFFSET] = Math.max(0, Math.min(Number(this[SCROLL_OFFSET] ?? 0), capped.maxOffset));
@@ -389,6 +434,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 					? textSpans([drawn[capped.botRow]!], capped.belowLabel).map((s) => ({ ...s, row: capped.botRow }))
 					: [];
 		} else {
+			stopScrollHold(this);
 			this[SCROLL_OFFSET] = 0;
 			this[SCROLL_UP_SPANS] = [];
 			this[SCROLL_DOWN_SPANS] = [];
@@ -422,6 +468,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 			? inSpans(this[SCROLL_DOWN_SPANS] as TextSpan[], event.y, event.x)
 			: false;
 		if ((onHint || onUp || onDown) && event.type === "press" && event.button === "left") {
+			stopScrollHold(this);
 			// A child of the box (an image preview) keeps its own press.
 			const childHit = origMouse.call(this, event);
 			if (childHit) return childHit;
@@ -433,13 +480,16 @@ if (ToolExecutionComponent?.prototype?.render) {
 			}
 			const meta = (this[SCROLL_META] as { maxOffset: number; step: number } | undefined) ?? { maxOffset: 0, step: 6 };
 			const cur = Number(this[SCROLL_OFFSET] ?? 0);
-			const next = Math.max(0, Math.min(meta.maxOffset, cur + (onUp ? -meta.step : meta.step)));
+			const dir: -1 | 1 = onUp ? -1 : 1;
+			const next = Math.max(0, Math.min(meta.maxOffset, cur + dir * meta.step));
 			this[SCROLL_OFFSET] = next;
 			this[PRESS_TOGGLED] = true;
+			startScrollHold(this, dir);
 			this.ui?.requestRender?.();
 			return { handled: true, render: true };
 		}
 		if (this[PRESS_TOGGLED] && (event.type === "release" || event.type === "click")) {
+			stopScrollHold(this);
 			if (event.type === "click") this[PRESS_TOGGLED] = false;
 			return { handled: true, render: false };
 		}

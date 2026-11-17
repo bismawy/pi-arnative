@@ -34,8 +34,9 @@ interface AssistantMessage {
 	errorMessage?: string;
 }
 
+/** models.json watcher debounce: batch rapid writes (a heal pass re-reading its own write). */
 const DEBOUNCE_MS = 800;
-const WIDGET_MS = 10_000;
+
 
 const registryOf = (ctx: unknown): RegistryLike | undefined => (ctx as { modelRegistry?: RegistryLike } | undefined)?.modelRegistry;
 
@@ -83,28 +84,18 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 	bindSetModel((model) => pi.setModel(model as never));
 	let watcher: FSWatcher | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	let widgetTimer: ReturnType<typeof setTimeout> | undefined;
 	let deferNoticeShown = false;
 
 	// ctx getters throw once the session was replaced or reloaded, and deferred callbacks
-	// (timer, watcher, network passes) can outlive it: capture ui while live, guard dismissal.
+	// (timer, watcher, network passes) can outlive it: capture ui while live, guard access.
 	function notify(ctx: ExtensionContext, lines: string[]): void {
-		let ui: ExtensionContext["ui"] | undefined;
 		try {
-			ui = ctx.ui;
-			ui?.setWidget?.("model-heal", lines.map((line) => HEAL_ICON + " model-heal: " + line));
+			// Transcript notify, like pi-jev-eye: the widget slot above the input box steals focus
+			// from the prompt, while a scrollback line stays visible without covering anything.
+			ctx.ui?.notify(lines.map((line) => "[arnative] model-heal: " + line).join("\n"), "info");
 		} catch {
 			return;
 		}
-		if (widgetTimer) clearTimeout(widgetTimer);
-		widgetTimer = setTimeout(() => {
-			widgetTimer = undefined;
-			try {
-				ui?.setWidget?.("model-heal", undefined);
-			} catch {
-				// session replaced while the widget was up
-			}
-		}, WIDGET_MS);
 	}
 
 	async function apply(ctx: ExtensionContext, label: string, result: HealResult): Promise<void> {
@@ -218,8 +209,6 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", () => {
 		cancelManualHeal();
 		stopWatcher();
-		if (widgetTimer) clearTimeout(widgetTimer);
-		widgetTimer = undefined;
 	});
 
 	registerCommands(pi, (_args, ctx) => healNow(ctx));

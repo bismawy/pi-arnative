@@ -24,7 +24,7 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset, type FooterPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
@@ -37,6 +37,12 @@ import {
 } from "./autocompact.ts";
 import { cancelManualHeal, healNow } from "./model-heal.ts";
 import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
+import {
+	RENDER_CACHE_CHOICES,
+	activeRenderCache,
+	setRenderCache,
+	type RenderCacheChoice,
+} from "./render-cache.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { BACK_KEY_LABEL } from "../lib/shortcuts.ts";
 import { openProviders } from "../lib/provider.ts";
@@ -59,7 +65,7 @@ export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): 
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
 export const MENU_TITLE = screenTitle("Settings");
 /** One-line description under the menu title. */
-export const MENU_DESC = "Themes, headers, footers, chatbox, animations, auto-compact, providers, usage, budget";
+export const MENU_DESC = "Themes, headers, footers, chatbox, animations, auto-compact, render, providers, usage, budget";
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
@@ -365,20 +371,26 @@ const AUTOCOMPACT_PICKER_TEXT: ListPickerText = {
 	legend: LIST_LEGEND_MOVE,
 };
 
-/** One note per row: Smart states its tier table, a manual budget its window-independence. */
-const AUTO_COMPACT_NOTES: Record<AutoCompactChoice, string> = {
-	Off: "never — pi's own compaction stays in charge",
-	Smart: "by window: 1M→20% · 512k→40% · 256k→80% · <192k→pi core",
-	"100k": "always above 100k tokens, any window",
-	"150k": "always above 150k tokens, any window",
-	"200k": "always above 200k tokens, any window",
-	"300k": "always above 300k tokens, any window",
-	"400k": "always above 400k tokens, any window",
-};
+/** One note per row: Smart reflects Render cache state, a manual budget its window-independence. */
+function autoCompactNotes(): Record<AutoCompactChoice, string> {
+	return {
+		Off: "never — pi's own compaction stays in charge",
+		Smart:
+			activeRenderCache() === "On"
+				? "90% of window (≥192k) · <192k→pi core"
+				: "by window: 1M→20% · 512k→40% · 256k→80% · <192k→pi core",
+		"100k": "always above 100k tokens, any window",
+		"150k": "always above 150k tokens, any window",
+		"200k": "always above 200k tokens, any window",
+		"300k": "always above 300k tokens, any window",
+		"400k": "always above 400k tokens, any window",
+	};
+}
 
 /** Rows for the Auto-compact picker: the saved choice ends its row with a green ✓. */
 export function autoCompactRows(opened: AutoCompactChoice): ListRow[] {
-	return AUTO_COMPACT_CHOICES.map((c) => ({ label: c, note: AUTO_COMPACT_NOTES[c], chosen: c === opened }));
+	const notes = autoCompactNotes();
+	return AUTO_COMPACT_CHOICES.map((c) => ({ label: c, note: notes[c], chosen: c === opened }));
 }
 
 /** A plain (non-live) picker: the choice is committed by Enter, nothing previews. The
@@ -497,6 +509,62 @@ const openModelHeal = async (ctx: ExtensionCommandContext): Promise<boolean | vo
 	return goBack === true;
 };
 
+const RENDER_CACHE_PICKER_TEXT: ListPickerText = {
+	title: screenTitle("Render cache"),
+	description: "Cache settled chat messages and tool boxes so long sessions stay smooth across frames.",
+	legend: LIST_LEGEND_MOVE,
+};
+
+const RENDER_CACHE_NOTES: Record<RenderCacheChoice, string> = {
+	On: "reuse rendered lines for finished messages and tool boxes (default)",
+	Off: "render every transcript component directly on each frame",
+};
+
+/** Rows for the Render cache picker: the saved choice ends its row with a green ✓. */
+export function renderCacheRows(opened: RenderCacheChoice): ListRow[] {
+	return RENDER_CACHE_CHOICES.map((c) => ({ label: c, note: RENDER_CACHE_NOTES[c], chosen: c === opened }));
+}
+
+const openRenderCache = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	const opened = activeRenderCache();
+
+	if (ctx.mode !== "tui") {
+		const labels = RENDER_CACHE_CHOICES.map((c) => (c === opened ? `${c} ✓` : c));
+		const pick = await ctx.ui.select(RENDER_CACHE_PICKER_TEXT.title, labels);
+		if (pick === undefined) return;
+		const choice = RENDER_CACHE_CHOICES[labels.indexOf(pick)]!;
+		setRenderCache(choice);
+		ctx.ui.notify(`[arnative] Render cache: ${choice}`, "info");
+		return;
+	}
+
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		const picker = new ListPicker(
+			theme,
+			renderCacheRows(opened),
+			opened,
+			{
+				preview: () => {},
+				revert: () => {},
+				done: () => {
+					const choice = RENDER_CACHE_CHOICES[picker.index]!;
+					setRenderCache(choice);
+					announce(ctx.ui, `Render cache: ${choice}.`);
+					done(false);
+				},
+				cancel: () => done(false),
+				back: () => done(true),
+				requestRender: () => tui.requestRender(),
+			},
+			RENDER_CACHE_PICKER_TEXT,
+			false,
+			ctx.thinkingLevel,
+		);
+		return picker;
+	});
+	return goBack === true;
+};
+
 export const MENUS: ArnativeMenu[] = [
 	{
 		value: "themes",
@@ -539,6 +607,12 @@ export const MENUS: ArnativeMenu[] = [
 		label: "Model heal",
 		description: "auto-fix models.json: compat flags, limits, thinking levels (on by default)",
 		open: openModelHeal,
+	},
+	{
+		value: "render",
+		label: "Render cache",
+		description: "cache settled transcript rows across frames (on by default)",
+		open: openRenderCache,
 	},
 	{
 		value: "providers",
@@ -649,7 +723,7 @@ export function shouldApplyDefaultTheme(
  *  set without starting a session. */
 export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): void {
 	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, providers, usage, budget",
+		description: "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, render cache, providers, usage, budget",
 		getArgumentCompletions: arnativeCompletions,
 		handler: arnativeHandler,
 	});
@@ -675,6 +749,7 @@ export function recordProfile(): void {
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
 		[MODEL_HEAL_KEY]: activeModelHeal(),
+		[RENDER_CACHE_KEY]: activeRenderCache(),
 		[BUDGET_DAY_KEY]: activeBudgetDay() === undefined ? "" : String(activeBudgetDay()),
 		[BUDGET_MONTH_KEY]: activeBudgetMonth() === undefined ? "" : String(activeBudgetMonth()),
 		[BUDGET_ENFORCE_KEY]: activeBudgetEnforce() ? "on" : "off",
@@ -712,18 +787,22 @@ if (isMain(import.meta.url)) {
 	assert(rowText(labels[0]!) === "Themes · arnative themes only (all themes: /settings → Theme)", "menu row text format");
 	assert(labels[0]!.label === "Themes" && labels[0]!.note === "arnative themes only (all themes: /settings → Theme)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
-	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
+	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, render, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 10, "ten settings screens");
+	assert(MENUS.length === 11, "eleven settings screens");
 	{
 		const values = MENUS.map((m) => m.value);
 		assert(values.indexOf("heal") === values.indexOf("compact") + 1, "Model heal row sits right after Auto-compact");
+		assert(values.indexOf("render") === values.indexOf("heal") + 1, "Render cache row sits right after Model heal");
 		const heal = modelHealRows("Flags");
 		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
 		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
+		const rc = renderCacheRows("On");
+		assert(rc.map((r) => r.label).join(",") === "On,Off", "Render cache rows: On then Off");
+		assert(rc.filter((r) => r.chosen).map((r) => r.label).join(",") === "On", "Render cache marks only the saved mode");
 	}
-	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Providers", "Usage", "Budget"]) {
+	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Render cache", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
@@ -747,6 +826,8 @@ if (isMain(import.meta.url)) {
 	assert(acRows[1]!.chosen === true && acRows[0]!.chosen !== true, "the ✓ follows the saved choice");
 	assert(acRows.every((r) => r.note!.length > 0), "every Auto-compact row carries its note");
 	assert(autoCompactRows("Off")[0]!.chosen === true, "the marker moves when the saved choice changes");
+	assert(arnativeCompletions("re")![0]!.value === "render", "render cache menu has completions");
+	assert(MENUS.some((m) => m.value === "render"), "render cache menu registered");
 	assert(arnativeCompletions("pr")![0]!.value === "providers", "providers menu has completions");
 	assert(MENUS.some((m) => m.value === "providers"), "providers menu registered");
 	// Every slash command, and the one alias: `/providers` must land on the providers screen.
@@ -757,7 +838,7 @@ if (isMain(import.meta.url)) {
 		assert(typeof registered.get("providers")!.handler === "function", "/providers has a handler");
 		assert(MENUS.some((m) => m.value === "providers"), "/providers routes to a menu row that exists");
 		assert(
-			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, providers, usage, budget",
+			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, render cache, providers, usage, budget",
 			"the /arnative command description names every screen: " + registered.get("arnative")!.description,
 		);
 	}

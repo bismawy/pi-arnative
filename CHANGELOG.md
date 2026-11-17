@@ -10,6 +10,25 @@
 
 ## [Unreleased]
 
+### Added
+- **Footer payload pressure for byte-limited models (`◆ x.xxMB/1MB`).** `getUsage()` renders a wire-bytes segment from the autocompact snapshot (messages + measured overhead against the 1 MB proxy wall) for `remote/*`, `remote-magpie/*`, and models that saw HTTP 413; plain models never see it (`extensions/footer.ts`, `extensions/autocompact.ts`, `test/wire-bytes.test.ts`, `test/wire-bytes-render.test.ts`).
+
+### Changed
+- **Byte measurement is now incremental and skipped where it cannot matter.** Models with no byte wall never stringify payloads (a 4.6 MB session paid ~11 ms per turn across both hooks); byte-limited sessions measure with per-message `WeakMap` sizing so repeat `context` events cost O(new messages) — A/B on a 3.6 MB session: ~15 ms/event full stringify → 0.024 ms warm, ≤0.5% overestimate absorbed by the shed safety gaps (`extensions/autocompact.ts`).
+- **Render-cache width LRU holds 3 widths.** A 3-way width toggle (font-size steps, tmux pane alternation) thrashed the 2-slot LRU at ~710 µs/render; 3 slots keep it warm at ~35 µs/render (`extensions/render-cache.ts`, `test/render-cache.test.ts`).
+### Added
+- **Render cache (`/arnative` → Render cache: `On`/`Off`, default `On`) — O(1) transcript re-render for idle frames.** Container-level render caching attaches to the `chatContainer` instance and patches `rebuildChatFromMessages`; settled transcript frames are served from a cached snapshot (benchmark, 900k-token session: idle 15.23 ms → 0.77 ms per frame, streaming 10.46 ms → 6.43 ms), and the cache clears on `session_start`, `model_select`, and `session_compact` (`extensions/render-cache.ts`, `scripts/bench-render-cache.mjs`, `test/render-cache.test.ts`).
+- **Auto-compact `Smart` now scales with Render cache.** With `Render cache: On`, windows ≥192k compact at **90%** of `contextWindow` (1M → ~943k tokens); with `Render cache: Off`, Smart keeps the conservative tiers (1M→20% · 512k→40% · 256k→80%); windows <192k still defer to pi core. The picker note in `/arnative` reflects the active state (`extensions/autocompact.ts`, `smartPercent`, `extensions/arnative.ts`).
+- **Remote 1 MB byte protection is now silent and decoupled from `ctx.compact()`.** For `remote/*`, `remote-magpie/*`, and models that saw HTTP 413, payloads approaching ~900 KB are trimmed in-memory (with hysteresis down to ~760 KB; 820→680 KB after a 413) by dropping older images → older thinking blocks (keeping the latest turn intact) → bulky old tool outputs → old `toolCall` args → head turns. The transcript, UI, and `render-cache` stay untouched, and byte pressure alone never triggers session compaction anymore — only token thresholds do (`extensions/autocompact.ts`).
+
+### Fixed
+- **`model-heal.ts` crash: `ReferenceError: DEBOUNCE_MS is not defined` exited pi.** The widget→notify refactor removed the `DEBOUNCE_MS` constant but left its use in the `models.json` `FSWatcher` debounce; a heal pass writing `models.json` crashed pi via uncaught exception. The constant is restored (`extensions/model-heal.ts`).
+- **`renderCache` key order is pinned in `config.json`.** `KEY_ORDER` in `lib/preset-store.ts` now includes `renderCache` after `modelHeal`, so partial configs keep a stable order (`test/profile.test.ts`).
+
+### Changed
+- **Arnative notices now render as transcript notifies instead of the widget slot above the editor.** The old `setWidget` notice covered the prompt; `announce()` now emits a `notify` line that stays visible in scrollback without blocking anything (`lib/status-widget.ts`).
+- **Tool box scroll indicators hold-to-repeat.** Holding left-click on a boxed tool's `↑ N more` / `↓ N more` border indicator auto-scrolls (250 ms delay, then every 90 ms) until release or the boundary (`extensions/tools.ts`).
+
 ## [0.12.0] - 2026-11-14
 
 - Fix Todos auto-hide cancellation when a body click opens a finished task list.
