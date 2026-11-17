@@ -9,17 +9,19 @@ import { join } from "node:path";
 import test from "node:test";
 import {
 	AssistantMessageComponent,
+	CustomMessageComponent,
 	InteractiveMode,
 	ToolExecutionComponent,
 	UserMessageComponent,
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import registerRenderCache, {
 	attachChatContainer,
 	clearRenderCache,
 	isDynamicChild,
 	setRenderCache,
+	type ChatContainerLike,
 } from "../extensions/render-cache.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";
 
@@ -116,6 +118,87 @@ test("real pi transcript components cache when settled and update on mutation", 
 		resetPresetCache();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("custom and unknown transcript children render fresh while standard siblings stay cached", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "arnative-rendercache-custom-"));
+	const prevDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	resetPresetCache();
+	t.after(() => {
+		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevDir;
+		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.renderCache")];
+		clearRenderCache();
+		resetPresetCache();
+		rmSync(dir, { recursive: true, force: true });
+	});
+	initTheme();
+	const cases = [
+		["custom message", (text: Text) => new CustomMessageComponent(
+			{ role: "custom", customType: "test", content: "entry", display: true, timestamp: Date.now() },
+			() => text,
+		)],
+		["unknown container", (text: Text) => {
+			const container = new Container();
+			container.addChild(text);
+			return container;
+		}],
+		["extension subclass", (text: Text) => {
+			class ExtensionUserMessage extends UserMessageComponent {
+				render(width: number): string[] { return text.render(width); }
+			}
+			return new ExtensionUserMessage("extension");
+		}],
+	] as const;
+	for (const [name, create] of cases) {
+		await t.test(name, () => {
+			setRenderCache("On");
+			const chat = new Container();
+			const user = new UserMessageComponent("standard sibling");
+			const text = new Text("old", 0, 0);
+			const extension = create(text);
+			let userRenders = 0;
+			let extensionRenders = 0;
+			const renderUser = user.render.bind(user);
+			const renderExtension = extension.render.bind(extension);
+			user.render = (width: number) => { userRenders += 1; return renderUser(width); };
+			extension.render = (width: number) => { extensionRenders += 1; return renderExtension(width); };
+			chat.addChild(user);
+			chat.addChild(extension);
+			attachChatContainer(chat);
+			assert.ok(chat.render(80).some((line) => line.includes("old")));
+			text.setText("new\nextra");
+			const changed = chat.render(80);
+			assert.ok(changed.some((line) => line.includes("new")), "nested mutation must be visible without parent notification");
+			assert.ok(!changed.some((line) => line.includes("old")));
+			assert.equal(extensionRenders, 2, "uncacheable component renders each frame");
+			assert.equal(userRenders, 1, "known sibling remains cached");
+			const layout = (chat as unknown as ChatContainerLike).mouseLayout!;
+			assert.equal(layout.children.find((entry) => entry.component === extension)!.height, renderExtension(80).length);
+			chat.render(120);
+			assert.ok(chat.render(80).some((line) => line.includes("new")), "width LRU never restores stale custom output");
+			assert.equal(userRenders, 2, "known sibling keeps its previous width warm");
+			setRenderCache("Off");
+			assert.ok(chat.render(80).some((line) => line.includes("new")));
+			setRenderCache("On");
+			chat.removeChild(extension);
+			const settled = chat.render(80);
+			assert.equal(chat.render(80), settled, "removing unknown child re-enables whole-container caching");
+		});
+	}
+	await t.test("known Text background mutation invalidates its cache", () => {
+		setRenderCache("On");
+		const chat = new Container();
+		const text = new Text("body", 0, 0, (line) => `old ${line}`);
+		chat.addChild(text);
+		attachChatContainer(chat);
+		assert.ok(chat.render(80).some((line) => line.includes("old")));
+		text.setCustomBgFn((line) => `new ${line}`);
+		const changed = chat.render(80);
+		assert.ok(changed.some((line) => line.includes("new")));
+		assert.equal(chat.render(80), changed, "known Text settles into whole-container cache again");
+	});
 });
 
 test("dynamic thinking animation and tool scroll-hold bypass cache cleanly", () => {
