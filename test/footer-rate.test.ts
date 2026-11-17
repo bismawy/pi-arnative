@@ -47,3 +47,21 @@ test("a terminal below 80 columns drops the rate but keeps the cost", () => {
 	assert.ok(narrow.endsWith("$0.42") && !narrow.includes("/h"), `narrow terminal: cost only, got ${narrow}`);
 	assert.ok(costCell(0.42, 0, id, id, RATE_MIN_WIDTH).includes("/h"), "at 80 columns the rate is kept");
 });
+
+
+test("the rate renders dim while the cost keeps soft", () => {
+	setActiveMs(14 * 60_000);
+	const A = (t: string) => `<A>${t}</A>`;
+	const S = (t: string) => `<S>${t}</S>`;
+	const D = (t: string) => `<D>${t}</D>`;
+	const cell = costCell(0.42, 0, A, S, 400, undefined, D);
+	assert.ok(cell.includes("<S>$0.42</S>"), `cost keeps soft, got ${cell}`);
+	assert.ok(cell.includes("<D>($1.80/h)</D>"), `rate renders dim, got ${cell}`);
+});
+
+test("an active budget cap keeps the rate in the alert colour", () => {
+	setActiveMs(14 * 60_000);
+	const B = (t: string) => `<B>${t}</B>`;
+	const cell = costCell(0.42, 0, id, id, 400, B, id);
+	assert.ok(!cell.includes("</B> ") || cell.endsWith("</B>"), `one colour under a cap, got ${cell}`);
+});
