@@ -1235,7 +1235,7 @@ export function getUsage(
 	if (read > 0) parts.push(`${acc("\uf49b")} ${soft(formatTokens(read))}`);
 	const u = ctx.getContextUsage();
 	if (u && u.percent !== null && u.tokens !== null) {
-		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
+		parts.push(`${acc("\ueb85")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
 	if (showCost) {
 		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint, dim);
