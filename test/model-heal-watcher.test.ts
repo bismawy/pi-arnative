@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,4 +87,19 @@ test("a models.json write reaches the debounce callback without throwing", async
 		resetPresetCache();
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("an async watcher error event does not kill the process", async () => {
+	// fs.watch emits an async 'error' event when the watched directory disappears; no
+	// try/catch can intercept it and the process dies. Proven A/B on this machine:
+	// without the handler exit code 1 with an uncaught EPERM, with it exit 0. The real
+	// extension is loaded in a child process because the failure ends the process.
+	const child = join(import.meta.dirname, "fixtures", "watcher-child.mjs");
+	const result = spawnSync(process.execPath, [child], { encoding: "utf8", timeout: 30_000 });
+	assert.equal(
+		result.status,
+		0,
+		`watcher error escaped (exit ${result.status}): ${result.stderr || result.stdout}`,
+	);
+	assert.match(result.stdout, /SURVIVED/, "the session outlives the watcher error");
 });
