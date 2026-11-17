@@ -71,7 +71,7 @@ interface ContainerCacheEntry {
 	mouseChildren: Array<{ component: unknown; height: number }>;
 }
 
-const MAX_WIDTH_ENTRIES = 2;
+const MAX_WIDTH_ENTRIES = 3;
 
 interface RenderCacheState {
 	epoch: number;

@@ -142,6 +142,44 @@ test("dynamic thinking animation and tool scroll-hold bypass cache cleanly", () 
 	else g[THINKING_STATE_KEY] = prevThinking;
 });
 
+test("width LRU keeps a third width warm (3-way terminal toggle)", () => {
+	const dir = mkdtempSync(join(tmpdir(), "arnative-rendercache-lru-"));
+	const prevDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	resetPresetCache();
+	try {
+		initTheme();
+		setRenderCache("On");
+		clearRenderCache();
+
+		const chat = new Container();
+		const user = new UserMessageComponent("Hello");
+		let renders = 0;
+		const origRender = user.render.bind(user);
+		user.render = (w: number) => {
+			renders += 1;
+			return origRender(w);
+		};
+		chat.addChild(user);
+		attachChatContainer(chat);
+
+		// Cycle three widths twice: with MAX_WIDTH_ENTRIES >= 3 the second cycle
+		// is fully warm (A/B verified: 710 us/render thrash -> 35 us/render warm).
+		for (const w of [120, 80, 160, 120, 80, 160]) chat.render(w);
+		assert.equal(renders, 3, "a 3-way toggle stays warm after the first cycle");
+
+		// A fourth, unseen width still renders fresh (LRU cap, not a leak).
+		chat.render(200);
+		assert.equal(renders, 4, "an unseen width renders fresh");
+	} finally {
+		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevDir;
+		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.renderCache")];
+		resetPresetCache();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("registerRenderCache drops cached frames on session_start, model_select, and session_compact", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "arnative-rendercache-events-"));
 	const prevDir = process.env.PI_CODING_AGENT_DIR;
