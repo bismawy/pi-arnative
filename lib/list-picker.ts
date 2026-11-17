@@ -207,8 +207,11 @@ export class ListPicker implements Component {
 
 	private move(delta: number): void {
 		const shown = this.shown;
-		const next = Math.min(shown.length - 1, Math.max(0, this.selected + delta));
-		if (next === this.selected || next < 0) return;
+		if (shown.length === 0) return;
+		// Wrap at both ends, matching the /jev-eye picker: the top row steps up to the
+		// last row and the last row steps down to the top, so a held key never sticks.
+		const next = (this.selected + delta + shown.length) % shown.length;
+		if (next === this.selected) return;
 		this.selected = next;
 		if (!this.livePreview) {
 			this.hooks.requestRender();
@@ -448,9 +451,14 @@ if (isMain(import.meta.url)) {
 	scrolled.handleInput("\x1b[B");
 	const frameNext = scrolled.render(50);
 	assert(frameNext.length === frame.length && countItems(frameNext) === 10, "the frame height stays constant while scrolling inside the list");
-	for (let i = 0; i < 20; i++) scrolled.handleInput("\x1b[B");
+	for (let i = 0; i < 9; i++) scrolled.handleInput("\x1b[B");
 	frame = scrolled.render(50);
 	assert(frame.some((l) => l.includes("→ m24")) && frame.some((l) => l.includes("↑ 15 more")) && !frame.some((l) => l.includes("↓")), "the bottom of the list announces only what is above");
+	// Wrap at both edges, matching the /jev-eye picker: a held key never sticks.
+	scrolled.handleInput("\x1b[B");
+	assert(scrolled.render(50).some((l) => l.includes("→ m0")), "↓ at the last row wraps to the top");
+	scrolled.handleInput("\x1b[A");
+	assert(scrolled.render(50).some((l) => l.includes("→ m24")), "↑ at the top row wraps to the last row");
 	const short = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false, undefined, 10);
 	assert(!short.render(50).some((l) => l.includes("more")), "a short list shows no scroll indicators");
 
