@@ -1233,14 +1233,6 @@ export function getUsage(
 	if (u && u.percent !== null && u.tokens !== null) {
 		parts.push(`${acc("\udb81\udfaf")} ${soft(`${u.percent.toFixed(1)}%/${formatTokens(u.contextWindow)}`)}`);
 	}
-	// Payload pressure for byte-limited models (remote/* proxies with a 1 MB wall).
-	// The diamond takes the same dim divider the cost cell uses, so the wire reading
-	// reads as its own group after the token and context parts.
-	const wire = wireBytesSnapshot();
-	if (wire && wire.bytes > 0 && isByteLimitedModel(ctx.model)) {
-		const cell = `${acc("\udb80\udd93")} ${soft(`${(wire.bytes / 1024 / 1024).toFixed(2)}MB/1MB`)}`;
-		parts.push(parts.length > 0 ? `${dim("·")} ${cell}` : cell);
-	}
 	if (showCost) {
 		const cell = costCell(costBilled, costEstimated, acc, soft, width, bandPaint);
 		// The dollar icon opens a new group, so it takes the same divider the footer uses
@@ -1607,6 +1599,12 @@ export default function (pi: ExtensionAPI) {
 							if (mcp !== undefined) groups.push(cleanStatus(mcp));
 							for (const [k, s] of statuses) {
 								if (k !== "mcp" && k !== "pi-cache-stats") groups.push(cleanStatus(s));
+							}
+							// Payload pressure sits beside the extension statuses: the right rows
+							// already carry speed, cache, tokens and cost.
+							const wire = wireBytesSnapshot();
+							if (wire && wire.bytes > 0 && isByteLimitedModel(ctx.model)) {
+								groups.push(`${acc("\udb80\udd93")} ${secondarySoft(`${(wire.bytes / 1024 / 1024).toFixed(2)}MB/1MB`)}`);
 							}
 
 							let usageStr = "";
