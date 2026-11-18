@@ -49,17 +49,37 @@ import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
 import { SHORTCUT_OPEN_ARNATIVE } from "../lib/shortcuts.ts";
 
+export type MenuGroup = "Appearance" | "Performance" | "Models" | "Spend";
+
+export interface MenuCategory {
+	label: MenuGroup;
+	description: string;
+}
+
+export const MENU_CATEGORIES: readonly MenuCategory[] = [
+	{ label: "Appearance", description: "themes, headers, footers, chatbox, animations" },
+	{ label: "Performance", description: "auto-compact, render cache" },
+	{ label: "Models", description: "custom providers, model heal" },
+	{ label: "Spend", description: "usage dashboard, budget caps" },
+];
+
 export interface ArnativeMenu {
 	value: string;
 	label: string;
 	description: string;
+	group: MenuGroup;
 	/** Returns `true` when the screen asked to step back to the menu (`←`). */
 	open: (ctx: ExtensionCommandContext) => Promise<boolean | void>;
 }
 
 /** Menu rows: `Label · description` (same rhythm as /jev-eye's menu). */
-export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): ListRow[] {
+export function menuRows(menus: { label: string; description: string }[]): ListRow[] {
 	return menus.map((m) => ({ label: m.label, note: m.description }));
+}
+
+/** Items belonging to a single root category in display order. */
+export function categoryMenus(group: MenuGroup, menus: readonly ArnativeMenu[] = MENUS): ArnativeMenu[] {
+	return menus.filter((m) => m.group === group);
 }
 
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
@@ -570,86 +590,129 @@ export const MENUS: ArnativeMenu[] = [
 		value: "themes",
 		label: "Themes",
 		description: "arnative themes only (all themes: /settings → Theme)",
+		group: "Appearance",
 		open: openThemes,
 	},
 	{
 		value: "headers",
 		label: "Headers",
 		description: "choose the header preset",
+		group: "Appearance",
 		open: openHeaders,
 	},
 	{
 		value: "footers",
 		label: "Footers",
 		description: "choose the footer preset",
+		group: "Appearance",
 		open: openFooters,
 	},
 	{
 		value: "chatbox",
 		label: "Chatbox",
 		description: "choose the input box preset",
+		group: "Appearance",
 		open: openChatbox,
 	},
 	{
 		value: "animations",
 		label: "Animations",
 		description: "choose the working spinner",
+		group: "Appearance",
 		open: openAnimations,
 	},
 	{
 		value: "compact",
 		label: "Auto-compact",
 		description: "smart by window or a fixed token budget (off by default)",
+		group: "Performance",
 		open: openAutoCompact,
-	},
-	{
-		value: "heal",
-		label: "Model heal",
-		description: "auto-fix models.json: compat flags, limits, thinking levels (on by default)",
-		open: openModelHeal,
 	},
 	{
 		value: "render",
 		label: "Render cache",
 		description: "cache settled transcript rows across frames (on by default)",
+		group: "Performance",
 		open: openRenderCache,
 	},
 	{
 		value: "providers",
 		label: "Providers",
 		description: "custom endpoints: endpoint, key, name — the rest is automatic",
+		group: "Models",
 		open: openProviders,
+	},
+	{
+		value: "heal",
+		label: "Model heal",
+		description: "auto-fix models.json: compat flags, limits, thinking levels (on by default)",
+		group: "Models",
+		open: openModelHeal,
 	},
 	{
 		value: "usage",
 		label: "Usage",
 		description: "open the token & cost dashboard (same as /usage)",
+		group: "Spend",
 		open: openUsage,
 	},
 	{
 		value: "budget",
 		label: "Budget",
 		description: "warn-only spend caps on today / 30d; enforce on blocks the next turn",
+		group: "Spend",
 		open: openBudget,
 	},
 ];
 
-/** The settings menu and the loop that gives `←` its meaning: a screen returning `true`
- *  reopens this menu, anything else ends navigation. `startLabel` is the row to open on,
- *  so a screen left with `←` (or a direct subcommand) resumes where the user was. */
-async function openMainMenu(ctx: ExtensionCommandContext, startLabel?: string): Promise<void> {
-	const rows = menuRows(MENUS);
+/** Submenu for one category; returns `true` when the user presses `←` to return to the root menu. */
+async function openCategoryMenu(ctx: ExtensionCommandContext, category: MenuCategory, startLabel?: string): Promise<boolean> {
+	const items = categoryMenus(category.label);
+	const rows = menuRows(items);
+	if (ctx.mode !== "tui") {
+		const labels = rows.map(rowText);
+		const pick = await ctx.ui.select(screenTitle(category.label), labels);
+		if (pick === undefined) return false;
+		await items[labels.indexOf(pick)]!.open(ctx);
+		return false;
+	}
+	let cursor = startLabel;
+	for (;;) {
+		const choice = await ctx.ui.custom<{ index?: number; back?: boolean }>((tui, theme, _kb, done) => {
+			const picker = new ListPicker(theme, rows, cursor, {
+				preview: () => {},
+				revert: () => {},
+				done: () => done({ index: picker.index }),
+				cancel: () => done({ back: false }),
+				back: () => done({ back: true }),
+				requestRender: () => tui.requestRender(),
+			}, { title: screenTitle(category.label), description: category.description[0]!.toUpperCase() + category.description.slice(1), legend: LIST_LEGEND_MOVE }, false, ctx.thinkingLevel);
+			return picker;
+		});
+		if (choice.index === undefined) return choice.back === true;
+		const menu = items[choice.index]!;
+		cursor = menu.label;
+		if ((await menu.open(ctx)) !== true) return false;
+	}
+}
+
+/** The 4-category settings menu. Selecting a category opens its submenu; `←` steps back
+ *  up one level (screen → category → root) and remembers the last row at each level. */
+async function openMainMenu(ctx: ExtensionCommandContext, startGroup?: MenuGroup, startItem?: string): Promise<void> {
+	const rows = menuRows([...MENU_CATEGORIES]);
 	if (ctx.mode !== "tui") {
 		// No custom components (RPC/headless): a title-only picker, no description row.
 		const labels = rows.map(rowText);
 		const pick = await ctx.ui.select(MENU_TITLE, labels);
 		if (pick === undefined) return;
-		await MENUS[labels.indexOf(pick)]!.open(ctx);
+		await openCategoryMenu(ctx, MENU_CATEGORIES[labels.indexOf(pick)]!);
 		return;
 	}
-	// Same picker as the submenus, so the description row under the title is rendered by
-	// one component instead of two dialogs that could drift apart.
-	let cursor = startLabel;
+	if (startGroup && startItem) {
+		const cat = MENU_CATEGORIES.find((c) => c.label === startGroup);
+		if (cat && (await openCategoryMenu(ctx, cat, startItem)) !== true) return;
+	}
+	let cursor: string | undefined = startGroup;
 	for (;;) {
 		const index = await ctx.ui.custom<number | null>((tui, theme, _kb, done) => {
 			const picker = new ListPicker(theme, rows, cursor, {
@@ -665,9 +728,9 @@ async function openMainMenu(ctx: ExtensionCommandContext, startLabel?: string): 
 			return picker;
 		});
 		if (index === null || index === undefined) return;
-		cursor = rows[index]!.label;
-		const wantsBack = await MENUS[index]!.open(ctx);
-		if (wantsBack !== true) return;
+		const category = MENU_CATEGORIES[index]!;
+		cursor = category.label;
+		if ((await openCategoryMenu(ctx, category)) !== true) return;
 	}
 }
 
@@ -685,9 +748,10 @@ export async function arnativeHandler(args: string, ctx: ExtensionCommandContext
 		ctx.ui.notify(`[arnative] Unknown menu "${sub}". Menus: ${MENUS.map((m) => m.value).join(" | ")}`, "warning");
 		return;
 	}
-	// A direct subcommand behaves like a menu row: `←` drops into the menu on that row,
+	// A direct subcommand behaves like a menu row: `←` drops into its category on that row,
 	// so `/arnative usage` + `←` is not a dead key.
-	if ((await MENUS[index]!.open(ctx)) === true) await openMainMenu(ctx, MENUS[index]!.label);
+	const menu = MENUS[index]!;
+	if ((await menu.open(ctx)) === true) await openMainMenu(ctx, menu.group, menu.label);
 }
 
 export function arnativeCompletions(prefix: string): AutocompleteItem[] | null {
@@ -792,9 +856,10 @@ if (isMain(import.meta.url)) {
 	// be added to MENUS and forgotten in the copy a user reads first.
 	assert(MENUS.length === 11, "eleven settings screens");
 	{
-		const values = MENUS.map((m) => m.value);
-		assert(values.indexOf("heal") === values.indexOf("compact") + 1, "Model heal row sits right after Auto-compact");
-		assert(values.indexOf("render") === values.indexOf("heal") + 1, "Render cache row sits right after Model heal");
+		const catRows = menuRows([...MENU_CATEGORIES]);
+		assert(catRows.map((r) => r.label).join(",") === "Appearance,Performance,Models,Spend", "root menu lists the four categories in order");
+		const totalGrouped = MENU_CATEGORIES.reduce((n, c) => n + categoryMenus(c.label).length, 0);
+		assert(totalGrouped === MENUS.length, "every menu item belongs to one of the four categories");
 		const heal = modelHealRows("Flags");
 		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
 		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
@@ -886,11 +951,11 @@ if (isMain(import.meta.url)) {
 	assert(lines[0]!.startsWith("╭") && lines[lines.length - 1]!.startsWith("╰"), "picker framed");
 	assert(lines.every((l) => visibleWidth(l) === 50), "picker lines fit width 50");
 	assert(lines.some((l) => l.includes(screenTitle("Themes"))), "picker renders the configured title");
-	assert(lines.some((l) => l.includes("→ arnative")), "the cursor marks the live value");
-	assert(!lines.some((l) => l.includes("●")), "no redundant ● column next to the → cursor");
+	assert(lines.some((l) => l.includes("❯ arnative")), "the cursor marks the live value");
+	assert(!lines.some((l) => l.includes("●")), "no redundant ● column next to the ❯ cursor");
 	picker.handleInput("\x1b[B"); // down
 	assert(previews.length === 1 && previews[0] === "arnative-cyberpunk", "move previews immediately");
-	assert(picker.render(50).some((l) => l.includes("→ arnative-cyberpunk")), "the cursor follows the preview");
+	assert(picker.render(50).some((l) => l.includes("❯ arnative-cyberpunk")), "the cursor follows the preview");
 	picker.handleInput("\r"); // enter
 	assert(done === 1 && reverted === 0, "Enter keeps (no revert)");
 	picker.handleInput("\x1b[B");
@@ -946,14 +1011,14 @@ if (isMain(import.meta.url)) {
 	assert(menuLines.some((l) => l.includes(MENU_DESC)), "the main menu renders the description under the title");
 	assert(menuLines.findIndex((l) => l.includes(MENU_TITLE)) < menuLines.findIndex((l) => l.includes(MENU_DESC)), "description sits below the title");
 	assert(menuLines.every((l) => visibleWidth(l) === 100), "main menu lines fit the width");
-	// The pinned /arnative layout: `→ Themes  ·  note`, every `·` in one column (skill rule 10).
+	// The pinned /arnative layout: `❯ Themes  ·  note`, every `·` in one column (skill rule 10).
 	const plainMenu = menuLines.map(stripAnsi);
-	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("→ Themes"))!;
-	// The row is `│ → <label padded to the widest label><divider><note>`: assert the shape,
+	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("❯ Themes"))!;
+	// The row is `│ ❯ <label padded to the widest label><divider><note>`: assert the shape,
 	// not a literal run of spaces, so adding a wider screen cannot break the layout test.
 	const widest = Math.max(...MENUS.map((m) => m.label.length));
 	assert(
-		row0.startsWith(`│ → ${"Themes".padEnd(widest)}${ROW_DIVIDER}arnative themes only`),
+		row0.startsWith(`│ ❯ ${"Themes".padEnd(widest)}${ROW_DIVIDER}arnative themes only`),
 		`menu row layout, got ${JSON.stringify(row0)}`,
 	);
 	assert(plainMenu.filter((l) => l.includes(ROW_DIVIDER)).every((l) => l.indexOf(ROW_DIVIDER) === row0.indexOf(ROW_DIVIDER)), "every divider sits in one column");
@@ -972,8 +1037,8 @@ if (isMain(import.meta.url)) {
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
 	const resumedRows = resumed.render(60).map(stripAnsi);
-	assert(resumedRows.some((l) => l.startsWith("│ → Usage")), "the menu reopens on the row it was left on");
-	assert(!resumedRows.some((l) => l.startsWith("│ → Themes")), "and not on the first row");
+	assert(resumedRows.some((l) => l.startsWith("│ ❯ Usage")), "the menu reopens on the row it was left on");
+	assert(!resumedRows.some((l) => l.startsWith("│ ❯ Themes")), "and not on the first row");
 
 	// The box border follows the session's thinking level (theme `thinking*` slot), so the
 	// menu reads as belonging to the active model.
@@ -997,12 +1062,12 @@ if (isMain(import.meta.url)) {
 		"no frame glyph is left on accentSoft",
 	);
 	// The chosen row's label takes the `accentSoft` token (bold), never a hand-written colour; the
-	// `→` marker stays on `accent` so the cursor is still findable when the theme has no accentSoft.
+	// `❯` marker stays on `accent` so the cursor is still findable when the theme has no accentSoft.
 	assert(
-		taggedLines.some((l) => l.includes("<accent>→ </><accentSoft><bold>")),
+		taggedLines.some((l) => l.includes("<accent>❯ </><accentSoft><bold>")),
 		"the chosen label is the accentSoft token in bold",
 	);
-	assert(taggedLines.some((l) => l.includes("<accent>→ ")), "the → marker keeps the accent voice");
+	assert(taggedLines.some((l) => l.includes("<accent>❯ ")), "the ❯ marker keeps the accent voice");
 	const offPicker = new ListPicker(tagged, labels, undefined, {
 		preview: () => {},
 		revert: () => {},
@@ -1025,7 +1090,7 @@ if (isMain(import.meta.url)) {
 	const headerPicker = new ListPicker(fakeTheme, nameRows(HEADER_PRESETS), "Arnative (Full)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, HEADERS_PICKER_TEXT);
 	const headerLines = headerPicker.render(50);
 	assert(headerLines.some((l) => l.includes(screenTitle("Headers"))), "headers picker title");
-	assert(headerLines.some((l) => l.includes("→ Arnative (Full)")), "headers picker cursors the active preset");
+	assert(headerLines.some((l) => l.includes("❯ Arnative (Full)")), "headers picker cursors the active preset");
 	assert(headerLines.some((l) => l.includes("  Pi (system)")), "headers picker lists the built-in preset");
 
 	// Footers reuses the same picker too.
@@ -1033,7 +1098,7 @@ if (isMain(import.meta.url)) {
 	const footerPicker = new ListPicker(fakeTheme, nameRows(FOOTER_PRESETS), "Pi (system)", { preview: () => {}, revert: () => {}, done: () => {}, requestRender: () => {} }, footersPickerText());
 	const footerLines = footerPicker.render(50);
 	assert(footerLines.some((l) => l.includes(screenTitle("Footers"))), "footers picker title");
-	assert(footerLines.some((l) => l.includes("→ Pi (system)")), "footers picker cursors the active preset");
+	assert(footerLines.some((l) => l.includes("❯ Pi (system)")), "footers picker cursors the active preset");
 	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
 	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
 	assert(/\[c\] Cost (on|off)/.test(footersPickerText().legend), "footers legend advertises the cost switch and its live state");
@@ -1051,7 +1116,7 @@ if (isMain(import.meta.url)) {
 	const chatboxLines = chatboxPicker.render(84);
 	assert(chatboxLines.some((l) => l.includes(screenTitle("Chatbox"))), "chatbox picker title");
 	assert(chatboxLines.some((l) => l.includes("Box    · Arnative")), "chatbox picker shows Box summary");
-	assert(chatboxLines.some((l) => l.includes("→ Arnative")), "chatbox picker cursors the active preset");
+	assert(chatboxLines.some((l) => l.includes("❯ Arnative")), "chatbox picker cursors the active preset");
 	assert(chatboxLines.some((l) => l.includes("  Pi (system)")), "chatbox picker lists the built-in preset");
 	assert(CHATBOX_PICKER_TEXT.legend.includes("[i] Icon  [D] Dialog"), "chatbox legend advertises [i] Icon and [D] Dialog");
 
@@ -1110,14 +1175,14 @@ if (isMain(import.meta.url)) {
 		marked: (label) => chosen.has(label),
 	}, { title: screenTitle("Providers"), description: "pick models", legend: "[Space] Toggle" }, false);
 	const multiLines = multiPicker.render(50).map(stripAnsi);
-	assert(multiLines.some((l) => l.includes("→ [x] a")), "a checked row shows [x] behind the cursor");
+	assert(multiLines.some((l) => l.includes("❯ [x] a")), "a checked row shows [x] behind the cursor");
 	assert(multiLines.some((l) => l.includes("[ ] b")), "unchecked rows show [ ]");
 	multiPicker.handleInput(" ");
 	assert(picked[0] === "a" && !chosen.has("a"), "Space toggles the row under the cursor");
 	multiPicker.handleInput("\x1b[B");
 	multiPicker.handleInput(" ");
 	assert(chosen.has("b"), "Space toggles the row the cursor moved to");
-	assert(multiPicker.render(50).map(stripAnsi).some((l) => l.includes("→ [x] b")), "the check follows the cursor");
+	assert(multiPicker.render(50).map(stripAnsi).some((l) => l.includes("❯ [x] b")), "the check follows the cursor");
 	mainPicker.handleInput(" ");
 	assert(chosen.has("b") && picked.length === 2, "a screen without the toggle hook ignores Space");
 
