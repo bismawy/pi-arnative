@@ -30,12 +30,24 @@ export type AutoCompactChoice = (typeof AUTO_COMPACT_CHOICES)[number];
 export const DEFAULT_AUTO_COMPACT: AutoCompactChoice = "Off";
 export const AUTO_COMPACT_KEY = "autoCompact";
 
-/** Byte ceilings for 1 MB-capped proxies (e.g. `remote/*` endpoints). */
-export const SHED_TRIGGER_BYTES = 900 * 1024;
-export const SHED_TARGET_BYTES = 760 * 1024;
-export const COMPACT_INPUT_BYTES = 720 * 1024;
-const SHED_TRIGGER_AFTER_413_BYTES = 820 * 1024;
-const SHED_TARGET_AFTER_413_BYTES = 680 * 1024;
+/** Byte ceilings for byte-capped proxies (e.g. `remote/*` endpoints).
+ *  The ratios target a 1 MB HTTP body wall. Raise `PI_ARNATIVE_BYTE_WALL_MB` when the
+ *  proxy accepts more, or the shed fires at a fraction of the real wall and caps the
+ *  context long before the token window is used. Read once at module load: a shell
+ *  override must be set before pi starts. */
+function byteWallBytes(): number {
+	const mb = Number(process.env.PI_ARNATIVE_BYTE_WALL_MB);
+	return Number.isFinite(mb) && mb > 0 ? Math.round(mb * 1024 * 1024) : 1024 * 1024;
+}
+const WALL_SCALE = byteWallBytes() / (1024 * 1024);
+/** Trim markers name the real ceiling, so a raised wall does not report 1MB. */
+const TRIM_LABEL = WALL_SCALE === 1 ? "trimmed for 1MB limit" : `trimmed for ${Math.round(WALL_SCALE)}MB limit`;
+
+export const SHED_TRIGGER_BYTES = Math.round(900 * 1024 * WALL_SCALE);
+export const SHED_TARGET_BYTES = Math.round(760 * 1024 * WALL_SCALE);
+export const COMPACT_INPUT_BYTES = Math.round(720 * 1024 * WALL_SCALE);
+const SHED_TRIGGER_AFTER_413_BYTES = Math.round(820 * 1024 * WALL_SCALE);
+const SHED_TARGET_AFTER_413_BYTES = Math.round(680 * 1024 * WALL_SCALE);
 const DEFAULT_OVERHEAD_BYTES = 64 * 1024;
 const MIN_MSG_BUDGET_BYTES = 64 * 1024;
 const TRIMMED_TOOL_STUB = "[earlier output omitted; full output in session]";
@@ -385,7 +397,7 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 			i,
 			mapContentBlocks(out[i], (b) => {
 				if (b.type === "text" && typeof b.text === "string" && b.text.length > 600) {
-					return { ...b, text: truncateStringHead(b.text, 600, "trimmed for 1MB limit") };
+					return { ...b, text: truncateStringHead(b.text, 600, TRIM_LABEL) };
 				}
 				if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.length > 300) {
 					return { ...b, thinking: truncateStringHead(b.thinking, 300, "trimmed") };
@@ -404,9 +416,9 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 					return { ...b, thinking: truncateStringHead(b.thinking, 300, "trimmed") };
 				}
 				if (b.type === "text" && typeof b.text === "string" && b.text.length > 8000) {
-					return { ...b, text: truncateStringHead(b.text, 8000, "trimmed for 1MB limit") };
+					return { ...b, text: truncateStringHead(b.text, 8000, TRIM_LABEL) };
 				}
-				return shrinkToolCallArgs(b, 4000, "trimmed for 1MB limit");
+				return shrinkToolCallArgs(b, 4000, TRIM_LABEL);
 			}),
 		);
 	}
@@ -832,7 +844,7 @@ if (isMain(import.meta.url)) {
 	assert(
 		Array.isArray(ctxResult?.messages) &&
 			jsonByteLength(ctxResult.messages) + DEFAULT_OVERHEAD_BYTES <= SHED_TARGET_BYTES,
-		"context hook sheds payload with hysteresis down to ~760 KB before 1 MB",
+		"context hook sheds payload with hysteresis down to the target ceiling",
 	);
 	await handlers.before_provider_request!({ payload: { blob: "p".repeat(SHED_TRIGGER_BYTES + 20_000) } }, remoteCtx);
 	await handlers.agent_before_settle!({}, remoteCtx);
@@ -852,7 +864,7 @@ if (isMain(import.meta.url)) {
 	await handlers.session_before_compact!({ preparation: { turnPrefixMessages: splitTurnPrefix } }, remoteCtx);
 	assert(jsonByteLength(splitTurnPrefix) < COMPACT_INPUT_BYTES, "session_before_compact trims split-turn prefix messages too");
 
-	// Remote 1 MB silent shedding stays active even when Auto-compact is Off, and never triggers ctx.compact().
+	// Remote byte silent shedding stays active even when Auto-compact is Off, and never triggers ctx.compact().
 	setAutoCompact("Off");
 	await handlers.session_start!({}, undefined);
 	const manyMsgs: MessageLike[] = [];
@@ -864,14 +876,22 @@ if (isMain(import.meta.url)) {
 			{ role: "assistant", content: [{ type: "text", text: "a".repeat(350) }] },
 		);
 	}
-	assert(jsonByteLength(manyMsgs) > 1_048_576, "fixture exceeds 1 MB across thousands of messages");
+	assert(jsonByteLength(manyMsgs) > 1_048_576, "fixture spans thousands of messages and over a megabyte");
 	const shedMany = (await handlers.context!({ messages: manyMsgs }, remoteCtx)) as { messages?: MessageLike[] } | undefined;
-	assert(
-		Array.isArray(shedMany?.messages) &&
-			jsonByteLength(shedMany.messages) <= SHED_TARGET_BYTES &&
-			shedMany.messages[0]?.role === "user",
-		"many-message session sheds below 1 MB even with Auto-compact Off",
-	);
+	// A fixture sized for the 1 MB default says nothing once the wall scales: at 16 MB
+	// the same array is far under the trigger and the hook rightly stays quiet.
+	// Size it against the ceiling in force, or skip when scaling makes that impractical.
+	const overTrigger = jsonByteLength(manyMsgs) > SHED_TRIGGER_BYTES;
+	if (overTrigger) {
+		assert(
+			Array.isArray(shedMany?.messages) &&
+				jsonByteLength(shedMany.messages) <= SHED_TARGET_BYTES &&
+				shedMany.messages[0]?.role === "user",
+			"many-message session sheds below the ceiling even with Auto-compact Off",
+		);
+	} else {
+		assert(shedMany === undefined, "a fixture under the scaled trigger is left untouched");
+	}
 	const compactMany = manyMsgs.slice();
 	await handlers.session_before_compact!({ preparation: { messagesToSummarize: compactMany } }, remoteCtx);
 	assert(
