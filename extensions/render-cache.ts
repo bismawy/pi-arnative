@@ -6,21 +6,32 @@
  * of the session on every streaming delta, spinner tick, or editor keystroke.
  *
  * How:
- * - Settled transcript children inside `chatContainer` cache their `render(width)` output
+ * - Known, settled transcript children inside `chatContainer` cache their `render(width)` output
  *   and reuse it until `width` changes, `rows` changes (for expanded tool boxes), the
  *   session/model resets, or the component mutates (`invalidate`, `updateContent`,
  *   `updateDisplay`, `setExpanded`, `handleMouse`, `SCROLL_OFFSET`, etc.).
  * - Active components (`isStreaming`, `isPartial`, `argsPending`, `status === "running"`,
  *   active thinking dot animation, or active hold-scroll) always render fresh, while all
  *   earlier settled history hits the per-child cache in O(1).
- * - When every child in `chatContainer` is settled, `chatContainer.render(width)` itself
- *   returns its cached `lines` and restores `mouseLayout` in O(1) without rebuilding the
- *   combined array.
+ * - Known Pi transcript components use tracked mutation methods. Custom and unknown
+ *   components always render fresh because their nested mutations may not notify Pi.
+ * - When every child is known and settled, the container checks child state, then
+ *   reuses its cached `lines` and `mouseLayout` without rebuilding the combined array.
  * - Attaches at the `InteractiveMode.chatContainer` instance layer (not `Container.prototype`),
  *   so it never collides with `section-headers.ts` or `ui-render-tweaks.ts` prototype
  *   patches and sits outside `tools.ts` / `timestamps.ts` render wrappers.
  */
-import { InteractiveMode, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	AssistantMessageComponent,
+	BashExecutionComponent,
+	BranchSummaryMessageComponent,
+	CompactionSummaryMessageComponent,
+	InteractiveMode,
+	ToolExecutionComponent,
+	UserMessageComponent,
+	type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -72,6 +83,21 @@ interface ContainerCacheEntry {
 }
 
 const MAX_WIDTH_ENTRIES = 3;
+
+// Exact prototypes exclude extension subclasses with unknown render/invalidation behavior.
+const CACHEABLE_CHILD_PROTOTYPES = new Set<object>([
+	AssistantMessageComponent.prototype,
+	BashExecutionComponent.prototype,
+	BranchSummaryMessageComponent.prototype,
+	CompactionSummaryMessageComponent.prototype,
+	ToolExecutionComponent.prototype,
+	UserMessageComponent.prototype,
+	Text.prototype,
+]);
+
+function isCacheableChild(child: unknown): boolean {
+	return !!child && typeof child === "object" && CACHEABLE_CHILD_PROTOTYPES.has(Object.getPrototypeOf(child));
+}
 
 interface RenderCacheState {
 	epoch: number;
@@ -229,6 +255,7 @@ const CHILD_MUTATORS = [
 	"setHideThinkingBlock",
 	"setHiddenThinkingLabel",
 	"setText",
+	"setCustomBgFn",
 	"rebuild",
 	"appendOutput",
 	"setComplete",
@@ -239,7 +266,7 @@ const hookedContainers = new WeakSet<object>();
 const hookedChildren = new WeakSet<object>();
 
 function attachChildHooks(child: unknown): void {
-	if (!child || typeof child !== "object" || hookedChildren.has(child)) return;
+	if (!child || typeof child !== "object" || !isCacheableChild(child) || hookedChildren.has(child)) return;
 	hookedChildren.add(child);
 	const obj = child as Record<string | symbol, any>;
 	for (const method of CHILD_MUTATORS) {
@@ -297,7 +324,7 @@ function renderCachedChatContainer(
 		let allClean = true;
 		for (let i = 0; i < children.length; i++) {
 			const child = children[i];
-			if (child !== cached.children[i] || isDynamicChild(child)) {
+			if (child !== cached.children[i] || !isCacheableChild(child) || isDynamicChild(child)) {
 				allClean = false;
 				break;
 			}
@@ -343,7 +370,7 @@ function renderCachedChatContainer(
 		childMeta[i] = { version: ver, scrollOffset, expanded };
 
 		let childLines: string[];
-		if (isDynamicChild(child)) {
+		if (!isCacheableChild(child) || isDynamicChild(child)) {
 			allChildrenCacheable = false;
 			state.stats.childRenders += 1;
 			childLines = child.render(width);
@@ -505,30 +532,18 @@ if (isMain(import.meta.url)) {
 	setRenderCache("On");
 	assert(activeRenderCache() === "On", "switching back to On restores caching");
 
-	// Mock chatContainer + children to verify container cache, per-child cache, dynamic bypass,
-	// invalidation, mouseLayout restoration, scroll-offset tracking, and Off bypass.
-	class FakeChild {
-		renders = 0;
-		isStreaming = false;
-		isPartial = false;
-		expanded = false;
-		[key: symbol]: unknown;
-		private text: string;
-		constructor(text: string) {
-			this.text = text;
-		}
-		setText(next: string): void {
-			this.text = next;
-		}
-		handleInput(key: string): void {
-			this.text = `${this.text}:${key}`;
-		}
-		invalidate(): void {}
-		render(width: number): string[] {
-			this.renders += 1;
-			return [`${this.text}@${width}`];
-		}
+	// Use a known Text prototype to exercise cache policy without loading a theme.
+	function makeChild(text: string) {
+		const child = Object.assign(new Text(text, 0, 0), { renders: 0, isStreaming: false, isPartial: false, expanded: false });
+		const setText = child.setText.bind(child);
+		child.setText = (next: string): void => { text = next; setText(next); };
+		const result = Object.assign(child, {
+			handleInput(key: string): void { child.setText(`${text}:${key}`); },
+		});
+		result.render = (width: number): string[] => { result.renders += 1; return [`${text}@${width}`]; };
+		return result as typeof result & { [key: symbol]: unknown };
 	}
+	type FakeChild = ReturnType<typeof makeChild>;
 	class FakeContainer implements ChatContainerLike {
 		children: FakeChild[] = [];
 		mouseLayout?: { width: number; children: Array<{ component: unknown; height: number }> };
@@ -552,8 +567,8 @@ if (isMain(import.meta.url)) {
 	}
 
 	const container = new FakeContainer();
-	const c1 = new FakeChild("msg1");
-	const c2 = new FakeChild("msg2");
+	const c1 = makeChild("msg1");
+	const c2 = makeChild("msg2");
 	container.addChild(c1);
 	container.addChild(c2);
 	attachChatContainer(container);
