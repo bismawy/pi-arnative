@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-18
+
 ### Changed
 - **Organize `/arnative` into four top-level categories.** The root `/arnative` picker now lists `Appearance`, `Performance`, `Models`, and `Spend` with summaries of their contents, opening each category's submenu on `Enter` with `←` stepping back up (`extensions/arnative.ts`).
 
