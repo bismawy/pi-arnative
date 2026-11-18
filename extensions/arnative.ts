@@ -24,16 +24,25 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset, type FooterPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
 import {
 	AUTO_COMPACT_CHOICES,
 	AUTO_COMPACT_KEY,
+	PAYLOAD_LIMIT_PRESETS,
 	activeAutoCompact,
+	activePayloadLimit,
+	ceilingsForMb,
+	envByteWallOverride,
+	parsePayloadLimit,
+	payloadLimitMb,
+	savedPayloadLimit,
 	setAutoCompact,
+	setPayloadLimit,
 	type AutoCompactChoice,
+	type PayloadLimitPreset,
 } from "./autocompact.ts";
 import { cancelManualHeal, healNow } from "./model-heal.ts";
 import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
@@ -65,7 +74,7 @@ export function menuRows(menus: Pick<ArnativeMenu, "label" | "description">[]): 
 /** Title of the settings menu, derived from `screenTitle` so the format lives in one place. */
 export const MENU_TITLE = screenTitle("Settings");
 /** One-line description under the menu title. */
-export const MENU_DESC = "Themes, headers, footers, chatbox, animations, auto-compact, render, providers, usage, budget";
+export const MENU_DESC = "Themes, headers, footers, chatbox, animations, auto-compact, render, payload, providers, usage, budget";
 
 const THEMES_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Themes"),
@@ -565,6 +574,119 @@ const openRenderCache = async (ctx: ExtensionCommandContext): Promise<boolean | 
 	return goBack === true;
 };
 
+const PAYLOAD_CUSTOM_LABEL = "Custom…";
+
+const PAYLOAD_PRESET_NOTES: Record<PayloadLimitPreset, string> = {
+	Off: "disabled — send full history (may hit HTTP 413 on strict proxies)",
+	"1 MB": "safe default for standard 1 MB reverse proxies (trims at 900 KB)",
+	"4 MB": "small raised proxy limit (trims at 3.5 MB)",
+	"8 MB": "medium proxy limit (trims at 7.0 MB)",
+	"16 MB": "recommended for 1M-context models on 16 MB proxies (trims at 14.1 MB)",
+	"32 MB": "high ceiling for image-heavy sessions (trims at 28.1 MB)",
+};
+
+function payloadPickerText(): ListPickerText {
+	const envOverride = envByteWallOverride();
+	const description = envOverride
+		? `Max HTTP request size for remote models (env PI_ARNATIVE_BYTE_WALL_MB=${payloadLimitMb(envOverride)} active now; picking overrides it).`
+		: "Max HTTP request size for remote models; older images, thinking, and tool outputs trim above it.";
+	return {
+		title: screenTitle("Payload limit"),
+		description,
+		legend: LIST_LEGEND_MOVE,
+	};
+}
+
+/** Rows for the Payload limit picker: presets plus Custom MB; the active value carries a green ✓. */
+export function payloadLimitRows(opened: string): ListRow[] {
+	const isPreset = (PAYLOAD_LIMIT_PRESETS as readonly string[]).includes(opened);
+	const customNote = isPreset
+		? "enter any limit in MB (e.g. 11, 24, 100)"
+		: `current: ${opened} — enter any limit in MB (1–1024)`;
+	return [
+		...PAYLOAD_LIMIT_PRESETS.map((c) => ({ label: c, note: PAYLOAD_PRESET_NOTES[c], chosen: c === opened })),
+		{ label: PAYLOAD_CUSTOM_LABEL, note: customNote, chosen: !isPreset },
+	];
+}
+
+function applyPayloadChoice(ctx: ExtensionCommandContext, choice: string): void {
+	const applied = setPayloadLimit(choice);
+	const ceilings = applied === "Off" ? null : ceilingsForMb(payloadLimitMb(applied) ?? 1);
+	const detail = ceilings ? ` (trims at ${(ceilings.shedTriggerBytes / 1024 / 1024).toFixed(2)} MB)` : " (trimming disabled)";
+	announce(ctx.ui, `Payload limit: ${applied}${detail}.`);
+}
+
+const openPayloadLimit = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	for (;;) {
+		const opened = activePayloadLimit();
+		const isPreset = (PAYLOAD_LIMIT_PRESETS as readonly string[]).includes(opened);
+		const cursor = isPreset ? opened : PAYLOAD_CUSTOM_LABEL;
+		const pickerText = payloadPickerText();
+
+		if (ctx.mode !== "tui") {
+			const labels = [...PAYLOAD_LIMIT_PRESETS.map((c) => (c === opened ? `${c} ✓` : c)), isPreset ? PAYLOAD_CUSTOM_LABEL : `${PAYLOAD_CUSTOM_LABEL} (${opened}) ✓`];
+			const pick = await ctx.ui.select(pickerText.title, labels);
+			if (pick === undefined) return;
+			const index = labels.indexOf(pick);
+			if (index < PAYLOAD_LIMIT_PRESETS.length) {
+				applyPayloadChoice(ctx, PAYLOAD_LIMIT_PRESETS[index]!);
+				return;
+			}
+			const currentMb = payloadLimitMb(opened);
+			const raw = await ctx.ui.input("Payload limit (MB, 1–1024, or Off)", currentMb ? String(currentMb) : "16");
+			if (raw === undefined) return;
+			const parsed = parsePayloadLimit(raw);
+			if (!parsed) {
+				ctx.ui.notify("[arnative] Enter a number between 1 and 1024 MB (e.g. 11 or 16), or Off.", "warning");
+				return;
+			}
+			applyPayloadChoice(ctx, parsed);
+			return;
+		}
+
+		let pickCustom = false;
+		const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+			const picker = new ListPicker(
+				theme,
+				payloadLimitRows(opened),
+				cursor,
+				{
+					preview: () => {},
+					revert: () => {},
+					done: () => {
+						if (picker.index === PAYLOAD_LIMIT_PRESETS.length) {
+							pickCustom = true;
+						} else {
+							applyPayloadChoice(ctx, PAYLOAD_LIMIT_PRESETS[picker.index]!);
+						}
+						done(false);
+					},
+					cancel: () => done(false),
+					back: () => done(true),
+					requestRender: () => tui.requestRender(),
+				},
+				pickerText,
+				false,
+				ctx.thinkingLevel,
+			);
+			return picker;
+		});
+		if (goBack === true) return true;
+		if (!pickCustom) return false;
+
+		const currentMb = payloadLimitMb(opened);
+		const raw = await ctx.ui.input("Payload limit (MB, 1–1024, or Off)", currentMb ? String(currentMb) : "16");
+		if (raw === undefined) continue;
+		const parsed = parsePayloadLimit(raw);
+		if (!parsed) {
+			ctx.ui.notify("[arnative] Enter a number between 1 and 1024 MB (e.g. 11 or 16), or Off.", "warning");
+			continue;
+		}
+		applyPayloadChoice(ctx, parsed);
+		return false;
+	}
+};
+
 export const MENUS: ArnativeMenu[] = [
 	{
 		value: "themes",
@@ -613,6 +735,12 @@ export const MENUS: ArnativeMenu[] = [
 		label: "Render cache",
 		description: "cache settled transcript rows across frames (on by default)",
 		open: openRenderCache,
+	},
+	{
+		value: "payload",
+		label: "Payload limit",
+		description: "max HTTP request size for remote proxies (1 MB by default)",
+		open: openPayloadLimit,
 	},
 	{
 		value: "providers",
@@ -723,7 +851,7 @@ export function shouldApplyDefaultTheme(
  *  set without starting a session. */
 export function registerCommands(pi: Pick<ExtensionAPI, "registerCommand">): void {
 	pi.registerCommand("arnative", {
-		description: "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, render cache, providers, usage, budget",
+		description: "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, render cache, payload limit, providers, usage, budget",
 		getArgumentCompletions: arnativeCompletions,
 		handler: arnativeHandler,
 	});
@@ -748,6 +876,7 @@ export function recordProfile(): void {
 		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
+		[PAYLOAD_LIMIT_KEY]: savedPayloadLimit(),
 		[MODEL_HEAL_KEY]: activeModelHeal(),
 		[RENDER_CACHE_KEY]: activeRenderCache(),
 		[BUDGET_DAY_KEY]: activeBudgetDay() === undefined ? "" : String(activeBudgetDay()),
@@ -787,22 +916,29 @@ if (isMain(import.meta.url)) {
 	assert(rowText(labels[0]!) === "Themes · arnative themes only (all themes: /settings → Theme)", "menu row text format");
 	assert(labels[0]!.label === "Themes" && labels[0]!.note === "arnative themes only (all themes: /settings → Theme)", "menu row keeps label and note apart");
 	assert(MENU_TITLE === "Settings - Arnative\u2819", `the menu title is the pinned string, got ${MENU_TITLE}`);
-	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, render, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
+	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, render, payload, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 11, "eleven settings screens");
+	assert(MENUS.length === 12, "twelve settings screens");
 	{
 		const values = MENUS.map((m) => m.value);
 		assert(values.indexOf("heal") === values.indexOf("compact") + 1, "Model heal row sits right after Auto-compact");
 		assert(values.indexOf("render") === values.indexOf("heal") + 1, "Render cache row sits right after Model heal");
+		assert(values.indexOf("payload") === values.indexOf("render") + 1, "Payload limit row sits right after Render cache");
 		const heal = modelHealRows("Flags");
 		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
 		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
 		const rc = renderCacheRows("On");
 		assert(rc.map((r) => r.label).join(",") === "On,Off", "Render cache rows: On then Off");
 		assert(rc.filter((r) => r.chosen).map((r) => r.label).join(",") === "On", "Render cache marks only the saved mode");
+		const pl = payloadLimitRows("16 MB");
+		assert(pl.map((r) => r.label).join(",") === "Off,1 MB,4 MB,8 MB,16 MB,32 MB,Custom…", "Payload limit rows list presets then Custom…");
+		assert(pl.filter((r) => r.chosen).map((r) => r.label).join(",") === "16 MB", "Payload limit marks the active preset");
+		const plCustom = payloadLimitRows("11 MB");
+		assert(plCustom.filter((r) => r.chosen).map((r) => r.label).join(",") === "Custom…", "Payload limit marks Custom… when a non-preset MB is active");
+		assert(plCustom[plCustom.length - 1]!.note!.includes("11 MB"), "Custom… row displays the active custom MB");
 	}
-	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Render cache", "Providers", "Usage", "Budget"]) {
+	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Render cache", "Payload limit", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
@@ -828,6 +964,8 @@ if (isMain(import.meta.url)) {
 	assert(autoCompactRows("Off")[0]!.chosen === true, "the marker moves when the saved choice changes");
 	assert(arnativeCompletions("re")![0]!.value === "render", "render cache menu has completions");
 	assert(MENUS.some((m) => m.value === "render"), "render cache menu registered");
+	assert(arnativeCompletions("pa")![0]!.value === "payload", "payload limit menu has completions");
+	assert(MENUS.some((m) => m.value === "payload"), "payload limit menu registered");
 	assert(arnativeCompletions("pr")![0]!.value === "providers", "providers menu has completions");
 	assert(MENUS.some((m) => m.value === "providers"), "providers menu registered");
 	// Every slash command, and the one alias: `/providers` must land on the providers screen.
@@ -838,7 +976,7 @@ if (isMain(import.meta.url)) {
 		assert(typeof registered.get("providers")!.handler === "function", "/providers has a handler");
 		assert(MENUS.some((m) => m.value === "providers"), "/providers routes to a menu row that exists");
 		assert(
-			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, render cache, providers, usage, budget",
+			registered.get("arnative")!.description === "Arnative settings menu: themes, headers, footers, chatbox, animations, auto-compact, model heal, render cache, payload limit, providers, usage, budget",
 			"the /arnative command description names every screen: " + registered.get("arnative")!.description,
 		);
 	}
@@ -938,14 +1076,14 @@ if (isMain(import.meta.url)) {
 		cancel: () => { menuCancelled = true; },
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
-	// 100 columns: the description names the screens (a tripwire — a screen added to MENUS must
-	// be added to the copy too), and that one-liner no longer fits 80.
-	const menuLines = mainPicker.render(100);
+	// 120 columns: the description names the screens (a tripwire — a screen added to MENUS must
+	// be added to the copy too), and that one-liner no longer fits 100.
+	const menuLines = mainPicker.render(120);
 	assert(menuLines.some((l) => l.includes(MENU_TITLE)), "the main menu renders its title");
 	assert(menuLines.some((l) => l.includes("[Esc] Close") && !l.includes("←")), "the root menu legend renders without a back key");
 	assert(menuLines.some((l) => l.includes(MENU_DESC)), "the main menu renders the description under the title");
 	assert(menuLines.findIndex((l) => l.includes(MENU_TITLE)) < menuLines.findIndex((l) => l.includes(MENU_DESC)), "description sits below the title");
-	assert(menuLines.every((l) => visibleWidth(l) === 100), "main menu lines fit the width");
+	assert(menuLines.every((l) => visibleWidth(l) === 120), "main menu lines fit the width");
 	// The pinned /arnative layout: `→ Themes  ·  note`, every `·` in one column (skill rule 10).
 	const plainMenu = menuLines.map(stripAnsi);
 	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("→ Themes"))!;

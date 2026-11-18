@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
-import { loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { PAYLOAD_LIMIT_KEY, loadChoice, loadSetting, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
 import { activeRenderCache, setRenderCache } from "./render-cache.ts";
 
 /** Stored exactly as the picker shows them; `Off` disables the trigger entirely. */
@@ -30,24 +30,106 @@ export type AutoCompactChoice = (typeof AUTO_COMPACT_CHOICES)[number];
 export const DEFAULT_AUTO_COMPACT: AutoCompactChoice = "Off";
 export const AUTO_COMPACT_KEY = "autoCompact";
 
-/** Byte ceilings for byte-capped proxies (e.g. `remote/*` endpoints).
- *  The ratios target a 1 MB HTTP body wall. Raise `PI_ARNATIVE_BYTE_WALL_MB` when the
- *  proxy accepts more, or the shed fires at a fraction of the real wall and caps the
- *  context long before the token window is used. Read once at module load: a shell
- *  override must be set before pi starts. */
-function byteWallBytes(): number {
-	const mb = Number(process.env.PI_ARNATIVE_BYTE_WALL_MB);
-	return Number.isFinite(mb) && mb > 0 ? Math.round(mb * 1024 * 1024) : 1024 * 1024;
-}
-const WALL_SCALE = byteWallBytes() / (1024 * 1024);
-/** Trim markers name the real ceiling, so a raised wall does not report 1MB. */
-const TRIM_LABEL = WALL_SCALE === 1 ? "trimmed for 1MB limit" : `trimmed for ${Math.round(WALL_SCALE)}MB limit`;
+/** Proxy payload limit presets shown in `/arnative` → Payload limit. */
+export const PAYLOAD_LIMIT_PRESETS = ["Off", "1 MB", "4 MB", "8 MB", "16 MB", "32 MB"] as const;
+export type PayloadLimitPreset = (typeof PAYLOAD_LIMIT_PRESETS)[number];
+export const DEFAULT_PAYLOAD_LIMIT: PayloadLimitPreset = "1 MB";
+export const PAYLOAD_LIMIT_MB_RANGE = { min: 1, max: 1024 } as const;
+export const PAYLOAD_LIMIT_CONFIG_KEY = Symbol.for("pi-arnative.payloadLimit");
 
-export const SHED_TRIGGER_BYTES = Math.round(900 * 1024 * WALL_SCALE);
-export const SHED_TARGET_BYTES = Math.round(760 * 1024 * WALL_SCALE);
-export const COMPACT_INPUT_BYTES = Math.round(720 * 1024 * WALL_SCALE);
-const SHED_TRIGGER_AFTER_413_BYTES = Math.round(820 * 1024 * WALL_SCALE);
-const SHED_TARGET_AFTER_413_BYTES = Math.round(680 * 1024 * WALL_SCALE);
+export interface ByteCeilings {
+	mb: number;
+	shedTriggerBytes: number;
+	shedTargetBytes: number;
+	compactInputBytes: number;
+	shedTriggerAfter413Bytes: number;
+	shedTargetAfter413Bytes: number;
+}
+
+function formatMb(mb: number): string {
+	return Number.isInteger(mb) ? String(mb) : String(Number(mb.toFixed(2)));
+}
+
+/** Parse `"Off"`, a number, or `"16 MB"` / `"16m"` into normalized storage form (`"Off"` or `"<N> MB"`). */
+export function parsePayloadLimit(raw: unknown): string | undefined {
+	if (typeof raw === "number") {
+		if (!Number.isFinite(raw) || raw < PAYLOAD_LIMIT_MB_RANGE.min || raw > PAYLOAD_LIMIT_MB_RANGE.max) return undefined;
+		return `${formatMb(raw)} MB`;
+	}
+	if (typeof raw !== "string") return undefined;
+	const trimmed = raw.trim();
+	if (/^off$/i.test(trimmed)) return "Off";
+	const m = /^(\d+(?:\.\d+)?)\s*(?:mb|m)?$/i.exec(trimmed);
+	if (!m) return undefined;
+	const mb = Number(m[1]);
+	if (!Number.isFinite(mb) || mb < PAYLOAD_LIMIT_MB_RANGE.min || mb > PAYLOAD_LIMIT_MB_RANGE.max) return undefined;
+	return `${formatMb(mb)} MB`;
+}
+
+/** Numeric MB limit for a parsed payload limit string, or `null` when `"Off"`. */
+export function payloadLimitMb(choice: string): number | null {
+	if (choice === "Off") return null;
+	const n = Number.parseFloat(choice);
+	return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/** Shell override via `PI_ARNATIVE_BYTE_WALL_MB`, when set to a valid positive number. */
+export function envByteWallOverride(): string | undefined {
+	const raw = process.env.PI_ARNATIVE_BYTE_WALL_MB;
+	if (typeof raw !== "string" || raw.trim() === "") return undefined;
+	const mb = Number(raw);
+	return Number.isFinite(mb) && mb > 0 ? `${formatMb(mb)} MB` : undefined;
+}
+
+/** Stored `config.json` choice (`"Off"` or `"<N> MB"`), ignoring process env overrides. */
+export function savedPayloadLimit(): string {
+	return parsePayloadLimit(loadSetting(PAYLOAD_LIMIT_KEY)) ?? DEFAULT_PAYLOAD_LIMIT;
+}
+
+/** Active payload limit: in-session choice, else `PI_ARNATIVE_BYTE_WALL_MB`, else `config.json` (default `1 MB`). */
+export function activePayloadLimit(): string {
+	const slot = (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
+	const fromSlot = parsePayloadLimit(slot);
+	if (fromSlot) return fromSlot;
+	return envByteWallOverride() ?? savedPayloadLimit();
+}
+
+/** Apply a payload limit live for this session and persist it to `config.json`. */
+export function setPayloadLimit(choice: string): string {
+	const parsed = parsePayloadLimit(choice);
+	if (!parsed) throw new Error(`Invalid payload limit: ${choice}`);
+	(globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY] = parsed;
+	saveChoice(PAYLOAD_LIMIT_KEY, parsed);
+	return parsed;
+}
+
+/** Byte ceilings for an HTTP body wall in MB (ratios target 900/760/720 KB per 1 MB). */
+export function ceilingsForMb(mb: number): ByteCeilings {
+	return {
+		mb,
+		shedTriggerBytes: Math.round(900 * 1024 * mb),
+		shedTargetBytes: Math.round(760 * 1024 * mb),
+		compactInputBytes: Math.round(720 * 1024 * mb),
+		shedTriggerAfter413Bytes: Math.round(820 * 1024 * mb),
+		shedTargetAfter413Bytes: Math.round(680 * 1024 * mb),
+	};
+}
+
+/** Active byte ceilings for this session, or `null` when payload limiting is `Off`. */
+export function activeByteCeilings(): ByteCeilings | null {
+	const mb = payloadLimitMb(activePayloadLimit());
+	return mb === null ? null : ceilingsForMb(mb);
+}
+
+function trimLabelForMb(limitMb: number): string {
+	return `trimmed for ${formatMb(limitMb)}MB limit`;
+}
+
+// Module-load ceilings retained for backward-compatible test/caller imports.
+const INITIAL_CEILINGS = ceilingsForMb(payloadLimitMb(envByteWallOverride() ?? savedPayloadLimit()) ?? 1);
+export const SHED_TRIGGER_BYTES = INITIAL_CEILINGS.shedTriggerBytes;
+export const SHED_TARGET_BYTES = INITIAL_CEILINGS.shedTargetBytes;
+export const COMPACT_INPUT_BYTES = INITIAL_CEILINGS.compactInputBytes;
 const DEFAULT_OVERHEAD_BYTES = 64 * 1024;
 const MIN_MSG_BUDGET_BYTES = 64 * 1024;
 const TRIMMED_TOOL_STUB = "[earlier output omitted; full output in session]";
@@ -263,7 +345,9 @@ function shrinkToolCallArgs(block: ContentBlockLike, maxArgChars: number, label:
 export function shedMessagesForByteLimit<T extends MessageLike>(
 	messages: readonly T[],
 	targetMsgBytes: number,
+	limitMb = payloadLimitMb(activePayloadLimit()) ?? 1,
 ): { messages: T[]; bytes: number; changed: boolean } {
+	const trimLabel = trimLabelForMb(limitMb);
 	const sizes = messages.map((m) => jsonByteLength(m));
 	let totalBytes = jsonByteLength(messages);
 	if (totalBytes <= targetMsgBytes || messages.length === 0) {
@@ -342,7 +426,7 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 			i,
 			mapContentBlocks(out[i], (b) => {
 				if (b.type === "text" && typeof b.text === "string" && b.text.length > 600) {
-					return { ...b, text: truncateStringHead(b.text, 600, TRIM_LABEL) };
+					return { ...b, text: truncateStringHead(b.text, 600, trimLabel) };
 				}
 				if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.length > 300) {
 					return { ...b, thinking: truncateStringHead(b.thinking, 300, "trimmed") };
@@ -361,9 +445,9 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 					return { ...b, thinking: truncateStringHead(b.thinking, 300, "trimmed") };
 				}
 				if (b.type === "text" && typeof b.text === "string" && b.text.length > 8000) {
-					return { ...b, text: truncateStringHead(b.text, 8000, TRIM_LABEL) };
+					return { ...b, text: truncateStringHead(b.text, 8000, trimLabel) };
 				}
-				return shrinkToolCallArgs(b, 4000, TRIM_LABEL);
+				return shrinkToolCallArgs(b, 4000, trimLabel);
 			}),
 		);
 	}
@@ -384,7 +468,7 @@ export function shedMessagesForByteLimit<T extends MessageLike>(
 		if (dropEnd > 0) {
 			const kept = out.slice(dropEnd);
 			if (kept[0]?.role !== "user") {
-				kept.unshift({ role: "user", content: [{ type: "text", text: "[earlier turns omitted for 1MB request limit]" }] } as T);
+				kept.unshift({ role: "user", content: [{ type: "text", text: `[earlier turns omitted for ${formatMb(limitMb)}MB request limit]` }] } as T);
 			}
 			return { messages: kept, bytes: jsonByteLength(kept), changed: true };
 		}
@@ -457,10 +541,12 @@ let trackedOverheadBytes = -1;
 /** Last observed wire size (messages + overhead) for byte-limited models, or null.
  *  Consumed by the footer to show payload pressure against the 1 MB proxy wall. */
 export function wireBytesSnapshot(): { bytes: number; limit: number } | null {
+	const ceilings = activeByteCeilings();
+	if (!ceilings) return null;
 	const state = (globalThis as Record<symbol, AutoCompactState | undefined>)[Symbol.for("pi-arnative.autocompactState")];
 	if (!state || state.lastMessagesBytes <= 0) return null;
 	const overhead = state.overheadBytes > 0 ? state.overheadBytes : DEFAULT_OVERHEAD_BYTES;
-	return { bytes: state.lastMessagesBytes + overhead, limit: SHED_TRIGGER_BYTES };
+	return { bytes: state.lastMessagesBytes + overhead, limit: ceilings.shedTriggerBytes };
 }
 
 export default function registerAutoCompact(pi: ExtensionAPI): void {
@@ -503,6 +589,8 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 	});
 
 	pi.on("context", async (event, ctx) => {
+		const ceilings = activeByteCeilings();
+		if (!ceilings) return;
 		// Skip the full-transcript JSON.stringify entirely for models with no byte wall:
 		// measurement is the only cost here, and non-remote sessions pay it every turn.
 		if (!state.saw413 && !isByteLimitedModel(ctx?.model)) return;
@@ -513,13 +601,13 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 		state.lastMessagesBytes = msgBytes;
 		state.awaitingContextPayload = true;
 
-		const triggerBytes = state.saw413 ? SHED_TRIGGER_AFTER_413_BYTES : SHED_TRIGGER_BYTES;
-		const targetBytes = state.saw413 ? SHED_TARGET_AFTER_413_BYTES : SHED_TARGET_BYTES;
+		const triggerBytes = state.saw413 ? ceilings.shedTriggerAfter413Bytes : ceilings.shedTriggerBytes;
+		const targetBytes = state.saw413 ? ceilings.shedTargetAfter413Bytes : ceilings.shedTargetBytes;
 		const effectiveOverhead = state.overheadBytes > 0 ? state.overheadBytes : DEFAULT_OVERHEAD_BYTES;
 		if (msgBytes + effectiveOverhead < triggerBytes) return;
 
 		const targetMsgBytes = Math.max(MIN_MSG_BUDGET_BYTES, targetBytes - effectiveOverhead);
-		const shed = shedMessagesForByteLimit(messages, targetMsgBytes);
+		const shed = shedMessagesForByteLimit(messages, targetMsgBytes, ceilings.mb);
 		if (!shed.changed) return;
 
 		state.lastMessagesBytes = shed.bytes;
@@ -541,6 +629,8 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		state.compacting = true;
+		const ceilings = activeByteCeilings();
+		if (!ceilings) return;
 		if (!state.saw413 && !isByteLimitedModel(ctx?.model)) return;
 		const prep = (
 			event as {
@@ -553,9 +643,9 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 		)?.preparation;
 		if (!prep) return;
 		const prevBytes = prep.previousSummary ? jsonByteLength(prep.previousSummary) : 0;
-		const summaryBudget = Math.max(128 * 1024, COMPACT_INPUT_BYTES - prevBytes);
+		const summaryBudget = Math.max(128 * 1024, ceilings.compactInputBytes - prevBytes);
 		trimCompactionInput(prep.messagesToSummarize, summaryBudget);
-		trimCompactionInput(prep.turnPrefixMessages, Math.round(COMPACT_INPUT_BYTES / 2));
+		trimCompactionInput(prep.turnPrefixMessages, Math.round(ceilings.compactInputBytes / 2));
 	});
 
 	pi.on("agent_before_settle", async (_event, ctx) => {
@@ -607,6 +697,22 @@ if (isMain(import.meta.url)) {
 	const fixture = mkdtempSync(join(tmpdir(), "arnative-autocompact-"));
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	delete (globalThis as Record<symbol, unknown>)[AUTO_COMPACT_CONFIG_KEY];
+	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
+
+	// Payload limit parsing, persistence, and Off mode.
+	assert(parsePayloadLimit("off") === "Off", "parses off case-insensitively");
+	assert(parsePayloadLimit("11") === "11 MB" && parsePayloadLimit("11mb") === "11 MB", "normalizes MB unit");
+	assert(parsePayloadLimit(16) === "16 MB", "accepts numeric MB");
+	assert(parsePayloadLimit("0") === undefined && parsePayloadLimit("2000") === undefined && parsePayloadLimit("abc") === undefined, "rejects out-of-range or invalid payload limits");
+	assert(savedPayloadLimit() === "1 MB", "stored payload limit defaults to 1 MB");
+	setPayloadLimit("11 MB");
+	assert(activePayloadLimit() === "11 MB" && savedPayloadLimit() === "11 MB", "custom payload limit applies live and persists");
+	assert(activeByteCeilings()!.shedTriggerBytes === Math.round(900 * 1024 * 11), "custom MB scales shed trigger");
+	setPayloadLimit("Off");
+	assert(activeByteCeilings() === null, "Off disables byte ceilings");
+	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
+	saveChoice(PAYLOAD_LIMIT_KEY, "1 MB");
+	resetPresetCache();
 
 	// Choice parsing and persistence.
 	assert(activeAutoCompact() === "Off", "the default is off");
@@ -851,9 +957,14 @@ if (isMain(import.meta.url)) {
 	const after413 = (await handlers.context!({ messages: hugeRunMsgs }, nonRemoteCtx)) as { messages?: MessageLike[] } | undefined;
 	assert(
 		Array.isArray(after413?.messages) &&
-			jsonByteLength(after413.messages) + DEFAULT_OVERHEAD_BYTES <= SHED_TARGET_AFTER_413_BYTES,
+			jsonByteLength(after413.messages) + DEFAULT_OVERHEAD_BYTES <= INITIAL_CEILINGS.shedTargetAfter413Bytes,
 		"saw413 activates tighter silent shedding on any model",
 	);
+	// Payload limit Off skips shedding and clears wireBytesSnapshot even for remote models.
+	setPayloadLimit("Off");
+	const offResult = await handlers.context!({ messages: hugeRunMsgs }, remoteCtx);
+	assert(offResult === undefined && wireBytesSnapshot() === null, "Off disables silent shedding and wireBytesSnapshot");
+	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 	setAutoCompact("Smart");
 
 	// i1 guard: models with no byte wall never measure payload bytes at all.
@@ -884,6 +995,7 @@ if (isMain(import.meta.url)) {
 	rmSync(fixture, { recursive: true, force: true });
 	delete process.env.PI_CODING_AGENT_DIR;
 	delete (globalThis as Record<symbol, unknown>)[AUTO_COMPACT_CONFIG_KEY];
+	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 	delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.renderCache")];
 	resetPresetCache();
 	console.log("autocompact.ts self-check OK");

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **In-app Payload limit setting in `/arnative`.** Choose `Off`, `1 MB` (default), `4 MB`, `8 MB`, `16 MB`, `32 MB`, or `Custom…` (1 to 1024 MB) under `/arnative` → **Payload limit**. Choices save to `config.json` (`payloadLimit`) and apply immediately to active sessions, footer pressure labels, and compaction input caps without restarting Pi; `PI_ARNATIVE_BYTE_WALL_MB` remains supported as a shell override (`extensions/arnative.ts`, `extensions/autocompact.ts`, `lib/preset-store.ts`).
+
 ## [0.13.0] - 2026-11-18
 
 ### Added

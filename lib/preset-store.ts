@@ -28,6 +28,8 @@ export const BUDGET_MONTH_KEY = "budgetMonth";
 export const BUDGET_ENFORCE_KEY = "budgetEnforce";
 /** Transcript render cache: `"On"` / `"Off"`, absent reads as `"On"`. */
 export const RENDER_CACHE_KEY = "renderCache";
+/** Remote proxy payload limit: `"Off"` or `"<N> MB"`, absent reads as `"1 MB"`. */
+export const PAYLOAD_LIMIT_KEY = "payloadLimit";
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
 // Everything pi-arnative writes lives in one folder (agent dir/arnative); the config moved
@@ -83,6 +85,11 @@ export function loadChoice<T extends string>(key: string, allowed: readonly T[])
 	return typeof value === "string" && (allowed as readonly string[]).includes(value) ? (value as T) : undefined;
 }
 
+/** Raw stored value for `key` (used by callers with custom parsers like `payloadLimit`). */
+export function loadSetting(key: string): unknown {
+	return readConfig()[key];
+}
+
 /** The stored value for `key` as a finite number in `[min, max]`, or undefined when absent, empty,
  *  unparsable or out of range. Amounts are stored as strings (`"5"`, `""` = unset) because
  *  `loadChoice` only accepts strings from an allowed set, so numbers get their own reader. */
@@ -95,7 +102,7 @@ export function loadNumber(key: string, range: { min: number; max: number }): nu
 /** Reading order of `config.json`: the presets in the order the settings menu shows them,
  *  then `layoutVersion`, then anything else (a key from another module or a newer version).
  *  Times a user edits the file by hand or reads it back. */
-const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal", "renderCache"];
+const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "payloadLimit", "modelHeal", "renderCache"];
 
 /** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
 function ordered(record: Record<string, unknown>): Record<string, unknown> {
