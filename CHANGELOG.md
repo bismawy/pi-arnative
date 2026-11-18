@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.13.0] - 2026-11-18
 
 ### Added
 - **The byte-shed ceiling follows the proxy wall.** `SHED_TRIGGER_BYTES` was a fixed 900 KB, so a 1M-token model shed at roughly 12% of its window and lost context the token budget could still hold. `PI_ARNATIVE_BYTE_WALL_MB` now scales the trigger, target, and compaction ceilings (default `1`, unchanged behaviour). Set it to the wall your proxy accepts, for example `16` after raising nginx to `client_max_body_size 16m`. The footer label follows: `0.74MB/900KB` below 1 MB, `0.74MB/14.06MB` at a 16 MB wall (`extensions/autocompact.ts`, `extensions/footer.ts`).
