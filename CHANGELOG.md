@@ -17,6 +17,7 @@
 - **`renderCache` key order is pinned in `config.json`.** `KEY_ORDER` in `lib/preset-store.ts` now includes `renderCache` after `modelHeal`, so partial configs keep a stable order (`test/profile.test.ts`).
 
 ### Changed
+- **Documented Render cache, Smart tiers, and `PI_ARNATIVE_BYTE_WALL_MB` in `README.md`.** Added the `Render cache` toggle (`On` by default), updated `Smart` auto-compact tiers (`90%` for `>= 192k` with Render cache `On`, conservative tiers with `Off`), summarized fixed-budget trade-offs and byte-wall scaling, and updated the `/arnative` shortcut and architecture tables (`README.md`).
 - **The footer hourly rate renders `dim`.** `$19.98 (~$7.06/h)` painted both values the same, so the cost read as one number. The rate suffix now takes `dim` while the amount keeps `soft`; an active budget cap still paints the whole cell one alert colour (`extensions/footer.ts`, `test/footer-rate.test.ts`).
 - Byte measurement is skipped for models without a byte wall. Byte-limited sessions use exact serialized JSON UTF-8 measurements; Pi clones the message array before each `context` event, so per-object caches do not stay warm across requests (`extensions/autocompact.ts`).
 - **Render-cache width LRU holds 3 widths.** A 3-way width toggle (font-size steps, tmux pane alternation) thrashed the 2-slot LRU at ~710 us/render; 3 slots keep it warm at ~35 us/render (`extensions/render-cache.ts`, `test/render-cache.test.ts`).
