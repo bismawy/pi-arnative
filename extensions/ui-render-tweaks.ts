@@ -12,7 +12,7 @@
  * 5. `↓ Jump to latest message` pill (fullscreen): bg selectedBg (grey) -> accent,
  *    text darkened (theme canvas) so contrast stays high (9.6:1).
  * 6. `ctx.ui.select` rows: pi paints the whole selected row accent -> keep accent on
- *    the `→` marker and `·` separators, selected text in soft.
+ *    the `❯` marker and `·` separators, selected text in soft.
  */
 import {
 	AssistantMessageComponent,
@@ -40,7 +40,7 @@ import {
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
 import { statusRows } from "../lib/status-widget.ts";
-import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softSecondaryOf } from "../lib/ansi.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
@@ -171,12 +171,12 @@ if (TuiAltScreen?.prototype) {
 }
 
 // 6. Select menus (ctx.ui.select -> ExtensionSelectorComponent.updateList): pi colors the
-// whole selected row accent. Arnative keeps accent on the `→` marker and `·` separators
+// whole selected row accent. Arnative keeps accent on the `❯` marker and `·` separators
 // and moves the selected text to soft (accent on themes without the token).
 
 /** Selected row body: `·` separators accent, the text around them soft. */
 export function selectRowText(row: string, th: { fg(c: string, t: string): string }): string {
-	const soft = softSecondaryOf(th);
+	const soft = softOf(th);
 	return row
 		.split("·")
 		.map((part) => soft(part))
@@ -197,7 +197,7 @@ if (ExtensionSelectorComponent?.prototype) {
 		for (let i = 0; i < this.options.length; i++) {
 			const text =
 				i === this.selectedIndex
-					? th.fg("accent", "→ ") + selectRowText(this.options[i]!, th)
+					? th.fg("accent", "❯ ") + selectRowText(this.options[i]!, th)
 					: `  ${th.fg("text", this.options[i]!)}`;
 			this.listContainer.addChild(new Text(text, 1, 0));
 		}
@@ -697,7 +697,7 @@ if (isMain(import.meta.url)) {
 	assert(accentPill("other text", thPill) === "other text", "pill: non-pill text untouched");
 	assert(accentPill(pillOriginal, null) === pillOriginal, "pill: no theme -> passed through");
 
-	// select rows: `→` + `·` stay accent, selected text moves to accentSoft
+	// select rows: `❯` + `·` stay accent, selected text moves to accentSoft
 	const tagFg = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
 	assert(
 		selectRowText("Routing  ·  off", tagFg) === "<accentSoft>Routing  </accentSoft><accent>·</accent><accentSoft>  off</accentSoft>",

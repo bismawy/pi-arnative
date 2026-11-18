@@ -88,10 +88,10 @@ function addToRollup(r: Rollup, e: UsageEntry): void {
 }
 
 /** A time window the dashboard can show. `all` is the whole history. */
-export type UsageRange = "all" | "today" | "7d" | "30d" | "3m";
+export type UsageRange = "all" | "today" | "7d" | "30d";
 
 /** Tab order of the range bar. */
-export const USAGE_RANGES: readonly UsageRange[] = ["all", "today", "7d", "30d", "3m"];
+export const USAGE_RANGES: readonly UsageRange[] = ["all", "today", "7d", "30d"];
 
 /** UTC day bucket key (`YYYY-MM-DD`) of a timestamp. UTC on purpose: local time would make the
  *  on-disk cache depend on the timezone of the machine that wrote it, so a restore elsewhere
@@ -100,7 +100,7 @@ export function dayKey(ms: number): string {
 	return new Date(ms > 0 ? ms : 0).toISOString().slice(0, 10);
 }
 
-/** UTC midnight where `range` starts: today, 7 or 30 calendar days back, 3 months back.
+/** UTC midnight where `range` starts: today, 7 or 30 calendar days back.
  *  `undefined` for `all`, which has no floor. UTC to match the day buckets: a local-midnight
  *  floor would cut a UTC+7 "today" at 7am local and drop the morning's spend. */
 export function rangeStart(range: UsageRange, now = Date.now()): number | undefined {
@@ -108,8 +108,7 @@ export function rangeStart(range: UsageRange, now = Date.now()): number | undefi
 	const d = new Date(now);
 	d.setUTCHours(0, 0, 0, 0);
 	if (range === "today") return d.getTime();
-	if (range === "3m") d.setUTCMonth(d.getUTCMonth() - 3);
-	else d.setUTCDate(d.getUTCDate() - (range === "7d" ? 6 : 29));
+	d.setUTCDate(d.getUTCDate() - (range === "7d" ? 6 : 29));
 	return d.getTime();
 }
 
