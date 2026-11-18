@@ -24,7 +24,8 @@ pi-arnative replaces pi’s default terminal chrome with a unified visual interf
 - Prometheus Textfile Export: On every `turn_end` (at most one write per minute, and only when the numbers changed) the usage summary is written as an exposition file to `~/.pi/agent/arnative/usage.prom` — point a textfile collector at that folder (`node_exporter --collector.textfile.directory=~/.pi/agent/arnative`) and the spend lands in Grafana next to the infra metrics; set `PI_ARNATIVE_EXPORT=0` to turn it off.
 - Custom Providers: Interactive `/providers` wizard to probe endpoints, pick models, set thinking levels, edit the base URL, provider id or API key, and save OpenAI-, Anthropic-, Gemini-, or Ollama-compatible channels to `models.json` and `auth.json`.
 - Model Heal: Background sync (`/model-heal`) that fills missing compat flags, `/models` token limits, and accepted reasoning effort levels in `models.json`.
-- Auto-compact: Automatic context compaction after a turn settles using smart window tiers or a fixed token budget.
+- Auto-compact: Triggers context compaction after a turn settles using Render-cache-aware Smart tiers or a fixed token budget, plus silent in-memory byte trimming for byte-capped proxies.
+- Render Cache: Caches settled transcript components inside `chatContainer` so TUI redraws stay fast on large sessions (`On` by default).
 
 <details>
 <summary><b>Configuration & Presets</b></summary>
@@ -35,7 +36,12 @@ Saved to `~/.pi/agent/arnative/config.json` via `/arnative`:
 - **Footer cost:** off by default. Press `[c]` in the Footers picker to add the session's cost (`$0.42`, `~$0.42` when no provider reported a billed total) to the metrics row; the choice is stored as `footerCost` in `config.json`.
 - **Chatbox:** `Arnative` (default: rounded box with configurable prompt icon `❯`, `>`, `›`, `▸`, `→`, `\uf44f`, `\udb82\udf79`, `\uf51b`, `\udb80\udf7d`, `\uf120`, `\uf489`, or `\udb80\udd7a` cycled with `[i]`, painted `primary` while typing and `dim` after 3s idle) or `Pi (system)` (built-in top and bottom lines), plus `[D]` to position the working status dialog (`Left`, `Center`, `Right`, `Inside`, `Outside`).
 - **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and alphabetical variants). Press `[g]` in the picker to toggle the Google gradient sweep.
-- **Auto-compact:** Off by default. **Smart** tiers trigger near ~200k tokens (`≥768k→20%`, `≥384k→40%`, `≥192k→80%`, `<192k→pi core`), or pick a fixed budget (`100k` to `400k`).
+- **Render cache:** `On` by default. Reuses rendered lines for settled Pi transcript components in `chatContainer`; streaming items, active animations, and custom or unknown renderers bypass the cache.
+- **Auto-compact:** `Off` by default (extension trigger disabled; Pi core compaction stays in charge).
+  - **Smart:** Adapts to `Render cache` and `contextWindow`. With `Render cache: On`, windows `>= 192k` trigger at `90%` (`~180k` on `200k`, `~900k` on `1M`, `943,718` on `1,048,576`), while `< 192k` defers to Pi core. With `Render cache: Off`, `Smart` uses conservative tiers (`1M -> 20%`, `512k -> 40%`, `256k -> 80%`, `< 192k -> pi core`).
+  - **Fixed budgets (`100k` to `400k`):** Fire at one absolute token count on any window. A budget above a model's capacity does not expand it; Pi core (`reserveTokens`) and provider limits still apply first.
+  - **Trade-offs:** `Smart` retains raw history longer on large windows and avoids unnecessary summarization on short sessions. An earlier fixed budget such as `300k` shrinks prompts after compaction on 1M-window models, but pays an upfront summary cost and resets the prefix cache once; in a 6-turn GLM/Magpie coding A/B sample, `300k` broke even at request 5 and cost 16.1% less at configured rates, while a 2-turn ~250k test cost more than keeping the prefix cached. Thresholds are triggers, not hard caps.
+  - **Byte guard (`PI_ARNATIVE_BYTE_WALL_MB`):** For `remote/*`, `remote-magpie/*`, and models that saw HTTP 413, payloads approaching `900 KB` (at the default `1` MB wall) are trimmed in-memory before sending without triggering compaction or altering session history. Set `PI_ARNATIVE_BYTE_WALL_MB` before starting Pi to scale the ceiling (for example `16` for a `16m` proxy limit); the footer shows wire bytes on the left row.
 - **Model heal:** **Full** (default: offline compat flags, `GET /models` limits and reasoning effort probes cached locally until new models appear, with failed fetches retried after 1h), **Flags** (offline only), or **Off**. Hand-edited fields are never overwritten. `/model-heal` forces every pass, warns that thinking probes can use paid tokens, and shows the stage it is in.
 - **Task list (`todo`):** Stored per session in `~/.pi/agent/arnative/todos/<session-id>.json` (uninstall `@juicesharp/rpiv-todo` first to avoid tool name conflict). Click `[show]` / `[hide]` (or single-click anywhere on the box) or press `ctrl+alt+o` (`alt+o`) to toggle; click `↑`/`↓` counters or press `ctrl+alt+j`/`k` (`alt+j`/`k`) to scroll. Auto-hides 30s after completion (set `PI_ARNATIVE_TODO_HIDE_MS` to override, `0` for immediate hide; expanding pauses the timer).
 
@@ -75,7 +81,7 @@ module deleted here is pruned from the installed copy (a stale entry point would
 | `ctrl+alt+k` · `alt+k` | Scroll task list up |
 | Click `[show]` / `[hide]` · `ctrl+o` | Toggle tool output box |
 | `←` / `Esc` | Step back to parent menu / close active screen |
-| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Auto-compact, Model heal, Providers, Usage, Budget) |
+| `/arnative` | Settings menu (Themes, Headers, Footers, Animations, Render cache, Auto-compact, Model heal, Providers, Usage, Budget) |
 | `/usage` | Token & cost dashboard |
 | `/todos` | Full task list recap |
 | `/providers` | Custom provider manager |
@@ -112,7 +118,10 @@ Bind `app.session.new` in `~/.pi/agent/keybindings.json`:
 | `extensions/tools.ts` | Rounded tool boxes, spinners, duration, and `[show]` / `[hide]` toggles |
 | `extensions/todos.ts` | `todo` tool, boxed widget above editor, and `/todos` screen |
 | `extensions/animations.ts` | Spinner preset picker and live preview |
-| `extensions/autocompact.ts` | Smart and fixed-budget context compaction |
+| `extensions/autocompact.ts` | Smart and fixed-budget context compaction plus silent byte-wall shedding |
+| `extensions/render-cache.ts` | Per-child and container transcript render cache for `chatContainer` |
+| `extensions/budget.ts` | UTC day and rolling 30-day spend caps and footer warnings |
+| `extensions/usage-export.ts` | Prometheus textfile metric export (`usage.prom`) |
 | `extensions/model-heal.ts` | Automatic `models.json` heal triggers and `/model-heal` |
 | `extensions/timestamps.ts` | Message timestamps and bubble backgrounds |
 | `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection styling, and UI polish |
