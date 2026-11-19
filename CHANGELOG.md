@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-19
+
 ### Changed
 - **Side-by-side `edit` diff view (`Before │ After`) with intra-line highlights and `/arnative` toggle.** Expanded `edit` tool boxes render removed and added lines in two aligned columns at terminal inner widths >= 50 columns (with a `─┼─` header separator, stripped `+`/`-` prefixes, and `inverse` highlighting on changed tokens), falling back to unified diff on narrower terminals. Added `/arnative` → **Appearance** → **Diffs** (`Split` default / `Unified`) with live preview saved to `config.json` (`editDiff`) (`extensions/tools.ts`, `extensions/arnative.ts`, `lib/preset-store.ts`).
 
