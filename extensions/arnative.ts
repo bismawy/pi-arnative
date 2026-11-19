@@ -52,7 +52,7 @@ import {
 	setRenderCache,
 	type RenderCacheChoice,
 } from "./render-cache.ts";
-import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
+import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
 import { BACK_KEY_LABEL } from "../lib/shortcuts.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
@@ -594,7 +594,7 @@ const openRenderCache = async (ctx: ExtensionCommandContext): Promise<boolean | 
 	return goBack === true;
 };
 
-const PAYLOAD_CUSTOM_LABEL = "Custom…";
+const PAYLOAD_CUSTOM_LABEL = "Custom";
 
 const PAYLOAD_PRESET_NOTES: Record<PayloadLimitPreset, string> = {
 	Off: "disabled — send full history (may hit HTTP 413 on strict proxies)",
@@ -695,8 +695,25 @@ const openPayloadLimit = async (ctx: ExtensionCommandContext): Promise<boolean |
 		if (!pickCustom) return false;
 
 		const currentMb = payloadLimitMb(opened);
-		const raw = await ctx.ui.input("Payload limit (MB, 1–1024, or Off)", currentMb ? String(currentMb) : "16");
-		if (raw === undefined) continue;
+		const raw = await ctx.ui.custom<string | null>((tui, theme, _kb, done) =>
+			new InputPicker(
+				theme,
+				{
+					title: screenTitle("Payload limit"),
+					description: "Enter a number between 1 and 1024 MB (e.g. 11 or 16), or Off.",
+					legend: INPUT_LEGEND,
+				},
+				currentMb ? String(currentMb) : "",
+				{
+					done: (v) => done(v),
+					cancel: () => done(null),
+					requestRender: () => tui.requestRender(),
+				},
+				"16",
+				ctx.thinkingLevel,
+			),
+		);
+		if (raw === null) continue;
 		const parsed = parsePayloadLimit(raw);
 		if (!parsed) {
 			ctx.ui.notify("[arnative] Enter a number between 1 and 1024 MB (e.g. 11 or 16), or Off.", "warning");
@@ -999,11 +1016,11 @@ if (isMain(import.meta.url)) {
 		assert(rc.map((r) => r.label).join(",") === "On,Off", "Render cache rows: On then Off");
 		assert(rc.filter((r) => r.chosen).map((r) => r.label).join(",") === "On", "Render cache marks only the saved mode");
 		const pl = payloadLimitRows("16 MB");
-		assert(pl.map((r) => r.label).join(",") === "Off,1 MB,4 MB,8 MB,16 MB,32 MB,Custom…", "Payload limit rows list presets then Custom…");
+		assert(pl.map((r) => r.label).join(",") === "Off,1 MB,4 MB,8 MB,16 MB,32 MB,Custom", "Payload limit rows list presets then Custom");
 		assert(pl.filter((r) => r.chosen).map((r) => r.label).join(",") === "16 MB", "Payload limit marks the active preset");
 		const plCustom = payloadLimitRows("11 MB");
-		assert(plCustom.filter((r) => r.chosen).map((r) => r.label).join(",") === "Custom…", "Payload limit marks Custom… when a non-preset MB is active");
-		assert(plCustom[plCustom.length - 1]!.note!.includes("11 MB"), "Custom… row displays the active custom MB");
+		assert(plCustom.filter((r) => r.chosen).map((r) => r.label).join(",") === "Custom", "Payload limit marks Custom when a non-preset MB is active");
+		assert(plCustom[plCustom.length - 1]!.note!.includes("11 MB"), "Custom row displays the active custom MB");
 	}
 	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Render cache", "Payload limit", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
