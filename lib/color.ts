@@ -75,6 +75,34 @@ export function toHex(value: string): string {
 	throw new Error(`Not a hex/oklch color: ${value}`);
 }
 
+/**
+ * Nearest xterm-256 index for an sRGB color, mirroring `rgbToAnsi256` in
+ * @earendil-works/pi-tui (`colors.ts`). pi draws every theme color through that
+ * quantizer whenever the terminal is not truecolor, so a value that lands on the
+ * 6x6x6 cube black renders as `#000000` no matter what the theme file declared.
+ * Kept in sync by test/theme-canvas.test.ts.
+ */
+export function rgbToAnsi256(rgb: Rgb): number {
+	const CUBE = [0, 95, 135, 175, 215, 255];
+	const GRAY = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
+	const nearest = (values: readonly number[], v: number) =>
+		values.reduce((best, x, i) => (Math.abs(x - v) < Math.abs(values[best]! - v) ? i : best), 0);
+	const distance = (a: Rgb, b: Rgb) => (a.r - b.r) ** 2 * 0.299 + (a.g - b.g) ** 2 * 0.587 + (a.b - b.b) ** 2 * 0.114;
+	const [ri, gi, bi] = [rgb.r, rgb.g, rgb.b].map((c) => nearest(CUBE, c)) as [number, number, number];
+	const cube = { r: CUBE[ri]!, g: CUBE[gi]!, b: CUBE[bi]! };
+	const grayIndex = nearest(GRAY, Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b));
+	const gray = { r: GRAY[grayIndex]!, g: GRAY[grayIndex]!, b: GRAY[grayIndex]! };
+	const spread = Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+	if (spread < 10 && distance(rgb, gray) < distance(rgb, cube)) return 232 + grayIndex;
+	return 16 + 36 * ri + 6 * gi + bi;
+}
+
+/** `#rrggbb` -> sRGB channels. Inverse of the hex branch of {@link toHex}. */
+export function hexToRgb(hex: string): Rgb {
+	const v = toHex(hex);
+	return { r: parseInt(v.slice(1, 3), 16), g: parseInt(v.slice(3, 5), 16), b: parseInt(v.slice(5, 7), 16) };
+}
+
 function relativeLuminance(hex: string): number {
 	const [r, g, b] = [1, 3, 5]
 		.map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -122,5 +150,11 @@ if (isMain(import.meta.url)) {
 	const back = hexToOklch(FIXTURE.cyan);
 	assert(Math.abs(back.H - 218) < 6, `hexToOklch hue of ${FIXTURE.cyan} ~218 (got ${back.H.toFixed(1)})`);
 	assert(oklchToRgb(0.7, 0.4, 145).chroma < 0.4, "out-of-gamut chroma is reduced");
+	// Quantizer vectors taken from pi-tui's own table: cube black, the teal panel pi's
+	// dark theme uses, and a near-neutral that must fall on the grey ramp.
+	assert(rgbToAnsi256({ r: 0, g: 24, b: 23 }) === 16, "near-black quantizes to cube black (index 16)");
+	assert(rgbToAnsi256({ r: 33, g: 59, b: 73 }) === 23, "pi dark panel quantizes to 23");
+	assert(rgbToAnsi256({ r: 200, g: 200, b: 200 }) >= 232, "neutral grey uses the grey ramp");
+	assert(hexToRgb("#1c3f3d").g === 0x3f, "hexToRgb reads channels");
 	console.log("lib/color.ts OK");
 }

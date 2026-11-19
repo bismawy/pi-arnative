@@ -42,7 +42,7 @@ import { renderBoxLines } from "../lib/box.ts";
 import { statusRows } from "../lib/status-widget.ts";
 import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
+import { contrast, hexToRgb, oklchToRgb, parseOklch, rgbToAnsi256, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
 import { patchOnce } from "../lib/patch.ts";
 
@@ -718,6 +718,13 @@ if (isMain(import.meta.url)) {
 		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder", "mdHr",
 		"scrollbarTrack", "scrollbarThumb",
 	]);
+	// Every background a box or a highlight paints. These carry no text contrast
+	// requirement, but each must still be *visible*: a box the same color as the
+	// terminal canvas is not a box.
+	const BOX_TOKENS = [
+		"userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
+		"selectedBg", "searchMatchBg",
+	];
 	const secondary = new Set(["muted", "dim", "mdQuote", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
 	// Thinking ramp: the higher the more readable; thinkingMax = accent (measured on the pill path).
 	const ramp: Record<string, number> = {
@@ -831,6 +838,15 @@ if (isMain(import.meta.url)) {
 		// Scrollbar thumb & highlight must be distinguishable from track/selection (they used to be identical).
 		assert(hex("scrollbarThumb") !== hex("scrollbarTrack"), `theme ${f}: scrollbarThumb still equals scrollbarTrack`);
 		assert(hex("searchMatchBg") !== hex("selectedBg"), `theme ${f}: searchMatchBg still equals selectedBg`);
+		// Every box must be visible on a pure-black terminal AND survive 256-color
+		// quantization. At L 0.19 the panel was `#001817` (1.14:1 on black) and every
+		// theme's boxes quantized to cube black (index 16) — invisible in both modes.
+		for (const tok of BOX_TOKENS) {
+			const color = hex(tok);
+			assert(contrast(color, "#000000") >= 1.4, `theme ${f}: ${tok} ${color} is invisible on a black terminal`);
+			const quantized = rgbToAnsi256(hexToRgb(color));
+			assert(quantized !== 16, `theme ${f}: ${tok} ${color} quantizes to index 16 (pure black) in 256-color mode`);
+		}
 	}
 	// Only `muted`, `text` and `selectedBg` exist. pi's Theme constructor maps whatever
 	// it gets — including the thinkingMax <- thinkingXhigh fallback — so these probe
