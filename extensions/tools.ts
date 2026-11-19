@@ -37,14 +37,18 @@ import {
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { homedir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../lib/box.ts";
 import { getActiveTheme, stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
 import { actionWord } from "../lib/todos.ts";
+import { EDIT_DIFF_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { clearRenderCache } from "./render-cache.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
 
-type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string };
+type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; inverse?(text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
 type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown>; durationMs?: number };
 type Res = (r: TResult, th: Theme, soft: (s: string) => string, isErr: boolean, expanded: boolean) => string;
@@ -881,7 +885,7 @@ function minimal(
 	name: (th: Theme, soft: (s: string) => string) => string,
 	call: (a: any, th: Theme, soft: (s: string) => string, expanded: boolean) => string,
 	res: Res = resText,
-	full: (r: TResult, th: Theme) => string[] = fullText,
+	full: (r: TResult, th: Theme, inner: number) => string[] = fullText,
 ): void {
 	OWN_BOX.add(String(tool.name ?? ""));
 	pi.registerTool({
@@ -950,7 +954,7 @@ function minimal(
 					label,
 				);
 				const resLine = res(result, theme, soft, isErr, expanded);
-				if (expanded) rows.push(...full(result, theme));
+				if (expanded) rows.push(...full(result, theme, inner));
 				else if (resLine) rows.push(oneRow(resLine, inner));
 				return box(theme, width, rows);
 			});
@@ -1080,18 +1084,193 @@ function arnativeTools(pi: ExtensionAPI) {
 			}
 			return `${resHead(th)} ${th.fg("toolDiffAdded", `+${add}`)} / ${th.fg("toolDiffRemoved", `-${del}`)}`;
 		},
-		(r, th) => {
-			const diff: string = r.details?.diff ?? "";
-			if (!diff) return fullText(r, th);
-			return diff.split("\n").map((l) =>
-				l.startsWith("+") && !l.startsWith("+++")
-					? th.fg("toolDiffAdded", l)
-					: l.startsWith("-") && !l.startsWith("---")
-						? th.fg("toolDiffRemoved", l)
-						: th.fg("toolDiffContext", l),
-			);
-		},
+		(r, th, inner) => formatEditDiff(r, th, inner),
 	);
+}
+
+const EDIT_DIFF_CONFIG_KEY = Symbol.for("pi-arnative.editDiff");
+const SPLIT_DIFF_MIN_WIDTH = 50;
+const INTRA_LINE_MAX_TOKENS = 200;
+
+export type EditDiffMode = "Split" | "Unified";
+export const EDIT_DIFF_CHOICES: readonly EditDiffMode[] = ["Split", "Unified"];
+
+export function activeEditDiff(): EditDiffMode {
+	const stored =
+		(globalThis as Record<symbol, unknown>)[EDIT_DIFF_CONFIG_KEY] ??
+		loadChoice(EDIT_DIFF_KEY, EDIT_DIFF_CHOICES);
+	return EDIT_DIFF_CHOICES.includes(stored as EditDiffMode)
+		? (stored as EditDiffMode)
+		: "Split";
+}
+
+export function setEditDiff(mode: EditDiffMode): void {
+	(globalThis as Record<symbol, unknown>)[EDIT_DIFF_CONFIG_KEY] = mode;
+	saveChoice(EDIT_DIFF_KEY, mode);
+	clearRenderCache();
+}
+
+type DiffSide = { styled: string } | null;
+
+function unifiedDiffLines(diff: string, th: Theme): string[] {
+	return diff.split("\n").map((l) =>
+		l.startsWith("+") && !l.startsWith("+++")
+			? th.fg("toolDiffAdded", l)
+			: l.startsWith("-") && !l.startsWith("---")
+				? th.fg("toolDiffRemoved", l)
+				: th.fg("toolDiffContext", l),
+	);
+}
+
+function tokenizeDiffLine(s: string): string[] {
+	return s.match(/[A-Za-z0-9_]+|\s+|[^\sA-Za-z0-9_]/g) ?? [];
+}
+
+/**
+ * Highlights changed tokens between paired old/new lines using `inverse`,
+ * keeping leading indentation un-highlighted.
+ */
+function highlightLinePair(oldText: string, newText: string, th: Theme): { left: string; right: string } {
+	const a = tokenizeDiffLine(oldText);
+	const b = tokenizeDiffLine(newText);
+	if (a.length === 0 || b.length === 0 || a.length > INTRA_LINE_MAX_TOKENS || b.length > INTRA_LINE_MAX_TOKENS) {
+		return { left: th.fg("toolDiffRemoved", oldText), right: th.fg("toolDiffAdded", newText) };
+	}
+
+	const m = a.length;
+	const n = b.length;
+	const dp: Uint16Array[] = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+	for (let i = m - 1; i >= 0; i--) {
+		for (let j = n - 1; j >= 0; j--) {
+			dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+		}
+	}
+
+	const inv = (s: string) => (th.inverse ? th.inverse(s) : `\x1b[7m${s}\x1b[27m`);
+	let left = "";
+	let right = "";
+	let i = 0;
+	let j = 0;
+	let seenNonWsLeft = false;
+	let seenNonWsRight = false;
+
+	const emitChanged = (tok: string, color: string, seenNonWs: boolean): [string, boolean] => {
+		if (!seenNonWs && /^\s+$/.test(tok)) return [th.fg(color, tok), false];
+		return [th.fg(color, inv(tok)), true];
+	};
+
+	while (i < m && j < n) {
+		if (a[i] === b[j]) {
+			const tok = a[i]!;
+			if (tok.trim()) {
+				seenNonWsLeft = true;
+				seenNonWsRight = true;
+			}
+			left += th.fg("toolDiffRemoved", tok);
+			right += th.fg("toolDiffAdded", tok);
+			i++;
+			j++;
+		} else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+			const [chunk, seen] = emitChanged(a[i]!, "toolDiffRemoved", seenNonWsLeft);
+			left += chunk;
+			seenNonWsLeft = seen;
+			i++;
+		} else {
+			const [chunk, seen] = emitChanged(b[j]!, "toolDiffAdded", seenNonWsRight);
+			right += chunk;
+			seenNonWsRight = seen;
+			j++;
+		}
+	}
+	while (i < m) {
+		const [chunk, seen] = emitChanged(a[i]!, "toolDiffRemoved", seenNonWsLeft);
+		left += chunk;
+		seenNonWsLeft = seen;
+		i++;
+	}
+	while (j < n) {
+		const [chunk, seen] = emitChanged(b[j]!, "toolDiffAdded", seenNonWsRight);
+		right += chunk;
+		seenNonWsRight = seen;
+		j++;
+	}
+	return { left, right };
+}
+
+function wrapDiffCell(side: DiffSide, width: number): string[] {
+	if (!side) return [""];
+	const clean = side.styled.replace(/\t/g, "  ");
+	return clean === "" ? [""] : wrapTextWithAnsi(clean, width);
+}
+
+function renderSplitPair(left: DiffSide, right: DiffSide, leftW: number, rightW: number, sep: string): string[] {
+	const leftLines = wrapDiffCell(left, leftW);
+	const rightLines = wrapDiffCell(right, rightW);
+	const count = Math.max(leftLines.length, rightLines.length);
+	const rows: string[] = [];
+	for (let i = 0; i < count; i++) {
+		const l = leftLines[i] ?? "";
+		const r = rightLines[i] ?? "";
+		const pad = " ".repeat(Math.max(0, leftW - visibleWidth(l)));
+		rows.push(`${l}${pad}${sep}${r}`);
+	}
+	return rows;
+}
+
+/**
+ * Formats an `edit` diff side-by-side (Before | After) when the box inner width
+ * is at least {@link SPLIT_DIFF_MIN_WIDTH}, falling back to unified diff on
+ * narrow terminals or when `details.diff` is absent.
+ */
+export function formatEditDiff(r: TResult, th: Theme, inner: number, mode: EditDiffMode = activeEditDiff()): string[] {
+	const diff: string = r.details?.diff ?? "";
+	if (!diff) return fullText(r, th);
+	if (mode === "Unified" || inner < SPLIT_DIFF_MIN_WIDTH) return unifiedDiffLines(diff, th);
+
+	const sep = th.fg("dim", " │ ");
+	const leftW = Math.floor((inner - 3) / 2);
+	const rightW = inner - 3 - leftW;
+	const out: string[] = [
+		`${th.fg("dim", "Before")}${" ".repeat(Math.max(0, leftW - 6))}${sep}${th.fg("dim", "After")}`,
+		th.fg("dim", `${"─".repeat(leftW)}─┼─${"─".repeat(rightW)}`),
+	];
+
+	let dels: string[] = [];
+	let adds: string[] = [];
+	const flushChanges = () => {
+		const count = Math.max(dels.length, adds.length);
+		for (let i = 0; i < count; i++) {
+			const d = dels[i];
+			const a = adds[i];
+			if (d !== undefined && a !== undefined) {
+				const { left, right } = highlightLinePair(d, a, th);
+				out.push(...renderSplitPair({ styled: left }, { styled: right }, leftW, rightW, sep));
+			} else {
+				const left: DiffSide = d !== undefined ? { styled: th.fg("toolDiffRemoved", d) } : null;
+				const right: DiffSide = a !== undefined ? { styled: th.fg("toolDiffAdded", a) } : null;
+				out.push(...renderSplitPair(left, right, leftW, rightW, sep));
+			}
+		}
+		dels = [];
+		adds = [];
+	};
+
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("-") && !line.startsWith("---")) {
+			dels.push(line.slice(1));
+		} else if (line.startsWith("+") && !line.startsWith("+++")) {
+			adds.push(line.slice(1));
+		} else if (line.startsWith(" ")) {
+			flushChanges();
+			const side: DiffSide = { styled: th.fg("toolDiffContext", line.slice(1)) };
+			out.push(...renderSplitPair(side, side, leftW, rightW, sep));
+		} else {
+			flushChanges();
+			out.push(th.fg("toolDiffContext", line));
+		}
+	}
+	flushChanges();
+	return out;
 }
 
 // codemode: pi's renderer wrapped in our box. renderShell "self" keeps the
@@ -1734,6 +1913,40 @@ if (isMain(import.meta.url)) {
 			minRender("edit", { path: "README.md" }, diffRes).every((l) => visibleWidth(l) === 74),
 			"minimal(): hint row still fills the box width",
 		);
+		// Side-by-side edit diff: Before | After at wide widths, unified fallback when narrow
+		const diffTmp = mkdtempSync(join(tmpdir(), "arnative-editdiff-"));
+		const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = diffTmp;
+		delete (globalThis as Record<symbol, unknown>)[EDIT_DIFF_CONFIG_KEY];
+		resetPresetCache();
+		try {
+			const openedIsolated = minRender("edit", { path: "README.md" }, diffRes, true);
+			assert(openedIsolated.some((l) => l.includes("Before") && l.includes("│") && l.includes("After")), "edit: expanded view shows Before | After header");
+			assert(openedIsolated.some((l) => l.includes("─┼─")), "edit: expanded view shows header separator");
+			assert(openedIsolated.some((l) => l.includes("old") && !l.includes("-old") && l.includes("│") && l.includes("new") && !l.includes("+new")), "edit: expanded view pairs old and new without +/- prefix");
+			const intraRes = { content: [{ type: "text", text: "ok" }], details: { diff: "-const x = 1;\n+const x = 2;" } };
+			const intraLines = formatEditDiff(intraRes, th, 70);
+			assert(intraLines.some((l) => l.includes("const x = \x1b[7m1\x1b[27m;") && l.includes("const x = \x1b[7m2\x1b[27m;")), "edit: intra-line diff highlights only changed tokens");
+			const pureAdd = minRender("edit", { path: "README.md" }, { content: [{ type: "text", text: "ok" }], details: { diff: "+ 10 added\n  11 ctx" } }, true);
+			assert(pureAdd.some((l) => /^\│\s+\│\s+10 added/.test(l)), "edit: pure addition leaves Before column blank and strips +");
+			assert(pureAdd.some((l) => l.includes("11 ctx") && l.indexOf("11 ctx") !== l.lastIndexOf("11 ctx")), "edit: context line appears in both columns");
+			assert(pureAdd.every((l) => visibleWidth(l) === 74), "edit: side-by-side rows keep exact box width");
+			const narrow = formatEditDiff(diffRes, th, 40);
+			assert(!narrow.some((l) => l.includes("Before") && l.includes("After")), "edit: narrow width falls back to unified diff");
+			setEditDiff("Unified");
+			const liveUnified = minRender("edit", { path: "README.md" }, diffRes, true);
+			assert(!liveUnified.some((l) => l.includes("Before") && l.includes("After")), "edit: setEditDiff('Unified') switches immediately");
+			assert(liveUnified.some((l) => l.includes("-old")) && liveUnified.some((l) => l.includes("+new")), "edit: Unified mode keeps +/- lines");
+			setEditDiff("Split");
+			const liveSplit = minRender("edit", { path: "README.md" }, diffRes, true);
+			assert(liveSplit.some((l) => l.includes("Before") && l.includes("After")), "edit: setEditDiff('Split') switches back immediately");
+		} finally {
+			if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+			delete (globalThis as Record<symbol, unknown>)[EDIT_DIFF_CONFIG_KEY];
+			resetPresetCache();
+			rmSync(diffTmp, { recursive: true, force: true });
+		}
 	}
 
 	// Chrome DevTools: their bare renderers are replaced by our box (title + summary).
