@@ -67,7 +67,7 @@ export interface MenuCategory {
 
 export const MENU_CATEGORIES: readonly MenuCategory[] = [
 	{ label: "Appearance", description: "themes, headers, footers, chatbox, animations" },
-	{ label: "Performance", description: "auto-compact, render cache" },
+	{ label: "Performance", description: "auto-compact, render cache, payload limit" },
 	{ label: "Models", description: "custom providers, model heal" },
 	{ label: "Spend", description: "usage dashboard, budget caps" },
 ];
@@ -1136,54 +1136,55 @@ if (isMain(import.meta.url)) {
 	// setting, only Enter opens a row. `reverted` proves it.
 	let menuReverts = 0;
 	let menuCancelled = false;
-	const mainPicker = new ListPicker(fakeTheme, labels, undefined, {
+	const categoryRows = menuRows([...MENU_CATEGORIES]);
+	const mainPicker = new ListPicker(fakeTheme, categoryRows, undefined, {
 		preview: () => {},
 		revert: () => { menuReverts++; },
 		done: () => {},
 		cancel: () => { menuCancelled = true; },
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
-	// 100 columns: the description names the screens (a tripwire — a screen added to MENUS must
+	// 120 columns: the description names the screens (a tripwire — a screen added to MENUS must
 	// be added to the copy too), and that one-liner no longer fits 100.
-	const menuLines = mainPicker.render(100);
+	const menuLines = mainPicker.render(120);
 	assert(menuLines.some((l) => l.includes(MENU_TITLE)), "the main menu renders its title");
 	assert(menuLines.some((l) => l.includes("[Esc] Close") && !l.includes("←")), "the root menu legend renders without a back key");
 	assert(menuLines.some((l) => l.includes(MENU_DESC)), "the main menu renders the description under the title");
 	assert(menuLines.findIndex((l) => l.includes(MENU_TITLE)) < menuLines.findIndex((l) => l.includes(MENU_DESC)), "description sits below the title");
-	assert(menuLines.every((l) => visibleWidth(l) === 100), "main menu lines fit the width");
-	// The pinned /arnative layout: `❯ Themes  ·  note`, every `·` in one column (skill rule 10).
+	assert(menuLines.every((l) => visibleWidth(l) === 120), "main menu lines fit the width");
+	// The pinned /arnative layout: `❯ Appearance  ·  themes, headers…`, every `·` in one column.
 	const plainMenu = menuLines.map(stripAnsi);
-	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("❯ Themes"))!;
+	const row0 = menuLines.map(stripAnsi).find((l) => l.includes("❯ Appearance"))!;
 	// The row is `│ ❯ <label padded to the widest label><divider><note>`: assert the shape,
 	// not a literal run of spaces, so adding a wider screen cannot break the layout test.
-	const widest = Math.max(...MENUS.map((m) => m.label.length));
+	const widest = Math.max(...MENU_CATEGORIES.map((c) => c.label.length));
 	assert(
-		row0.startsWith(`│ ❯ ${"Themes".padEnd(widest)}${ROW_DIVIDER}arnative themes only`),
+		row0.startsWith(`│ ❯ ${"Appearance".padEnd(widest)}${ROW_DIVIDER}themes, headers, footers`),
 		`menu row layout, got ${JSON.stringify(row0)}`,
 	);
 	assert(plainMenu.filter((l) => l.includes(ROW_DIVIDER)).every((l) => l.indexOf(ROW_DIVIDER) === row0.indexOf(ROW_DIVIDER)), "every divider sits in one column");
 	assert(
-		plainMenu.some((l) => l.startsWith(`│   ${"Headers".padEnd(widest)}${ROW_DIVIDER}`)),
+		plainMenu.some((l) => l.startsWith(`│   ${"Performance".padEnd(widest)}${ROW_DIVIDER}`)),
 		"unselected rows indent to the marker column",
 	);
 
 	// A menu opened with a `current` row starts there. The handler passes the row it last
 	// used, so a submenu reopened by `←` lands back on that row instead of jumping to the
 	// top of the list — the cursor is the user's place, not the component's business.
-	const resumed = new ListPicker(fakeTheme, labels, "Usage", {
+	const resumed = new ListPicker(fakeTheme, categoryRows, "Models", {
 		preview: () => {},
 		revert: () => {},
 		done: () => {},
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
 	const resumedRows = resumed.render(60).map(stripAnsi);
-	assert(resumedRows.some((l) => l.startsWith("│ ❯ Usage")), "the menu reopens on the row it was left on");
-	assert(!resumedRows.some((l) => l.startsWith("│ ❯ Themes")), "and not on the first row");
+	assert(resumedRows.some((l) => l.startsWith("│ ❯ Models")), "the menu reopens on the row it was left on");
+	assert(!resumedRows.some((l) => l.startsWith("│ ❯ Appearance")), "and not on the first row");
 
 	// The box border follows the session's thinking level (theme `thinking*` slot), so the
 	// menu reads as belonging to the active model.
 	const tagged = { fg: (c: string, t: string) => `<${c}>${t}</>`, bold: (t: string) => `<bold>${t}</bold>` };
-	const thinkingPicker = new ListPicker(tagged, labels, undefined, {
+	const thinkingPicker = new ListPicker(tagged, categoryRows, undefined, {
 		preview: () => {},
 		revert: () => {},
 		done: () => {},
@@ -1208,7 +1209,7 @@ if (isMain(import.meta.url)) {
 		"the chosen label is the accentSoft token in bold",
 	);
 	assert(taggedLines.some((l) => l.includes("<accent>❯ ")), "the ❯ marker keeps the accent voice");
-	const offPicker = new ListPicker(tagged, labels, undefined, {
+	const offPicker = new ListPicker(tagged, categoryRows, undefined, {
 		preview: () => {},
 		revert: () => {},
 		done: () => {},
