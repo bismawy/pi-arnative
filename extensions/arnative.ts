@@ -24,7 +24,8 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { EDIT_DIFF_CHOICES, activeEditDiff, setEditDiff, type EditDiffMode } from "./tools.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset, type FooterPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
 import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
@@ -66,7 +67,7 @@ export interface MenuCategory {
 }
 
 export const MENU_CATEGORIES: readonly MenuCategory[] = [
-	{ label: "Appearance", description: "themes, headers, footers, chatbox, animations" },
+	{ label: "Appearance", description: "themes, headers, footers, chatbox, animations, diffs" },
 	{ label: "Performance", description: "auto-compact, render cache, payload limit" },
 	{ label: "Models", description: "custom providers, model heal" },
 	{ label: "Spend", description: "usage dashboard, budget caps" },
@@ -554,6 +555,66 @@ export function renderCacheRows(opened: RenderCacheChoice): ListRow[] {
 	return RENDER_CACHE_CHOICES.map((c) => ({ label: c, note: RENDER_CACHE_NOTES[c], chosen: c === opened }));
 }
 
+const DIFFS_PICKER_TEXT: ListPickerText = {
+	title: screenTitle("Diffs"),
+	description: "Selection previews live — side-by-side Before │ After or unified +/- diff.",
+	legend: LIST_LEGEND_LIVE,
+};
+
+const EDIT_DIFF_NOTES: Record<EditDiffMode, string> = {
+	Split: "side-by-side Before │ After columns (default)",
+	Unified: "single-column +/- diff, easier to copy-paste",
+};
+
+/** Rows for `/arnative` → Diffs: Split / Unified. */
+export function diffRows(): ListRow[] {
+	return EDIT_DIFF_CHOICES.map((c) => ({
+		label: c,
+		note: EDIT_DIFF_NOTES[c],
+	}));
+}
+
+const openDiffs = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	const opened = activeEditDiff();
+
+	if (ctx.mode !== "tui") {
+		const labels = EDIT_DIFF_CHOICES.map((c) => (c === opened ? `${c} ✓` : c));
+		const pick = await ctx.ui.select(DIFFS_PICKER_TEXT.title, labels);
+		if (pick === undefined) return;
+		const choice = EDIT_DIFF_CHOICES[labels.indexOf(pick)]!;
+		setEditDiff(choice);
+		ctx.ui.notify(`[arnative] Diffs: ${choice}`, "info");
+		return;
+	}
+
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		const picker = new ListPicker(
+			theme,
+			diffRows(),
+			opened,
+			{
+				preview: (name) => setEditDiff(name as EditDiffMode),
+				revert: () => setEditDiff(opened),
+				done: () => {
+					announce(ctx.ui, `Diffs: ${activeEditDiff()}.`);
+					done(false);
+				},
+				cancel: () => done(false),
+				back: () => {
+					if (activeEditDiff() !== opened) setEditDiff(opened);
+					done(true);
+				},
+				requestRender: () => tui.requestRender(),
+			},
+			DIFFS_PICKER_TEXT,
+			true,
+			ctx.thinkingLevel,
+		);
+		return picker;
+	});
+	return goBack === true;
+};
+
 const openRenderCache = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeRenderCache();
 
@@ -761,6 +822,13 @@ export const MENUS: ArnativeMenu[] = [
 		open: openAnimations,
 	},
 	{
+		value: "diffs",
+		label: "Diffs",
+		description: "side-by-side Before/After or unified diff",
+		group: "Appearance",
+		open: openDiffs,
+	},
+	{
 		value: "compact",
 		label: "Auto-compact",
 		description: "smart by window or a fixed token budget (off by default)",
@@ -957,6 +1025,7 @@ export function recordProfile(): void {
 		[CHATBOX_DIALOG_KEY]: activeChatboxDialog(),
 		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
+		[EDIT_DIFF_KEY]: activeEditDiff(),
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
 		[PAYLOAD_LIMIT_KEY]: savedPayloadLimit(),
 		[MODEL_HEAL_KEY]: activeModelHeal(),
@@ -1001,7 +1070,7 @@ if (isMain(import.meta.url)) {
 	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, render, payload, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 12, "twelve settings screens");
+	assert(MENUS.length === 13, "thirteen settings screens");
 	{
 		const catRows = menuRows([...MENU_CATEGORIES]);
 		assert(catRows.map((r) => r.label).join(",") === "Appearance,Performance,Models,Spend", "root menu lists the four categories in order");
@@ -1015,6 +1084,8 @@ if (isMain(import.meta.url)) {
 		const rc = renderCacheRows("On");
 		assert(rc.map((r) => r.label).join(",") === "On,Off", "Render cache rows: On then Off");
 		assert(rc.filter((r) => r.chosen).map((r) => r.label).join(",") === "On", "Render cache marks only the saved mode");
+		const dRows = diffRows();
+		assert(dRows.map((r) => r.label).join(",") === "Split,Unified", "Diffs rows: Split then Unified");
 		const pl = payloadLimitRows("16 MB");
 		assert(pl.map((r) => r.label).join(",") === "Off,1 MB,4 MB,8 MB,16 MB,32 MB,Custom", "Payload limit rows list presets then Custom");
 		assert(pl.filter((r) => r.chosen).map((r) => r.label).join(",") === "16 MB", "Payload limit marks the active preset");
@@ -1022,7 +1093,7 @@ if (isMain(import.meta.url)) {
 		assert(plCustom.filter((r) => r.chosen).map((r) => r.label).join(",") === "Custom", "Payload limit marks Custom when a non-preset MB is active");
 		assert(plCustom[plCustom.length - 1]!.note!.includes("11 MB"), "Custom row displays the active custom MB");
 	}
-	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Auto-compact", "Render cache", "Payload limit", "Providers", "Usage", "Budget"]) {
+	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Diffs", "Auto-compact", "Render cache", "Payload limit", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");
