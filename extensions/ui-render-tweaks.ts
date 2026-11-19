@@ -12,7 +12,7 @@
  * 5. `↓ Jump to latest message` pill (fullscreen): bg selectedBg (grey) -> accent,
  *    text darkened (theme canvas) so contrast stays high (9.6:1).
  * 6. `ctx.ui.select` rows: pi paints the whole selected row accent -> keep accent on
- *    the `→` marker and `·` separators, selected text in soft.
+ *    the `❯` marker and `·` separators, selected text in soft.
  */
 import {
 	AssistantMessageComponent,
@@ -40,9 +40,9 @@ import {
 import { readdirSync, readFileSync } from "node:fs";
 import { renderBoxLines } from "../lib/box.ts";
 import { statusRows } from "../lib/status-widget.ts";
-import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softSecondaryOf } from "../lib/ansi.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../lib/ansi.ts";
 import { assert, isMain } from "../lib/check.ts";
-import { contrast, oklchToRgb, parseOklch, toHex } from "../lib/color.ts";
+import { contrast, hexToRgb, oklchToRgb, parseOklch, rgbToAnsi256, toHex } from "../lib/color.ts";
 import { expandKeyName } from "../lib/format.ts";
 import { patchOnce } from "../lib/patch.ts";
 
@@ -171,12 +171,12 @@ if (TuiAltScreen?.prototype) {
 }
 
 // 6. Select menus (ctx.ui.select -> ExtensionSelectorComponent.updateList): pi colors the
-// whole selected row accent. Arnative keeps accent on the `→` marker and `·` separators
+// whole selected row accent. Arnative keeps accent on the `❯` marker and `·` separators
 // and moves the selected text to soft (accent on themes without the token).
 
 /** Selected row body: `·` separators accent, the text around them soft. */
 export function selectRowText(row: string, th: { fg(c: string, t: string): string }): string {
-	const soft = softSecondaryOf(th);
+	const soft = softOf(th);
 	return row
 		.split("·")
 		.map((part) => soft(part))
@@ -197,7 +197,7 @@ if (ExtensionSelectorComponent?.prototype) {
 		for (let i = 0; i < this.options.length; i++) {
 			const text =
 				i === this.selectedIndex
-					? th.fg("accent", "→ ") + selectRowText(this.options[i]!, th)
+					? th.fg("accent", "❯ ") + selectRowText(this.options[i]!, th)
 					: `  ${th.fg("text", this.options[i]!)}`;
 			this.listContainer.addChild(new Text(text, 1, 0));
 		}
@@ -697,7 +697,7 @@ if (isMain(import.meta.url)) {
 	assert(accentPill("other text", thPill) === "other text", "pill: non-pill text untouched");
 	assert(accentPill(pillOriginal, null) === pillOriginal, "pill: no theme -> passed through");
 
-	// select rows: `→` + `·` stay accent, selected text moves to accentSoft
+	// select rows: `❯` + `·` stay accent, selected text moves to accentSoft
 	const tagFg = { fg: (c: string, t: string) => `<${c}>${t}</${c}>` };
 	assert(
 		selectRowText("Routing  ·  off", tagFg) === "<accentSoft>Routing  </accentSoft><accent>·</accent><accentSoft>  off</accentSoft>",
@@ -718,6 +718,13 @@ if (isMain(import.meta.url)) {
 		"searchMatchBg", "border", "borderAccent", "borderMuted", "mdCodeBlockBorder", "mdQuoteBorder", "mdHr",
 		"scrollbarTrack", "scrollbarThumb",
 	]);
+	// Every background a box or a highlight paints. These carry no text contrast
+	// requirement, but each must still be *visible*: a box the same color as the
+	// terminal canvas is not a box.
+	const BOX_TOKENS = [
+		"userMessageBg", "customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg",
+		"selectedBg", "searchMatchBg",
+	];
 	const secondary = new Set(["muted", "dim", "mdQuote", "mdLinkUrl", "toolOutput", "toolDiffContext", "thinkingText", "syntaxComment"]);
 	// Thinking ramp: the higher the more readable; thinkingMax = accent (measured on the pill path).
 	const ramp: Record<string, number> = {
@@ -831,6 +838,15 @@ if (isMain(import.meta.url)) {
 		// Scrollbar thumb & highlight must be distinguishable from track/selection (they used to be identical).
 		assert(hex("scrollbarThumb") !== hex("scrollbarTrack"), `theme ${f}: scrollbarThumb still equals scrollbarTrack`);
 		assert(hex("searchMatchBg") !== hex("selectedBg"), `theme ${f}: searchMatchBg still equals selectedBg`);
+		// Every box must be visible on a pure-black terminal AND survive 256-color
+		// quantization. At L 0.19 the panel was `#001817` (1.14:1 on black) and every
+		// theme's boxes quantized to cube black (index 16) — invisible in both modes.
+		for (const tok of BOX_TOKENS) {
+			const color = hex(tok);
+			assert(contrast(color, "#000000") >= 1.4, `theme ${f}: ${tok} ${color} is invisible on a black terminal`);
+			const quantized = rgbToAnsi256(hexToRgb(color));
+			assert(quantized !== 16, `theme ${f}: ${tok} ${color} quantizes to index 16 (pure black) in 256-color mode`);
+		}
 	}
 	// Only `muted`, `text` and `selectedBg` exist. pi's Theme constructor maps whatever
 	// it gets — including the thinkingMax <- thinkingXhigh fallback — so these probe

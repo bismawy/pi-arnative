@@ -24,7 +24,7 @@ import { matchesKey, truncateToWidth, visibleWidth, type Component } from "@eare
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { thinkingColorOf } from "../lib/ansi.ts";
+import { softOf, thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { announce } from "../lib/status-widget.ts";
@@ -343,6 +343,7 @@ class BudgetModalComponent implements Component {
 		const bold = th.bold ?? ((t: string) => t);
 		const dim = (s: string) => th.fg("dim", s);
 		const acc = (s: string) => th.fg("accent", s);
+		const soft = softOf(th);
 		// Levels ride the active theme's semantic slots: OK accent, WARN warning, OVER error.
 		const levelPaint = (level: BudgetLevel) =>
 			level === "ok" ? acc : level === "warn" ? (s: string) => th.fg("warning", s) : (s: string) => th.fg("error", s);
@@ -382,10 +383,10 @@ class BudgetModalComponent implements Component {
 		for (let i = 0; i < this.rows.length; i++) {
 			const row = this.rows[i]!;
 			const isSelected = i === this.selected;
-			const paint = isSelected ? (s: string) => acc(bold(s)) : (s: string) => th.fg(row.note ? "text" : "muted", s);
+			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg("text", s);
 			const note = budgetRowNote(row.label);
 			const noteText = note ? ` ${dim("·")} ${dim(note)}` : "";
-			body.push(`${isSelected ? acc("→ ") : "  "}${paint(row.label)}${noteText}`);
+			body.push(`${isSelected ? acc("❯ ") : "  "}${paint(row.label)}${noteText}`);
 		}
 		return renderScreen(th, width, this.text, body.map((l) => truncateToWidth(l, contentW, "")), this.edge);
 	}

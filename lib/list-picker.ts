@@ -5,7 +5,7 @@
  * can import it without importing the settings menu back (no import cycle).
  */
 import { Input, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
-import { softSecondaryOf, thinkingColorOf } from "../lib/ansi.ts";
+import { softOf, thinkingColorOf } from "../lib/ansi.ts";
 import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { ROW_DIVIDER } from "../lib/format.ts";
@@ -33,7 +33,7 @@ export function rowText(row: ListRow): string {
 	return row.note ? `${row.label} · ${row.note}` : row.label;
 }
 
-/** Bare names (preset lists) as rows; the cursor's `→` marks the live value. */
+/** Bare names (preset lists) as rows; the cursor's `❯` marks the live value. */
 export const nameRows = (names: readonly string[]): ListRow[] => names.map((label) => ({ label }));
 
 interface ListPickerHooks {
@@ -260,7 +260,7 @@ export class ListPicker implements Component {
 	render(width: number): string[] {
 		const th = this.theme;
 		const bold = th.bold ?? ((t: string) => `\x1b[1m${t}\x1b[22m`);
-		const soft = softSecondaryOf(th);
+		const soft = softOf(th);
 		const edge = (text: string) => this.edge(text);
 		const column = Math.max(0, ...this.rows.map((r) => visibleWidth(r.label)));
 		const body: string[] = [];
@@ -272,7 +272,7 @@ export class ListPicker implements Component {
 		for (let i = windowStart; i < windowEnd; i++) {
 			const item = this.rows[shown[i]!]!;
 			const isSelected = i === this.selected;
-			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg(item.note ? "text" : "muted", s);
+			const paint = isSelected ? (s: string) => soft(bold(s)) : (s: string) => th.fg("text", s);
 			const pad = " ".repeat(Math.max(0, column - visibleWidth(item.label)));
 			const noteText = this.hooks.note?.(item.label) ?? item.note;
 			const note = noteText ? `${th.fg("dim", ROW_DIVIDER)}${th.fg("dim", noteText)}` : "";
@@ -287,7 +287,7 @@ export class ListPicker implements Component {
 			const suffix = /(\(.*\))$/.exec(item.label)?.[1] ?? "";
 			const head = suffix ? item.label.slice(0, item.label.length - suffix.length) : item.label;
 			const tail = suffix ? th.fg("dim", suffix) : "";
-			const content = `${isSelected ? th.fg("accent", "→ ") : "  "}${mark}${paint(head)}${tail}${pad}${note}${chosen}`;
+			const content = `${isSelected ? th.fg("accent", "❯ ") : "  "}${mark}${paint(head)}${tail}${pad}${note}${chosen}`;
 			body.push(truncateToWidth(content, width - 4, ""));
 		}
 		// Hidden rows are announced, never silently cut (an empty line is still a row).
@@ -402,7 +402,7 @@ if (isMain(import.meta.url)) {
 	const lines = picker.render(50);
 	assert(lines[0]!.startsWith("╭") && lines[lines.length - 1]!.startsWith("╰"), "picker framed");
 	assert(lines.every((l) => visibleWidth(l) === 50), "picker lines fit width 50");
-	assert(lines.some((l) => l.includes("→ a")), "the cursor marks the selection");
+	assert(lines.some((l) => l.includes("❯ a")), "the cursor marks the selection");
 
 	// The chosen marker: ✓ ends the saved row only, colored by the theme's success slot.
 	const chosenPicker = new ListPicker(
@@ -447,18 +447,18 @@ if (isMain(import.meta.url)) {
 	frame = scrolled.render(50);
 	assert(countItems(frame) === 10, "still 10 rows after scrolling");
 	assert(frame.some((l) => l.includes("↑ 9 more")) && frame.some((l) => l.includes("↓ 6 more")), "both ends announce their hidden rows");
-	assert(frame.some((l) => l.includes("→ m14")), "the cursor row stays visible");
+	assert(frame.some((l) => l.includes("❯ m14")), "the cursor row stays visible");
 	scrolled.handleInput("\x1b[B");
 	const frameNext = scrolled.render(50);
 	assert(frameNext.length === frame.length && countItems(frameNext) === 10, "the frame height stays constant while scrolling inside the list");
 	for (let i = 0; i < 9; i++) scrolled.handleInput("\x1b[B");
 	frame = scrolled.render(50);
-	assert(frame.some((l) => l.includes("→ m24")) && frame.some((l) => l.includes("↑ 15 more")) && !frame.some((l) => l.includes("↓")), "the bottom of the list announces only what is above");
+	assert(frame.some((l) => l.includes("❯ m24")) && frame.some((l) => l.includes("↑ 15 more")) && !frame.some((l) => l.includes("↓")), "the bottom of the list announces only what is above");
 	// Wrap at both edges, matching the /jev-eye picker: a held key never sticks.
 	scrolled.handleInput("\x1b[B");
-	assert(scrolled.render(50).some((l) => l.includes("→ m0")), "↓ at the last row wraps to the top");
+	assert(scrolled.render(50).some((l) => l.includes("❯ m0")), "↓ at the last row wraps to the top");
 	scrolled.handleInput("\x1b[A");
-	assert(scrolled.render(50).some((l) => l.includes("→ m24")), "↑ at the top row wraps to the last row");
+	assert(scrolled.render(50).some((l) => l.includes("❯ m24")), "↑ at the top row wraps to the last row");
 	const short = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet }, { title: screenTitle("Test"), description: "d", legend: "l" }, false, undefined, 10);
 	assert(!short.render(50).some((l) => l.includes("more")), "a short list shows no scroll indicators");
 
@@ -511,7 +511,7 @@ if (isMain(import.meta.url)) {
 
 	const summarized = new ListPicker(fakeTheme, nameRows(["a", "b"]), "a", { preview: quiet, revert: quiet, done: quiet, requestRender: quiet, summary: () => ["Box · a"] }, { title: "T", description: "d", legend: "l" }, false);
 	const sumLines = summarized.render(40).map(plain);
-	assert(sumLines.some((l) => l.includes("Box · a")) && sumLines.indexOf(sumLines.find((l) => l.includes("Box · a"))!) < sumLines.indexOf(sumLines.find((l) => l.includes("→ a"))!), "summary renders above the picker rows");
+	assert(sumLines.some((l) => l.includes("Box · a")) && sumLines.indexOf(sumLines.find((l) => l.includes("Box · a"))!) < sumLines.indexOf(sumLines.find((l) => l.includes("❯ a"))!), "summary renders above the picker rows");
 
 	console.log("list-picker.ts self-check OK");
 }

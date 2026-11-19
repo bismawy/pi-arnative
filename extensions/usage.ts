@@ -88,7 +88,7 @@ const statsOf = (
 type UsageView = "provider" | "project" | "prices";
 
 /** Labels on the range bar, in tab order. */
-const RANGE_LABELS: Record<UsageRange, string> = { all: "All", today: "Today", "7d": "7 day", "30d": "30 day", "3m": "3 month" };
+const RANGE_LABELS: Record<UsageRange, string> = { all: "All", today: "Today", "7d": "7 day", "30d": "30 day" };
 /** The three views `v` cycles, in that order, and the view a press would show next. */
 const VIEW_LABELS: Record<UsageView, string> = { provider: "Provider", project: "Project", prices: "Prices" };
 const NEXT_VIEW: Record<UsageView, UsageView> = { provider: "project", project: "prices", prices: "provider" };
@@ -1323,7 +1323,6 @@ if (isMain(import.meta.url)) {
 	assert(msgIn("today") === 1, "today counts only the message written today");
 	assert(msgIn("7d") === 1, "7 day stops before the ten-day record, so only today counts");
 	assert(msgIn("30d") === 2, "30 day covers today and ten days back, not forty-five");
-	assert(msgIn("3m") === 3, "3 month covers all three");
 	// A window with nothing in it is empty, not an error: the bar can be pressed on a quiet day.
 	assert(collectUsageSummary(true, "today").totals.msgs >= 1, "today still reports the rows it has");
 
@@ -1339,11 +1338,11 @@ if (isMain(import.meta.url)) {
 	const reloaded = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, { d?: unknown }>;
 	assert(Object.values(reloaded).some((item) => item.d !== undefined), "the re-parse writes the day buckets back");
 
-	// The range bar: five windows, the active one accented, and the counter states how many
+	// The range bar: four windows, the active one accented, and the counter states how many
 	// rows exist past the viewport. Tab moves the window and the numbers follow it.
 	const barModal = new UsageModalComponent(fakeTheme, () => {}, () => {}, "high");
 	const barOnce = barModal.render(100).map(plain);
-	const barLine = barOnce.find((l) => l.includes("All") && l.includes("Today") && l.includes("3 month"));
+	const barLine = barOnce.find((l) => l.includes("All") && l.includes("Today") && l.includes("30 day"));
 	assert(barLine !== undefined, "the range bar names every window on one line");
 	assert(USAGE_RANGES.every((r) => barLine!.includes(RANGE_LABELS[r])), "every range label is on the bar");
 	assert(barLine!.indexOf("All") < barLine!.indexOf("Today"), "the bar keeps tab order");
