@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { recordProfile } from "../extensions/arnative.ts";
-import { activeAutoCompact } from "../extensions/autocompact.ts";
+import { activeAutoCompact, savedPayloadLimit } from "../extensions/autocompact.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth } from "../extensions/budget.ts";
 import { activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset } from "../extensions/footer.ts";
 import { activeHeaderPreset } from "../extensions/section-headers.ts";
@@ -45,7 +45,7 @@ test("the file keeps one key order", () => {
 		recordProfile();
 		assert.deepEqual(
 			Object.keys(configOf(dir)),
-			["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "modelHeal", "renderCache"],
+			["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "payloadLimit", "modelHeal", "renderCache"],
 			"header first, then the rest of the menu, the budget keys after chatboxDialog, layoutVersion before the newer keys",
 		);
 	});
@@ -66,6 +66,7 @@ test("the profile in use is recorded, defaults included", () => {
 		assert.equal(stored.spinnerPreset, activeSpinnerPreset(), "spinner preset recorded");
 		assert.equal(stored.spinnerGradient, activeSpinnerGradient() ? "on" : "off", "spinner gradient recorded");
 		assert.equal(stored.autoCompact, activeAutoCompact(), "auto-compact recorded");
+		assert.equal(stored.payloadLimit, savedPayloadLimit(), "payload limit recorded");
 		assert.equal(stored.modelHeal, activeModelHeal(), "model heal recorded");
 		assert.equal(stored.renderCache, activeRenderCache(), "render cache recorded");
 		assert.equal(stored.budgetDay, activeBudgetDay() === undefined ? "" : String(activeBudgetDay()), "day cap recorded (" + JSON.stringify(stored.budgetDay) + ")");
