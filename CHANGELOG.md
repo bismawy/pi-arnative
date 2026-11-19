@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Box backgrounds are visible again on dark and 256-color terminals.** The user chat panel, system-message box, tool cards, selection and search highlight all sat at L≈19%, which resolves to `#001817` on the base theme: 1.14:1 against a black terminal, close enough to invisible that the chat bubble looked like it had no background at all. Every box now uses a measured lightness (`userMessageBg` L 32%, tool and system cards L 30%, selection L 36%), and box chroma has a floor so the tint survives quantization. On `TERM=xterm-256color` without `COLORTERM`, pi draws colors through `rgbToAnsi256`, which mapped the old backgrounds onto 6x6x6 cube black (index 16) for 13 of 14 themes; all 98 box tokens now quantize to a real color. Two themes' `primary` (`crimson`, `gruvbox`) and the thinking ramp's dimmest step were lifted to keep their contrast floors against the brighter canvas (`themes/gen-themes.mjs`, all `themes/*.json`, `lib/color.ts`, `extensions/ui-render-tweaks.ts`).
+
 ## [0.13.1] - 2026-11-18
 
 ### Changed

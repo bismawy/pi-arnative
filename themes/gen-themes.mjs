@@ -52,6 +52,15 @@ function soften(value, scale = 0.35, l = 0.90) {
 	return `oklch(${+(l * 100).toFixed(1)}% ${+chroma.toFixed(5)} ${Math.round(hue(o.H))})`;
 }
 
+/**
+ * Chroma a box background may keep. A panel tint needs to survive the 256-color
+ * quantizer, which drops any color whose channels are within 10 levels of each other
+ * onto the grey ramp. Enforcing a floor keeps the theme's hue in both color modes.
+ */
+function boxChroma(chroma) {
+	return Math.min(Math.max(chroma, 0.031), 0.06);
+}
+
 /** Normalize a spec color to an oklch literal: hex is converted, oklch passes through. */
 function colorLiteral(value) {
 	const s = String(value).trim();
@@ -65,7 +74,23 @@ function colorLiteral(value) {
 // --- shared ramps ----------------------------------------------------------
 
 const NEUTRAL = { fg: 0.88, fgMuted: 0.72, fgDim: 0.61, fgFaint: 0.49 };
-const THINKING = { off: 0.4, minimal: 0.47, low: 0.55, medium: 0.63, high: 0.71, xhigh: 0.79 };
+/**
+ * Lightness of every box background (message panel, tool cards, selection).
+ *
+ * Two hard floors decide these numbers, both measured, not chosen:
+ *
+ * 1. A pure-black terminal (`#000000`) hides anything below L≈0.22: the panel at the
+ *    old L 0.19 rendered `#001817`, contrast 1.14 against black — a box nobody sees.
+ *    pi's own dark theme keeps its panel at L 0.338, which is the weight below.
+ * 2. 256-color terminals (any `TERM=*-256color` without `COLORTERM`) quantize every
+ *    background through `rgbToAnsi256`. Below L≈0.23 the nearest entry is the 6x6x6
+ *    cube black (index 16), so the box is drawn pure black on every theme.
+ */
+const CANVAS = { userMessage: 0.32, customMessage: 0.30, toolPending: 0.30, toolSuccess: 0.30, toolError: 0.30, selected: 0.36, searchMatch: 0.40 };
+// Thinking ramp. `off` must still read as a visible step above CANVAS.userMessage
+// (floor 1.3 contrast); at the old 0.40 the brightest canvas themes dropped it to
+// 1.24, so the ramp starts at 0.45 and keeps its monotonic spacing to `minimal`.
+const THINKING = { off: 0.45, minimal: 0.50, low: 0.55, medium: 0.63, high: 0.71, xhigh: 0.79 };
 const SEMANTIC = { success: 145, error: 25, warning: 85 };
 const SYNTAX_OFFSET = { keyword: 0, func: 45, variable: -45, string: 120, number: 180, type: 90 };
 
@@ -102,7 +127,7 @@ const THEMES = {
 		primary: "oklch(88.8% 0.181 96)",
 		secondary: "oklch(84.2% 0.172 86)",
 		tone: "oklch(95.1% 0.073 196)",
-		// Teal panel, deepened to L:19% for stealth dark contrast.
+		// Teal panel; CANVAS.userMessage sets its lightness so the box stays visible.
 		surfaceMsg: "oklch(19% 0.04 191)",
 		// The label tier follows the accent (soft cyan); the gold signature lives on
 		// headings and links instead, so the theme keeps two tones without the label gap.
@@ -142,7 +167,7 @@ const THEMES = {
 		canvasL: 0.24,
 		neutralHue: 31,
 		neutralChroma: 0.015,
-		primary: "oklch(58% 0.175 37)",
+		primary: "oklch(60.5% 0.175 37)",
 		secondary: "oklch(79.2% 0.161 75)",
 		tone: "oklch(82% 0.14 70)",
 		surfaceMsg: "primary",
@@ -278,7 +303,7 @@ const THEMES = {
 		canvasL: 0.25,
 		neutralHue: 60,
 		neutralChroma: 0.008,
-		primary: "oklch(58% 0.203 29)",
+		primary: "oklch(61% 0.203 29)",
 		secondary: "oklch(57.6% 0.066 199)",
 		tone: "oklch(78% 0.045 170)",
 		surfaceMsg: "primary",
@@ -366,7 +391,7 @@ const THEMES = {
 		canvasL: 0.24,
 		neutralHue: 68,
 		neutralChroma: 0.012,
-		primary: "oklch(55% 0.076 120)",
+		primary: "oklch(58.5% 0.076 120)",
 		secondary: "oklch(60.9% 0.13 57)",
 		tone: "oklch(80% 0.06 120)",
 		surfaceMsg: "primary",
@@ -388,7 +413,7 @@ const THEMES = {
 		canvasL: 0.24,
 		neutralHue: 75,
 		neutralChroma: 0.012,
-		primary: "oklch(55% 0.053 119)",
+		primary: "oklch(58.5% 0.053 119)",
 		secondary: "oklch(48.9% 0.07 54)",
 		tone: "oklch(78% 0.04 119)",
 		surfaceMsg: "primary",
@@ -475,14 +500,17 @@ function derive(spec) {
 	if (spec.headingTone) vars.headingTone = colorLiteral(spec.headingTone);
 
 	// The message panel: a literal/hex override, or the name of a var whose hue is
-	// darkened to a stealth dark level (L:19%) — so a theme can reuse an existing signature var
+	// reused at the box lightness — so a theme keeps its signature tint on the panel
 	// instead of hand-picking a color. Defaults to the neutral canvas tint.
 	if (typeof spec.surfaceMsg === "string" && spec.surfaceMsg in vars) {
 		const src = parseOklch(vars[spec.surfaceMsg]);
 		assert(src !== null, `surfaceMsg var must be an oklch color: ${spec.surfaceMsg}`);
-		vars.surfaceMsg = oklch(0.19, Math.min(src.C * 0.35, 0.05), src.H);
+		vars.surfaceMsg = oklch(CANVAS.userMessage, boxChroma(src.C), src.H);
 	} else {
-		vars.surfaceMsg = spec.surfaceMsg ?? oklch(0.19, nc * 0.5, nh);
+		const src = spec.surfaceMsg ? parseOklch(spec.surfaceMsg) : null;
+		vars.surfaceMsg = src
+			? oklch(CANVAS.userMessage, boxChroma(src.C), src.H)
+			: oklch(CANVAS.userMessage, boxChroma(nc * 0.5), nh);
 	}
 
 	const accentLiteral = oklch(0.8, Math.min(c * 0.7, 0.14), h);
@@ -499,20 +527,20 @@ function derive(spec) {
 		text: "fg",
 		thinkingText: "fgMuted",
 
-		selectedBg: oklch(base + 0.07, Math.min(c * 0.25, 0.06), roleHue("selected")),
+		selectedBg: oklch(CANVAS.selected, Math.min(c * 0.25, 0.06), roleHue("selected")),
 		scrollbarTrack: "fgFaint",
 		scrollbarThumb: "accentSoft",
-		searchMatchBg: oklch(base + 0.14, Math.min(c * 0.45, 0.10), roleHue("searchMatch")),
+		searchMatchBg: oklch(CANVAS.searchMatch, Math.min(c * 0.45, 0.10), roleHue("searchMatch")),
 		searchMatchText: "fg",
 		userMessageBg: "surfaceMsg",
 		userMessageText: "fg",
-		customMessageBg: oklch(base + 0.01, Math.min(c * 0.4, 0.05), roleHue("label")),
+		customMessageBg: oklch(CANVAS.customMessage, boxChroma(c * 0.4), roleHue("label")),
 		customMessageText: "fg",
 		customMessageLabel: spec.labelColor ?? oklch(0.78, Math.min(c * 0.7, 0.14), roleHue("label")),
 
-		toolPendingBg: oklch(base - 0.02, Math.min(c * 0.3, 0.05), h),
-		toolSuccessBg: oklch(base - 0.03, Math.min(c * 0.4, 0.06), sem("success")),
-		toolErrorBg: oklch(base - 0.03, Math.min(c * 0.4, 0.06), sem("error")),
+		toolPendingBg: oklch(CANVAS.toolPending, boxChroma(c * 0.3), h),
+		toolSuccessBg: oklch(CANVAS.toolSuccess, boxChroma(c * 0.4), sem("success")),
+		toolErrorBg: oklch(CANVAS.toolError, boxChroma(c * 0.4), sem("error")),
 		toolTitle: "fg",
 		toolOutput: "fgMuted",
 

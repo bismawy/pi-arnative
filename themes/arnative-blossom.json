@@ -17,7 +17,7 @@
 		"error": "oklch(76% 0.143 25)",
 		"warning": "oklch(86% 0.14 85)",
 		"tone": "oklch(84% 0.10 350)",
-		"surfaceMsg": "oklch(19% 0.05 6)"
+		"surfaceMsg": "oklch(32% 0.06 6)"
 	},
 	"colors": {
 		"accent": "accent",
@@ -32,19 +32,19 @@
 		"text": "fg",
 
 		"thinkingText": "fgMuted",
-		"selectedBg": "oklch(31% 0.045 2)",
+		"selectedBg": "oklch(36% 0.045 2)",
 		"scrollbarTrack": "fgFaint",
 		"scrollbarThumb": "accentSoft",
-		"searchMatchBg": "oklch(38% 0.081 18)",
+		"searchMatchBg": "oklch(40% 0.081 18)",
 		"searchMatchText": "fg",
 		"userMessageBg": "surfaceMsg",
 		"userMessageText": "fg",
-		"customMessageBg": "oklch(25% 0.05 6)",
+		"customMessageBg": "oklch(30% 0.06 6)",
 		"customMessageText": "fg",
 		"customMessageLabel": "oklch(78% 0.126 6)",
-		"toolPendingBg": "oklch(22% 0.05 18)",
-		"toolSuccessBg": "oklch(21% 0.06 145)",
-		"toolErrorBg": "oklch(21% 0.06 25)",
+		"toolPendingBg": "oklch(30% 0.054 18)",
+		"toolSuccessBg": "oklch(30% 0.06 145)",
+		"toolErrorBg": "oklch(30% 0.06 25)",
 		"toolTitle": "fg",
 
 		"toolOutput": "fgMuted",
@@ -72,8 +72,8 @@
 		"syntaxOperator": "fg",
 
 		"syntaxPunctuation": "fgMuted",
-		"thinkingOff": "oklch(40% 0.015 6)",
-		"thinkingMinimal": "oklch(47% 0.045 18)",
+		"thinkingOff": "oklch(45% 0.015 6)",
+		"thinkingMinimal": "oklch(50% 0.045 18)",
 		"thinkingLow": "oklch(55% 0.072 18)",
 		"thinkingMedium": "oklch(63% 0.108 18)",
 		"thinkingHigh": "oklch(71% 0.144 18)",
