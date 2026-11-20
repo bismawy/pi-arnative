@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-20
+
 ### Added
 - **Automatic `contextWindow` and `maxTokens` fallback in `/providers`.** When a provider's `/models` response omits context limits, `/providers` now resolves missing limits from pi's local `modelRegistry` first (matching exact, bare, and variant-stripped model IDs) and then from OpenRouter's public model catalog (`https://openrouter.ai/api/v1/models`). `parseMeta` also reads camelCase limit keys, Gemini `inputTokenLimit`/`outputTokenLimit`, and nested `top_provider`, `limit`/`limits`, and `capabilities.limits` objects (`lib/compat.ts`, `lib/provider.ts`).
 
