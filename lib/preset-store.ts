@@ -114,6 +114,37 @@ function ordered(record: Record<string, unknown>): Record<string, unknown> {
 	return out;
 }
 
+/**
+ * Write UTF-8 text atomically via temp file + rename.
+ * Falls back to an in-place write on Windows EPERM/EBUSY/EXDEV lock errors and always
+ * cleans up its temp file when rename fails.
+ */
+export function writeAtomicSync(
+	path: string,
+	payload: string,
+	rename: (from: string, to: string) => void = renameSync,
+): void {
+	const tmp = `${path}.${process.pid}.tmp`;
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(tmp, payload, "utf8");
+	try {
+		rename(tmp, path);
+	} catch (e) {
+		// Windows: a running pi session can hold the file open, and then the atomic
+		// replace fails with EPERM while an in-place write still lands.
+		const code = (e as NodeJS.ErrnoException).code;
+		if (code !== "EPERM" && code !== "EBUSY" && code !== "EXDEV") {
+			rmSync(tmp, { force: true });
+			throw e;
+		}
+		try {
+			writeFileSync(path, payload, "utf8");
+		} finally {
+			rmSync(tmp, { force: true });
+		}
+	}
+}
+
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
 export function saveChoice(key: string, value: string, rename: (from: string, to: string) => void = renameSync): void {
 	readConfig();
@@ -126,22 +157,7 @@ export function saveChoice(key: string, value: string, rename: (from: string, to
 	if (record[key] === value) return;
 	memo = { ...record, [key]: value };
 	try {
-		const path = configPath();
-		const tmp = `${path}.${process.pid}.tmp`;
-		mkdirSync(dirname(path), { recursive: true });
-		const payload = `${JSON.stringify(ordered(memo), null, 2)}\n`;
-		writeFileSync(tmp, payload, "utf8");
-		try {
-			rename(tmp, path);
-		} catch (e) {
-			// Windows: a running pi session can hold config.json open, and then the atomic
-			// replace fails with EPERM while an in-place write still lands. A setting that
-			// silently never reaches disk is worse than the small truncation window here.
-			const code = (e as NodeJS.ErrnoException).code;
-			if (code !== "EPERM" && code !== "EBUSY" && code !== "EXDEV") throw e;
-			writeFileSync(path, payload, "utf8");
-			rmSync(tmp, { force: true });
-		}
+		writeAtomicSync(configPath(), `${JSON.stringify(ordered(memo), null, 2)}\n`, rename);
 	} catch {
 		process.emitWarning("Arnative settings were not saved; the choice applies only to this session.", { code: "ARNATIVE_PRESET_SAVE" });
 	}
@@ -156,6 +172,37 @@ export function ensureChoices(values: Record<string, string>): void {
 	const { parsed } = readDisk();
 	if (!parsed && existsSync(configPath())) return;
 	for (const [key, value] of Object.entries(values)) saveChoice(key, value);
+}
+
+/** Reload-safe choice setting backed by globalThis[Symbol.for("pi-arnative.<key>")] + config.json. */
+export function choiceSetting<T extends string>(
+	key: string,
+	allowed: readonly T[],
+	fallback: T,
+): { readonly slot: symbol; get(): T; set(value: T): void } {
+	const slot = Symbol.for(`pi-arnative.${key}`);
+	const g = globalThis as Record<symbol, unknown>;
+	return {
+		slot,
+		get: () => {
+			const stored = g[slot] ?? loadChoice(key, allowed);
+			return allowed.includes(stored as T) ? (stored as T) : fallback;
+		},
+		set: (value: T) => {
+			g[slot] = value;
+			saveChoice(key, value);
+		},
+	};
+}
+
+/** Reload-safe boolean ("on"/"off") setting backed by globalThis + config.json. */
+export function flagSetting(key: string): { readonly slot: symbol; get(): boolean; set(on: boolean): void } {
+	const base = choiceSetting(key, ["on", "off"] as const, "off");
+	return {
+		slot: base.slot,
+		get: () => base.get() === "on",
+		set: (on: boolean) => base.set(on ? "on" : "off"),
+	};
 }
 
 /** Drop the in-memory copy so the next read hits disk (a restart, in a test). */

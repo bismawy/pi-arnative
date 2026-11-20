@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { assert, isMain } from "./check.ts";
+import { writeAtomicSync } from "./preset-store.ts";
 
 interface UsageEntry {
 	provider: string;
@@ -533,10 +534,7 @@ function saveDiskCache(map: Map<string, FileCacheItem>): void {
 		const out: Record<string, DiskItem> = {};
 		for (const [k, v] of map.entries()) out[relative(sessionsDir, k)] = encodeDiskItem(v);
 		// Temp file + rename: a concurrent pi session never reads a half-written cache.
-		const tmp = `${path}.${process.pid}.tmp`;
-		mkdirSync(cacheDir(), { recursive: true });
-		writeFileSync(tmp, JSON.stringify(out), "utf8");
-		renameSync(tmp, path);
+		writeAtomicSync(path, JSON.stringify(out));
 	} catch {
 		// ignore
 	}
@@ -773,16 +771,7 @@ function loadUsageBaseline(): Map<string, FileCacheItem> {
 function writeUsageBaseline(raw: string | null): void {
 	const path = baselinePath();
 	if (raw === null) rmSync(path, { force: true });
-	else {
-		mkdirSync(cacheDir(), { recursive: true });
-		const tmp = path + "." + process.pid + ".tmp";
-		try {
-			writeFileSync(tmp, raw, "utf8");
-			renameSync(tmp, path);
-		} finally {
-			rmSync(tmp, { force: true });
-		}
-	}
+	else writeAtomicSync(path, raw);
 	resetUsageCache();
 }
 
@@ -1059,13 +1048,15 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 		// What this file contributes: range window and reset baseline already applied.
 		const effective: FileRollup = { providers: effectiveProviders(cached.rollup, baselineItem?.rollup, sinceDay, needDays), days: {} };
 
-		// A file with no cwd in its cache item lands in "unknown" rather than being re-read.
-		const projectName = cached.cwd ?? "unknown";
-		let project = projectMap.get(projectName);
-		if (!project) projectMap.set(projectName, (project = { sessions: new Set(), providers: new Map() }));
-		project.sessions.add(file);
 		foldFileIntoProviderMap(providerMap, file, effective);
-		foldFileIntoProviderMap(project.providers, file, effective);
+		if (Object.keys(effective.providers).length > 0) {
+			// A file with no cwd in its cache item lands in "unknown" rather than being re-read.
+			const projectName = cached.cwd ?? "unknown";
+			let project = projectMap.get(projectName);
+			if (!project) projectMap.set(projectName, (project = { sessions: new Set(), providers: new Map() }));
+			project.sessions.add(file);
+			foldFileIntoProviderMap(project.providers, file, effective);
+		}
 		const baseDays = baselineItem?.rollup.days;
 		for (const [dk, r] of Object.entries(cached.rollup.days)) {
 			// Day keys start with the fixed-width `YYYY-MM-DD`; the baseline's same-key row is

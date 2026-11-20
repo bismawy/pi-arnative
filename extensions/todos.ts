@@ -6,12 +6,14 @@
  * State lives in `<agent>/arnative/todos/<session id>.json`, so `/reload` and a resumed session
  * keep the list; every mutation rewrites the file.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { assert, isMain } from "../lib/check.ts";
+import { writeAtomicSync } from "../lib/preset-store.ts";
 import { inSpans, screenTitle, type TextSpan, textSpans } from "../lib/box.ts";
 import { ListPicker, type ListPickerText } from "../lib/list-picker.ts";
 import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../lib/shortcuts.ts";
@@ -76,10 +78,48 @@ function store(): WidgetStore {
 	return holder[STORE_KEY]!;
 }
 
+/** Completed/empty session todo files older than this are pruned on session start. */
+const TODO_PRUNE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+const todosDir = (): string => join(getAgentDir(), "arnative", "todos");
+
 /** `<agent>/arnative/todos/<session id>.json` — one file per session, so two sessions in the
  *  same checkout never overwrite each other's list. */
 const stateFile = (ctx: ExtensionContext): string =>
-	join(getAgentDir(), "arnative", "todos", `${ctx.sessionManager.getSessionId()}.json`);
+	join(todosDir(), `${ctx.sessionManager.getSessionId()}.json`);
+
+/** Remove old todo files whose tasks are all completed (or empty) so `todos/` does not grow unbounded. */
+export function pruneCompletedTodos(
+	dir: string = todosDir(),
+	opts: { maxAgeMs?: number; now?: number; skipFile?: string } = {},
+): number {
+	const maxAgeMs = opts.maxAgeMs ?? TODO_PRUNE_AGE_MS;
+	const now = opts.now ?? Date.now();
+	let entries: string[];
+	try {
+		entries = readdirSync(dir);
+	} catch {
+		return 0;
+	}
+	let removed = 0;
+	for (const name of entries) {
+		if (!name.endsWith(".json")) continue;
+		const full = join(dir, name);
+		if (opts.skipFile && (full === opts.skipFile || name === opts.skipFile)) continue;
+		try {
+			if (now - statSync(full).mtimeMs < maxAgeMs) continue;
+			const parsed = normalizeState(JSON.parse(readFileSync(full, "utf8")) as unknown);
+			if (!parsed) continue;
+			if (parsed.tasks.length === 0 || allDone(parsed)) {
+				unlinkSync(full);
+				removed++;
+			}
+		} catch {
+			// leave unreadable or locked files alone
+		}
+	}
+	return removed;
+}
 
 function loadState(ctx: ExtensionContext, reload = false): void {
 	const s = store();
@@ -98,22 +138,8 @@ function loadState(ctx: ExtensionContext, reload = false): void {
 }
 
 function saveState(ctx: ExtensionContext): void {
-	const path = stateFile(ctx);
 	try {
-		mkdirSync(dirname(path), { recursive: true });
-		const payload = `${JSON.stringify(store().state, null, 2)}\n`;
-		const tmp = `${path}.${process.pid}.tmp`;
-		writeFileSync(tmp, payload, "utf8");
-		try {
-			renameSync(tmp, path);
-		} catch (error) {
-			// Windows refuses the replace while another process holds the file; an in-place
-			// write still lands, and a lost list is worse than the truncation window.
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code !== "EPERM" && code !== "EBUSY" && code !== "EXDEV") throw error;
-			writeFileSync(path, payload, "utf8");
-			rmSync(tmp, { force: true });
-		}
+		writeAtomicSync(stateFile(ctx), `${JSON.stringify(store().state, null, 2)}\n`);
 	} catch {
 		// ignore: the list still renders from memory
 	}
@@ -302,6 +328,14 @@ function refresh(ctx: ExtensionContext, force = false): void {
 					holdRepeat = undefined;
 				}
 			};
+			const toggleExpanded = (): { handled: true; render: true } => {
+				s.expanded = !s.expanded;
+				s.top = null;
+				if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
+				else cancelHide(s);
+				s.tui?.requestRender(true);
+				return { handled: true, render: true };
+			};
 			/** Move the five-row window by `delta` rows and repaint. `top` stays absolute, so the
 			 *  window parks at the end of the list instead of drifting. */
 			const scroll = (delta: number): void => {
@@ -367,14 +401,7 @@ function refresh(ctx: ExtensionContext, force = false): void {
 					const onHint = inSpans(spans, event.y, event.x);
 					const onCounter = event.y === layout.up || event.y === layout.down;
 					if (!onHint && !onCounter) {
-						if (event.type === "click" && (event.clickCount ?? 1) === 1) {
-							s.expanded = !s.expanded;
-							s.top = null;
-							if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
-							else cancelHide(s);
-							s.tui?.requestRender(true);
-							return { handled: true, render: true };
-						}
+						if (event.type === "click" && (event.clickCount ?? 1) === 1) return toggleExpanded();
 						return undefined;
 					}
 					// The press already did it, so the release and the click that may follow are
@@ -387,12 +414,7 @@ function refresh(ctx: ExtensionContext, force = false): void {
 						startHold(delta);
 						return { handled: true, render: true };
 					}
-					s.expanded = !s.expanded;
-					s.top = null;
-					if (allDone(s.state) && !s.expanded) scheduleHide(ctx, s);
-					else cancelHide(s);
-					s.tui?.requestRender(true);
-					return { handled: true, render: true };
+					return toggleExpanded();
 				},
 				dispose: (): void => {
 					stopHold();
@@ -485,7 +507,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
-		loadState(ctx, (event as { reason?: string } | undefined)?.reason === "reload");
+		const reload = (event as { reason?: string } | undefined)?.reason === "reload";
+		loadState(ctx, reload);
+		if (!reload) pruneCompletedTodos(todosDir(), { skipFile: stateFile(ctx) });
 		refresh(ctx, true);
 	});
 
@@ -583,5 +607,31 @@ if (isMain(import.meta.url)) {
 	// A new session with no file on disk starts empty instead of inheriting the previous session's list.
 	loadState({ sessionManager: { getSessionId: () => `empty-${process.pid}-${Date.now()}` } } as never);
 	assert(store().state.tasks.length === 0 && store().expanded === false, "session_start: a fresh session starts with an empty list");
+	// Auto-prune removes old completed/empty todo files while keeping open, recent, and active-session files.
+	const pruneTmp = mkdtempSync(join(tmpdir(), "arnative-todos-prune-"));
+	try {
+		const now = Date.now();
+		const oldSec = (now - TODO_PRUNE_AGE_MS - 60_000) / 1000;
+		const put = (name: string, data: unknown, old: boolean): string => {
+			const p = join(pruneTmp, name);
+			writeFileSync(p, JSON.stringify(data));
+			if (old) utimesSync(p, oldSec, oldSec);
+			return p;
+		};
+		put("old-done.json", { nextId: 2, tasks: [{ id: 1, subject: "a", status: "completed" }] }, true);
+		put("old-empty.json", { nextId: 1, tasks: [] }, true);
+		put("old-open.json", { nextId: 2, tasks: [{ id: 1, subject: "b", status: "pending" }] }, true);
+		put("recent-done.json", { nextId: 2, tasks: [{ id: 1, subject: "c", status: "completed" }] }, false);
+		const activePath = put("active-done.json", { nextId: 2, tasks: [{ id: 1, subject: "d", status: "completed" }] }, true);
+		const removed = pruneCompletedTodos(pruneTmp, { now, skipFile: activePath });
+		const left = readdirSync(pruneTmp).sort();
+		assert(removed === 2, `prune: expected 2 removed, got ${removed}`);
+		assert(
+			left.join(",") === "active-done.json,old-open.json,recent-done.json",
+			`prune: expected open/recent/active kept, got ${left.join(",")}`,
+		);
+	} finally {
+		rmSync(pruneTmp, { recursive: true, force: true });
+	}
 	console.log("todos extension self-check OK");
 }

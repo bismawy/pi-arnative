@@ -16,8 +16,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
+import { writeAtomicSync } from "../lib/preset-store.ts";
 import { collectUsageSummary, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
 
 /** At most one write per minute, whatever the turn rate. */
@@ -77,17 +78,7 @@ export function renderProm(summary: UsageSummary, now: number): string {
  *  target open) falls back to an in-place write and removes its temp file — the
  *  `lib/preset-store.ts` pattern. */
 export function writePromFile(text: string, path: string, rename: (from: string, to: string) => void = renameSync): void {
-	const tmp = `${path}.${process.pid}.tmp`;
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(tmp, text, "utf8");
-	try {
-		rename(tmp, path);
-	} catch (e) {
-		const code = (e as NodeJS.ErrnoException).code;
-		if (code !== "EPERM" && code !== "EBUSY" && code !== "EXDEV") throw e;
-		writeFileSync(path, text, "utf8");
-		rmSync(tmp, { force: true });
-	}
+	writeAtomicSync(path, text, rename);
 }
 
 let lastExportMs = 0;

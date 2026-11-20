@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BUDGET_CAPS, budgetState, capLabel, nextCap } from "../extensions/budget.ts";
+import { BUDGET_CAPS, budgetState, capLabel, estimatedWindowTotal, nextCap } from "../extensions/budget.ts";
 
 test("levels by percentage of the day cap: 0/79 ok, 80/99 warn, 100/120 over", () => {
 	for (const [spend, level] of [[0, "ok"], [79, "ok"], [80, "warn"], [99, "warn"], [100, "over"], [120, "over"]] as const) {
@@ -59,4 +59,10 @@ test("nextCap cycles the fixed choices and wraps to off", () => {
 	assert.equal(capLabel(undefined), "off");
 	assert.equal(capLabel(0), "off");
 	assert.equal(capLabel(5), "$5.00");
+});
+
+test("estimatedWindowTotal does not double-count today inside the rolling 30d window", () => {
+	assert.equal(estimatedWindowTotal(null), 0);
+	assert.equal(estimatedWindowTotal({ today: 0, month: 0, estimatedToday: 1.5, estimatedMonth: 1.5 }), 1.5);
+	assert.equal(estimatedWindowTotal({ today: 0, month: 0, estimatedToday: 1.5, estimatedMonth: 4.25 }), 4.25);
 });

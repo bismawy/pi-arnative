@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { collectUsageSummary, loadPriceTable, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
+import { collectUsageSummary, loadPriceTable, resetUsageCache, resetUsageStats, type UsageSummary } from "../lib/usage-store.ts";
 
 const NL = String.fromCharCode(10);
 
@@ -217,5 +217,23 @@ test("a v7 cache item (no `t`) is re-parsed once and re-saved as the current ver
 		assert.equal(reparsed.totals.input, 100, "the stale 99 is not counted");
 		const disk = cacheOf(dir)[join("a", "a.jsonl")]!;
 		assert.equal(disk.t, 10, "the re-parsed item is re-saved as the current version");
+	});
+});
+
+test("projects omit files with zero effective usage after reset or range filtering", () => {
+	withFixture((dir) => {
+		mkdirSync(join(dir, "sessions", "a"), { recursive: true });
+		const ts = Date.now();
+		const lines = [
+			JSON.stringify({ type: "session", cwd: "/repo/alpha" }),
+			JSON.stringify({ message: { role: "assistant", provider: "google", model: "m1", timestamp: ts, usage: { input: 100, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.02, totalFromProvider: true } } } }),
+		];
+		writeFileSync(join(dir, "sessions", "a", "a.jsonl"), lines.join(NL) + NL);
+		assert.equal(collectUsageSummary(true, "all").projects.length, 1);
+
+		resetUsageStats();
+		const afterReset = collectUsageSummary(true, "all");
+		assert.equal(afterReset.totals.sessions, 0);
+		assert.equal(afterReset.projects.length, 0, "no ghost project row with 0 messages remains after reset");
 	});
 });

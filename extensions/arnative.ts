@@ -26,9 +26,9 @@ import {
 } from "./animations.ts";
 import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
 import { EDIT_DIFF_CHOICES, activeEditDiff, setEditDiff, type EditDiffMode } from "./tools.ts";
-import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset, type FooterPreset } from "./footer.ts";
+import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
-import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset, type HeaderPreset } from "./section-headers.ts";
+import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset } from "./section-headers.ts";
 import {
 	AUTO_COMPACT_CHOICES,
 	AUTO_COMPACT_KEY,
@@ -54,7 +54,6 @@ import {
 	type RenderCacheChoice,
 } from "./render-cache.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
-import { BACK_KEY_LABEL } from "../lib/shortcuts.ts";
 import { openProviders } from "../lib/provider.ts";
 import { openUsage } from "./usage.ts";
 import { SHORTCUT_OPEN_ARNATIVE } from "../lib/shortcuts.ts";
@@ -103,6 +102,125 @@ const THEMES_PICKER_TEXT: ListPickerText = {
 	legend: LIST_LEGEND_LIVE,
 };
 
+interface LivePickerSpec<T extends string> {
+	choices: readonly T[];
+	rows?: ListRow[];
+	opened: T | undefined;
+	text: ListPickerText | (() => ListPickerText);
+	apply: (value: T) => void;
+	current: () => T | undefined;
+	label: string;
+	headlessLabels?: string[];
+	onSelectHeadless?: (value: T) => void;
+	onDone?: () => void;
+	onRevert?: () => void;
+	onBack?: () => void;
+	cancel?: boolean;
+	press?: (keyData: string, requestRender: () => void) => void;
+	toggleGradient?: (requestRender: () => void) => void;
+	summary?: (theme: { fg(c: string, t: string): string }) => string[];
+	note?: (label: string) => string | undefined;
+	tickMs?: number;
+}
+
+/** Shared live-preview picker: ↑↓ previews immediately, Enter keeps, Esc/← reverts. */
+async function openLivePicker<T extends string>(ctx: ExtensionCommandContext, spec: LivePickerSpec<T>): Promise<boolean | void> {
+	const getText = typeof spec.text === "function" ? spec.text : () => spec.text as ListPickerText;
+	if (ctx.mode !== "tui") {
+		const labels = spec.headlessLabels ?? markedLabels(spec.choices, spec.opened);
+		const pick = await ctx.ui.select(getText().title, labels);
+		if (pick === undefined) return;
+		const chosen = spec.choices[labels.indexOf(pick)]!;
+		if (spec.onSelectHeadless) spec.onSelectHeadless(chosen);
+		else {
+			spec.apply(chosen);
+			ctx.ui.notify(`[arnative] ${spec.label}: ${chosen}`, "info");
+		}
+		return;
+	}
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
+		new ListPicker(
+			theme,
+			spec.rows ?? nameRows(spec.choices),
+			spec.opened,
+			{
+				preview: (name) => spec.apply(name as T),
+				revert: () => {
+					if (spec.onRevert) spec.onRevert();
+					else if (spec.opened !== undefined) spec.apply(spec.opened);
+				},
+				done: () => {
+					if (spec.onDone) spec.onDone();
+					else announce(ctx.ui, `${spec.label}: ${spec.current()}.`);
+					done(false);
+				},
+				...(spec.cancel ? { cancel: () => done(false) } : {}),
+				back: () => {
+					if (spec.onBack) spec.onBack();
+					else if (spec.opened !== undefined && spec.current() !== spec.opened) spec.apply(spec.opened);
+					done(true);
+				},
+				...(spec.press ? { press: (k) => spec.press!(k, () => tui.requestRender()) } : {}),
+				...(spec.toggleGradient ? { toggleGradient: () => spec.toggleGradient!(() => tui.requestRender()) } : {}),
+				...(spec.summary ? { summary: () => spec.summary!(theme) } : {}),
+				...(spec.note ? { note: spec.note } : {}),
+				...(typeof spec.text === "function" ? { legend: () => getText().legend } : {}),
+				...(spec.tickMs !== undefined ? { tickMs: spec.tickMs } : {}),
+				requestRender: () => tui.requestRender(),
+			},
+			getText(),
+			true,
+			ctx.thinkingLevel,
+		),
+	);
+	return goBack === true;
+}
+
+/** Shared non-live choice picker: Enter commits the highlighted row, Esc/← leaves untouched. */
+async function openChoicePicker<T extends string>(
+	ctx: ExtensionCommandContext,
+	spec: {
+		choices: readonly T[];
+		rows: ListRow[];
+		opened: T;
+		text: ListPickerText;
+		onCommit: (index: number, isTui: boolean) => void | Promise<void>;
+	},
+): Promise<boolean | void> {
+	if (ctx.mode !== "tui") {
+		const labels = spec.choices.map((c) => (c === spec.opened ? `${c} ✓` : c));
+		const pick = await ctx.ui.select(spec.text.title, labels);
+		if (pick === undefined) return;
+		await spec.onCommit(labels.indexOf(pick), false);
+		return;
+	}
+	let committed: number | undefined;
+	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
+		const picker = new ListPicker(
+			theme,
+			spec.rows,
+			spec.opened,
+			{
+				preview: () => {},
+				revert: () => {},
+				done: () => {
+					committed = picker.index;
+					done(false);
+				},
+				cancel: () => done(false),
+				back: () => done(true),
+				requestRender: () => tui.requestRender(),
+			},
+			spec.text,
+			false,
+			ctx.thinkingLevel,
+		);
+		return picker;
+	});
+	if (committed !== undefined) await spec.onCommit(committed, true);
+	return goBack === true;
+}
+
 const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	// Only this package's family (`arnative`, `arnative-<variant>`): the picker brands itself
 	// arnative, so pi's own themes and the user's belong in /settings → Theme, not here.
@@ -112,45 +230,31 @@ const openThemes = async (ctx: ExtensionCommandContext): Promise<boolean | void>
 		return;
 	}
 	const current = ctx.ui.theme.name;
-
-	if (ctx.mode !== "tui") {
-		// No custom components (RPC/headless): fall back to the blocking picker.
-		const labels = markedLabels(names, current);
-		const pick = await ctx.ui.select(THEMES_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		const result = ctx.ui.setTheme(names[labels.indexOf(pick)]!);
-		ctx.ui.notify(
-			result.success ? `[arnative] Theme: ${names[labels.indexOf(pick)]}` : `[arnative] ${result.error ?? "failed"}`,
-			result.success ? "info" : "error",
-		);
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
-		new ListPicker(theme, nameRows(names), current, {
-			preview: (name) => {
-				const result = ctx.ui.setTheme(name);
-				if (!result.success) ctx.ui.notify(`[arnative] ${result.error ?? `failed to apply ${name}`}`, "error");
-			},
-			revert: () => {
-				if (current) ctx.ui.setTheme(current);
-			},
-			done: () => {
-				const applied = ctx.ui.theme.name;
-				announce(ctx.ui, applied ? `Theme: ${applied}.` : "Theme changed.");
-				done(false);
-			},
-			back: () => {
-				// Back drops the live preview, then reports upward so the menu reopens.
-				// Guarded like `revert`: `theme.name` is optional, and `setTheme(undefined)`
-				// would reach pi's unguarded loader path.
-				if (current && ctx.ui.theme.name !== current) ctx.ui.setTheme(current);
-				done(true);
-			},
-			requestRender: () => tui.requestRender(),
-		}, THEMES_PICKER_TEXT, true, ctx.thinkingLevel),
-	);
-	return goBack === true;
+	return openLivePicker(ctx, {
+		choices: names,
+		opened: current,
+		text: THEMES_PICKER_TEXT,
+		label: "Theme",
+		current: () => ctx.ui.theme.name,
+		apply: (name) => {
+			const result = ctx.ui.setTheme(name);
+			if (!result.success) ctx.ui.notify(`[arnative] ${result.error ?? `failed to apply ${name}`}`, "error");
+		},
+		onSelectHeadless: (name) => {
+			const result = ctx.ui.setTheme(name);
+			ctx.ui.notify(result.success ? `[arnative] Theme: ${name}` : `[arnative] ${result.error ?? "failed"}`, result.success ? "info" : "error");
+		},
+		onRevert: () => {
+			if (current) ctx.ui.setTheme(current);
+		},
+		onBack: () => {
+			if (current && ctx.ui.theme.name !== current) ctx.ui.setTheme(current);
+		},
+		onDone: () => {
+			const applied = ctx.ui.theme.name;
+			announce(ctx.ui, applied ? `Theme: ${applied}.` : "Theme changed.");
+		},
+	});
 };
 
 /** The Footers screen copy. The legend states the cost switch's live value, like the
@@ -162,54 +266,20 @@ const footersPickerText = (): ListPickerText => ({
 	legend: `[↑↓] Preview  [c] Cost ${activeFooterCost() ? "on" : "off"}  [Enter] Select  [Esc] Back`,
 });
 
-const openFooters = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
-	const opened = activeFooterPreset();
-
-	if (ctx.mode !== "tui") {
-		// No custom components (RPC/headless): fall back to the blocking picker.
-		const labels = markedLabels(FOOTER_PRESETS, opened);
-		const pick = await ctx.ui.select(footersPickerText().title, labels);
-		if (pick === undefined) return;
-		const name = FOOTER_PRESETS[labels.indexOf(pick)]!;
-		setFooterPreset(name, ctx);
-		ctx.ui.notify(`[arnative] Footer: ${name}`, "info");
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
-		new ListPicker(
-			theme,
-			nameRows(FOOTER_PRESETS),
-			opened,
-			{
-				preview: (name) => setFooterPreset(name as FooterPreset, ctx),
-				revert: () => setFooterPreset(opened, ctx),
-				done: () => {
-					announce(ctx.ui, `Footer: ${activeFooterPreset()}.`);
-					done(false);
-				},
-				back: () => {
-					// Back drops the live preview, then reports upward so the menu reopens.
-					if (activeFooterPreset() !== opened) setFooterPreset(opened, ctx);
-					done(true);
-				},
-				// `[c]` is a switch, not a preview: the user asked for it and the legend states
-				// its state, so Esc and `←` leave it on. Only the preset preview reverts.
-				press: (keyData) => {
-					if (!matchesKey(keyData, "c")) return;
-					setFooterCost(!activeFooterCost());
-					tui.requestRender();
-				},
-				legend: () => footersPickerText().legend,
-				requestRender: () => tui.requestRender(),
-			},
-			footersPickerText(),
-			true,
-			ctx.thinkingLevel,
-		),
-	);
-	return goBack === true;
-};
+const openFooters = (ctx: ExtensionCommandContext): Promise<boolean | void> =>
+	openLivePicker(ctx, {
+		choices: FOOTER_PRESETS,
+		opened: activeFooterPreset(),
+		text: footersPickerText,
+		label: "Footer",
+		current: activeFooterPreset,
+		apply: (name) => setFooterPreset(name, ctx),
+		press: (keyData, requestRender) => {
+			if (!matchesKey(keyData, "c")) return;
+			setFooterCost(!activeFooterCost());
+			requestRender();
+		},
+	});
 
 const HEADERS_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Headers"),
@@ -217,46 +287,15 @@ const HEADERS_PICKER_TEXT: ListPickerText = {
 	legend: LIST_LEGEND_LIVE,
 };
 
-const openHeaders = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
-	const opened = activeHeaderPreset();
-
-	if (ctx.mode !== "tui") {
-		// No custom components (RPC/headless): fall back to the blocking picker.
-		const labels = markedLabels(HEADER_PRESETS, opened);
-		const pick = await ctx.ui.select(HEADERS_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		const name = HEADER_PRESETS[labels.indexOf(pick)]!;
-		setHeaderPreset(name, ctx);
-		ctx.ui.notify(`[arnative] Header: ${name}`, "info");
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
-		new ListPicker(
-			theme,
-			nameRows(HEADER_PRESETS),
-			opened,
-			{
-				preview: (name) => setHeaderPreset(name as HeaderPreset, ctx),
-				revert: () => setHeaderPreset(opened, ctx),
-				done: () => {
-					announce(ctx.ui, `Header: ${activeHeaderPreset()}.`);
-					done(false);
-				},
-				back: () => {
-					// Back drops the live preview, then reports upward so the menu reopens.
-					if (activeHeaderPreset() !== opened) setHeaderPreset(opened, ctx);
-					done(true);
-				},
-				requestRender: () => tui.requestRender(),
-			},
-			HEADERS_PICKER_TEXT,
-			true,
-			ctx.thinkingLevel,
-		),
-	);
-	return goBack === true;
-};
+const openHeaders = (ctx: ExtensionCommandContext): Promise<boolean | void> =>
+	openLivePicker(ctx, {
+		choices: HEADER_PRESETS,
+		opened: activeHeaderPreset(),
+		text: HEADERS_PICKER_TEXT,
+		label: "Header",
+		current: activeHeaderPreset,
+		apply: (name) => setHeaderPreset(name, ctx),
+	});
 
 const CHATBOX_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Chatbox"),
@@ -286,114 +325,48 @@ export const chatboxSummary = (theme: { fg(c: string, t: string): string }): str
 	];
 };
 
-const openChatbox = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
-	const opened = activeChatboxPreset();
-
-	if (ctx.mode !== "tui") {
-		const labels = markedLabels(CHATBOX_PRESETS, opened);
-		const pick = await ctx.ui.select(CHATBOX_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		const name = CHATBOX_PRESETS[labels.indexOf(pick)]!;
-		setChatboxPreset(name);
-		ctx.ui.notify(`[arnative] Chatbox: ${name}`, "info");
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
-		new ListPicker(
-			theme,
-			chatboxRows(),
-			opened,
-			{
-				preview: (name) => setChatboxPreset(name as ChatboxPreset),
-				revert: () => setChatboxPreset(opened),
-				done: () => {
-					announce(ctx.ui, `Chatbox: ${activeChatboxPreset()}.`);
-					done(false);
-				},
-				back: () => {
-					if (activeChatboxPreset() !== opened) setChatboxPreset(opened);
-					done(true);
-				},
-				press: (keyData) => {
-					if (matchesKey(keyData, "i") || keyData === "I") {
-						setChatboxPrompt(nextChatboxPrompt());
-						tui.requestRender();
-						return;
-					}
-					if (matchesKey(keyData, "d") || keyData === "D") {
-						setChatboxDialog(nextChatboxDialog());
-						tui.requestRender();
-					}
-				},
-				summary: () => chatboxSummary(theme),
-				requestRender: () => tui.requestRender(),
-			},
-			CHATBOX_PICKER_TEXT,
-			true,
-			ctx.thinkingLevel,
-		),
-	);
-	return goBack === true;
-};
+const openChatbox = (ctx: ExtensionCommandContext): Promise<boolean | void> =>
+	openLivePicker(ctx, {
+		choices: CHATBOX_PRESETS,
+		rows: chatboxRows(),
+		opened: activeChatboxPreset(),
+		text: CHATBOX_PICKER_TEXT,
+		label: "Chatbox",
+		current: activeChatboxPreset,
+		apply: setChatboxPreset,
+		summary: chatboxSummary,
+		press: (keyData, requestRender) => {
+			if (matchesKey(keyData, "i") || keyData === "I") {
+				setChatboxPrompt(nextChatboxPrompt());
+				requestRender();
+				return;
+			}
+			if (matchesKey(keyData, "d") || keyData === "D") {
+				setChatboxDialog(nextChatboxDialog());
+				requestRender();
+			}
+		},
+	});
 
 /** Animations picker. Unlike Themes/Headers/Footers the choice has a visible effect only
  *  while a tool runs, so there is nothing to preview live on the screen itself — the row
  *  previews the frames instead, and Enter installs the preset for the next run. */
-const openAnimations = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
-	const opened = activeSpinnerPreset();
-	// Each row spells its frames out (`Diamond Glow · diamond closing, 0.8s  ⬥ ◈ ◆ ◇`), so the
-	// preview is what the user picks by; the rows come from animations.ts, one source.
-	const rows: ListRow[] = animationRows();
-
-	if (ctx.mode !== "tui") {
-		// No custom components (RPC/headless): fall back to the blocking picker. The gradient
-		// switch has no row here, so it is reported rather than silently unreachable.
-		const labels = markedLabels(SPINNER_PRESETS, opened);
-		const pick = await ctx.ui.select(animationsPickerText().title, labels);
-		if (pick === undefined) return;
-		setSpinnerPreset(SPINNER_PRESETS[labels.indexOf(pick)]!);
-		ctx.ui.notify(`[arnative] Animation: ${SPINNER_PRESETS[labels.indexOf(pick)]}`, "info");
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) =>
-		new ListPicker(
-			theme,
-			rows,
-			opened,
-			{
-				preview: (name) => setSpinnerPreset(name as SpinnerPreset),
-				revert: () => setSpinnerPreset(opened),
-				done: () => {
-					announce(ctx.ui, `Animation: ${activeSpinnerPreset()}.`);
-					done(false);
-				},
-				back: () => {
-					// Back restores the preset it opened with, then reports upward.
-					if (activeSpinnerPreset() !== opened) setSpinnerPreset(opened);
-					done(true);
-				},
-				// `[g]` is a switch, not a preview: it is a command the user asked for and the legend
-				// states its state, so Esc and `←` leave it on. Only the preset preview reverts.
-				toggleGradient: () => {
-					setSpinnerGradient(!activeSpinnerGradient());
-					tui.requestRender();
-				},
-				legend: () => animationsPickerText().legend,
-				// The row animates: its note is re-read each tick and the frame comes from the
-				// clock, so the picker shows motion instead of a static glyph list.
-				note: (label) => animationRowNote(label as SpinnerPreset),
-				tickMs: PREVIEW_TICK_MS,
-				requestRender: () => tui.requestRender(),
-			},
-			animationsPickerText(),
-			true,
-			ctx.thinkingLevel,
-		),
-	);
-	return goBack === true;
-};
+const openAnimations = (ctx: ExtensionCommandContext): Promise<boolean | void> =>
+	openLivePicker(ctx, {
+		choices: SPINNER_PRESETS,
+		rows: animationRows(),
+		opened: activeSpinnerPreset(),
+		text: animationsPickerText,
+		label: "Animation",
+		current: activeSpinnerPreset,
+		apply: setSpinnerPreset,
+		toggleGradient: (requestRender) => {
+			setSpinnerGradient(!activeSpinnerGradient());
+			requestRender();
+		},
+		note: (label) => animationRowNote(label as SpinnerPreset),
+		tickMs: PREVIEW_TICK_MS,
+	});
 
 const AUTOCOMPACT_PICKER_TEXT: ListPickerText = {
 	title: screenTitle("Auto-compact"),
@@ -425,46 +398,25 @@ export function autoCompactRows(opened: AutoCompactChoice): ListRow[] {
 
 /** A plain (non-live) picker: the choice is committed by Enter, nothing previews. The
  *  trigger itself lives in `extensions/autocompact.ts` and fires on the next settle. */
-const openAutoCompact = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+const openAutoCompact = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeAutoCompact();
-
-	if (ctx.mode !== "tui") {
-		// No custom components (RPC/headless): fall back to the blocking picker.
-		const labels = AUTO_COMPACT_CHOICES.map((c) => (c === opened ? `${c} ✓` : c));
-		const pick = await ctx.ui.select(AUTOCOMPACT_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		setAutoCompact(AUTO_COMPACT_CHOICES[labels.indexOf(pick)]!);
-		ctx.ui.notify(
-			`[arnative] Auto-compact: ${pick === "Off" ? "off" : pick === "Smart" ? "smart (tiered by context window)" : `above ${pick} tokens of context`}`,
-			"info",
-		);
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-		const picker = new ListPicker(
-			theme,
-			autoCompactRows(opened),
-			opened,
-			{
-				preview: () => {},
-				revert: () => {},
-				done: () => {
-					setAutoCompact(AUTO_COMPACT_CHOICES[picker.index]!);
-					announce(ctx.ui, `Auto-compact: ${AUTO_COMPACT_CHOICES[picker.index]}.`);
-					done(false);
-				},
-				cancel: () => done(false),
-				back: () => done(true),
-				requestRender: () => tui.requestRender(),
-			},
-			AUTOCOMPACT_PICKER_TEXT,
-			false,
-			ctx.thinkingLevel,
-		);
-		return picker;
+	return openChoicePicker(ctx, {
+		choices: AUTO_COMPACT_CHOICES,
+		rows: autoCompactRows(opened),
+		opened,
+		text: AUTOCOMPACT_PICKER_TEXT,
+		onCommit: (index, isTui) => {
+			const choice = AUTO_COMPACT_CHOICES[index]!;
+			setAutoCompact(choice);
+			if (isTui) announce(ctx.ui, `Auto-compact: ${choice}.`);
+			else {
+				ctx.ui.notify(
+					`[arnative] Auto-compact: ${choice === "Off" ? "off" : choice === "Smart" ? "smart (tiered by context window)" : `above ${choice} tokens of context`}`,
+					"info",
+				);
+			}
+		},
 	});
-	return goBack === true;
 };
 
 const MODEL_HEAL_PICKER_TEXT: ListPickerText = {
@@ -490,53 +442,24 @@ export function modelHealRows(opened: ModelHealChoice): ListRow[] {
 	];
 }
 
-const openModelHeal = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+const openModelHeal = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeModelHeal();
-
-	if (ctx.mode !== "tui") {
-		const labels = [...MODEL_HEAL_CHOICES, MODEL_HEAL_RUN_NOW].map((c) => (c === opened ? c + " ✓" : c));
-		const pick = await ctx.ui.select(MODEL_HEAL_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		const index = labels.indexOf(pick);
-		if (index === MODEL_HEAL_CHOICES.length) {
-			await healNow(ctx);
-			return;
-		}
-		setModelHeal(MODEL_HEAL_CHOICES[index]!);
-		ctx.ui.notify("[arnative] Model heal: " + MODEL_HEAL_CHOICES[index]!, "info");
-		return;
-	}
-
-	let runNow = false;
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-		const picker = new ListPicker(
-			theme,
-			modelHealRows(opened),
-			opened,
-			{
-				preview: () => {},
-				revert: () => {},
-				done: () => {
-					if (picker.index === MODEL_HEAL_CHOICES.length) runNow = true;
-					else {
-						setModelHeal(MODEL_HEAL_CHOICES[picker.index]!);
-						announce(ctx.ui, `Model heal: ${MODEL_HEAL_CHOICES[picker.index]}.`);
-					}
-					done(false);
-				},
-				cancel: () => done(false),
-				back: () => done(true),
-				requestRender: () => tui.requestRender(),
-			},
-			MODEL_HEAL_PICKER_TEXT,
-			false,
-			ctx.thinkingLevel,
-		);
-		return picker;
+	return openChoicePicker(ctx, {
+		choices: [...MODEL_HEAL_CHOICES, MODEL_HEAL_RUN_NOW],
+		rows: modelHealRows(opened),
+		opened,
+		text: MODEL_HEAL_PICKER_TEXT,
+		onCommit: async (index, isTui) => {
+			if (index === MODEL_HEAL_CHOICES.length) {
+				await healNow(ctx);
+				return;
+			}
+			const choice = MODEL_HEAL_CHOICES[index]!;
+			setModelHeal(choice);
+			if (isTui) announce(ctx.ui, `Model heal: ${choice}.`);
+			else ctx.ui.notify(`[arnative] Model heal: ${choice}`, "info");
+		},
 	});
-	// After the picker closed: the run notifies, and a notice under an open overlay is lost.
-	if (runNow) await healNow(ctx);
-	return goBack === true;
 };
 
 const RENDER_CACHE_PICKER_TEXT: ListPickerText = {
@@ -574,85 +497,35 @@ export function diffRows(): ListRow[] {
 	}));
 }
 
-const openDiffs = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+const openDiffs = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeEditDiff();
-
-	if (ctx.mode !== "tui") {
-		const labels = EDIT_DIFF_CHOICES.map((c) => (c === opened ? `${c} ✓` : c));
-		const pick = await ctx.ui.select(DIFFS_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		const choice = EDIT_DIFF_CHOICES[labels.indexOf(pick)]!;
-		setEditDiff(choice);
-		ctx.ui.notify(`[arnative] Diffs: ${choice}`, "info");
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-		const picker = new ListPicker(
-			theme,
-			diffRows(),
-			opened,
-			{
-				preview: (name) => setEditDiff(name as EditDiffMode),
-				revert: () => setEditDiff(opened),
-				done: () => {
-					announce(ctx.ui, `Diffs: ${activeEditDiff()}.`);
-					done(false);
-				},
-				cancel: () => done(false),
-				back: () => {
-					if (activeEditDiff() !== opened) setEditDiff(opened);
-					done(true);
-				},
-				requestRender: () => tui.requestRender(),
-			},
-			DIFFS_PICKER_TEXT,
-			true,
-			ctx.thinkingLevel,
-		);
-		return picker;
+	return openLivePicker(ctx, {
+		choices: EDIT_DIFF_CHOICES,
+		rows: diffRows(),
+		opened,
+		text: DIFFS_PICKER_TEXT,
+		label: "Diffs",
+		current: activeEditDiff,
+		apply: setEditDiff,
+		headlessLabels: EDIT_DIFF_CHOICES.map((c) => (c === opened ? `${c} ✓` : c)),
+		cancel: true,
 	});
-	return goBack === true;
 };
 
-const openRenderCache = async (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+const openRenderCache = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeRenderCache();
-
-	if (ctx.mode !== "tui") {
-		const labels = RENDER_CACHE_CHOICES.map((c) => (c === opened ? `${c} ✓` : c));
-		const pick = await ctx.ui.select(RENDER_CACHE_PICKER_TEXT.title, labels);
-		if (pick === undefined) return;
-		const choice = RENDER_CACHE_CHOICES[labels.indexOf(pick)]!;
-		setRenderCache(choice);
-		ctx.ui.notify(`[arnative] Render cache: ${choice}`, "info");
-		return;
-	}
-
-	const goBack = await ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
-		const picker = new ListPicker(
-			theme,
-			renderCacheRows(opened),
-			opened,
-			{
-				preview: () => {},
-				revert: () => {},
-				done: () => {
-					const choice = RENDER_CACHE_CHOICES[picker.index]!;
-					setRenderCache(choice);
-					announce(ctx.ui, `Render cache: ${choice}.`);
-					done(false);
-				},
-				cancel: () => done(false),
-				back: () => done(true),
-				requestRender: () => tui.requestRender(),
-			},
-			RENDER_CACHE_PICKER_TEXT,
-			false,
-			ctx.thinkingLevel,
-		);
-		return picker;
+	return openChoicePicker(ctx, {
+		choices: RENDER_CACHE_CHOICES,
+		rows: renderCacheRows(opened),
+		opened,
+		text: RENDER_CACHE_PICKER_TEXT,
+		onCommit: (index, isTui) => {
+			const choice = RENDER_CACHE_CHOICES[index]!;
+			setRenderCache(choice);
+			if (isTui) announce(ctx.ui, `Render cache: ${choice}.`);
+			else ctx.ui.notify(`[arnative] Render cache: ${choice}`, "info");
+		},
 	});
-	return goBack === true;
 };
 
 const PAYLOAD_CUSTOM_LABEL = "Custom";

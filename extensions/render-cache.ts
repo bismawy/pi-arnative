@@ -37,7 +37,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
 import { patchOnce } from "../lib/patch.ts";
-import { RENDER_CACHE_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { RENDER_CACHE_KEY, choiceSetting, loadChoice, resetPresetCache } from "../lib/preset-store.ts";
 
 /** Stored exactly as the picker shows them; `"On"` is the default. */
 export const RENDER_CACHE_CHOICES = ["On", "Off"] as const;
@@ -122,20 +122,14 @@ function getCacheState(): RenderCacheState {
 	return g[RENDER_CACHE_STATE_KEY] as RenderCacheState;
 }
 
+const renderCacheSetting = choiceSetting(RENDER_CACHE_KEY, RENDER_CACHE_CHOICES, DEFAULT_RENDER_CACHE);
+
 /** Current Render cache mode (`"On"` by default). */
-export function activeRenderCache(): RenderCacheChoice {
-	const stored =
-		(globalThis as Record<symbol, unknown>)[RENDER_CACHE_CONFIG_KEY] ??
-		loadChoice(RENDER_CACHE_KEY, RENDER_CACHE_CHOICES);
-	return RENDER_CACHE_CHOICES.includes(stored as RenderCacheChoice)
-		? (stored as RenderCacheChoice)
-		: DEFAULT_RENDER_CACHE;
-}
+export const activeRenderCache = (): RenderCacheChoice => renderCacheSetting.get();
 
 /** Update the Render cache choice and drop stale cached frames. */
 export function setRenderCache(choice: RenderCacheChoice): void {
-	(globalThis as Record<symbol, unknown>)[RENDER_CACHE_CONFIG_KEY] = choice;
-	saveChoice(RENDER_CACHE_KEY, choice);
+	renderCacheSetting.set(choice);
 	clearRenderCache();
 }
 

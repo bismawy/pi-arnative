@@ -12,7 +12,7 @@
  * coupling between the two, and it is a published symbol, not an import.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadChoice, saveChoice } from "../lib/preset-store.ts";
+import { choiceSetting, flagSetting } from "../lib/preset-store.ts";
 import {
 	DEFAULT_SPINNER_PRESET,
 	SPINNER_GRADIENT_KEY,
@@ -29,8 +29,10 @@ import { ROW_DIVIDER } from "../lib/format.ts";
 
 /** The arnative editor instance, published by `footer.ts` so the live spinner is reachable. */
 export const EDITOR_KEY = Symbol.for("pi-arnative.editor");
-const SPINNER_PRESET_CONFIG_KEY = Symbol.for("pi-arnative.spinnerPreset");
-const SPINNER_GRADIENT_CONFIG_KEY = Symbol.for("pi-arnative.spinnerGradient");
+const spinnerPresetSetting = choiceSetting(SPINNER_PRESET_KEY, SPINNER_PRESETS, DEFAULT_SPINNER_PRESET);
+const spinnerGradientSetting = flagSetting(SPINNER_GRADIENT_KEY);
+const SPINNER_PRESET_CONFIG_KEY = spinnerPresetSetting.slot;
+const SPINNER_GRADIENT_CONFIG_KEY = spinnerGradientSetting.slot;
 
 /** The `setWorkingMessage`/`setWorkingIndicator` surface of `ctx.ui`. */
 type WorkingUi = { setWorkingIndicator?: (options?: unknown) => void } | null | undefined;
@@ -62,37 +64,20 @@ function activeWorkingTheme(): ThemeLike {
 	return ((globalThis as Record<symbol, unknown>)[THEME_KEY] as ThemeLike) ?? null;
 }
 
-export function activeSpinnerPreset(): SpinnerPreset {
-	const stored =
-		(globalThis as Record<symbol, unknown>)[SPINNER_PRESET_CONFIG_KEY] ??
-		loadChoice(SPINNER_PRESET_KEY, SPINNER_PRESETS);
-	return SPINNER_PRESETS.includes(stored as SpinnerPreset) ? (stored as SpinnerPreset) : DEFAULT_SPINNER_PRESET;
-}
+export const activeSpinnerPreset = (): SpinnerPreset => spinnerPresetSetting.get();
 
-/** Is the `accent` → gradient override on? Stored as `"on"`/`"off"` so an absent key reads as
- *  off through the same allow-list path every other choice uses. */
-export function activeSpinnerGradient(): boolean {
-	const stored =
-		(globalThis as Record<symbol, unknown>)[SPINNER_GRADIENT_CONFIG_KEY] ??
-		loadChoice(SPINNER_GRADIENT_KEY, ["on", "off"] as const);
-	return stored === "on";
-}
+/** Is the `accent` → gradient override on? */
+export const activeSpinnerGradient = (): boolean => spinnerGradientSetting.get();
 
 /** Flip the gradient override, persist it, and repaint the live spinner at once. */
 export function setSpinnerGradient(on: boolean): void {
-	(globalThis as Record<symbol, unknown>)[SPINNER_GRADIENT_CONFIG_KEY] = on ? "on" : "off";
-	saveChoice(SPINNER_GRADIENT_KEY, on ? "on" : "off");
+	spinnerGradientSetting.set(on);
 	applySpinnerPreset(activeWorkingUi(), activeWorkingTheme());
 }
 
-/**
- * Publish the choice for this process, write it to `arnative-config.json`, and install it on
- * the running session right away — the picker previews by moving the cursor, so a choice that
- * only took effect on the next `session_start` would look like the selection did nothing.
- */
+/** Publish the choice for this process, write it to config, and install it on the running session. */
 export function setSpinnerPreset(preset: SpinnerPreset): void {
-	(globalThis as Record<symbol, unknown>)[SPINNER_PRESET_CONFIG_KEY] = preset;
-	saveChoice(SPINNER_PRESET_KEY, preset);
+	spinnerPresetSetting.set(preset);
 	applySpinnerPreset(activeWorkingUi(), activeWorkingTheme());
 }
 

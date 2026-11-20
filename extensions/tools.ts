@@ -43,7 +43,7 @@ import { join } from "node:path";
 import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../lib/box.ts";
 import { getActiveTheme, stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
 import { actionWord } from "../lib/todos.ts";
-import { EDIT_DIFF_KEY, loadChoice, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { EDIT_DIFF_KEY, choiceSetting, resetPresetCache } from "../lib/preset-store.ts";
 import { clearRenderCache } from "./render-cache.ts";
 import { assert, isMain } from "../lib/check.ts";
 import { markPatched, originalOf } from "../lib/patch.ts";
@@ -982,6 +982,7 @@ function arnativeTools(pi: ExtensionAPI) {
 	});
 	pi.on("session_shutdown", async () => {
 		TIMINGS.clear();
+		ACTIVE = 0;
 		if (TICK) {
 			clearInterval(TICK);
 			TICK = null;
@@ -991,21 +992,18 @@ function arnativeTools(pi: ExtensionAPI) {
 
 	// Gap is only stripped for our own boxes (see OWN_BOX above).
 
+	const shellCall = (a: { command?: string }, _th: Theme, soft: (s: string) => string, expanded: boolean): string => {
+		const cmd = (a.command ?? "").replace(/\r?\n/g, " ").trim();
+		return paintLinks(expanded ? cmd : smartTitle(cmd), soft);
+	};
+
 	// powershell: pi core registers it as a separate builtin (only on Windows); without
 	// our own registration it keeps pi's "default" shell and renders as a bg block, not a
 	// box (the same reason `bash` is re-registered below). Windows only: on any other
 	// platform `getPowerShellConfig()` throws, and an unregistered tool would stay off
 	// while our registration is active on load.
 	if (process.platform === "win32")
-		minimal(
-			pi,
-			createPowerShellTool(cwd),
-			(th) => th.fg("accent", "PS>"),
-			(a, _th, soft, expanded) => {
-				const cmd = (a.command ?? "").replace(/\r?\n/g, " ").trim();
-				return paintLinks(expanded ? cmd : smartTitle(cmd), soft);
-			},
-		);
+		minimal(pi, createPowerShellTool(cwd), (th) => th.fg("accent", "PS>"), shellCall);
 
 	// ls: no renderShell of its own, so pi's default shell turns it into a bg block.
 	minimal(
@@ -1017,15 +1015,7 @@ function arnativeTools(pi: ExtensionAPI) {
 	);
 
 	// bash: `󰔟 $ <6 words>…` / `✓ $ <full title when expanded>  0.1s`
-	minimal(
-		pi,
-		createBashTool(cwd),
-		(th) => th.fg("accent", "$"),
-		(a, _th, soft, expanded) => {
-			const cmd = (a.command ?? "").replace(/\r?\n/g, " ").trim();
-			return paintLinks(expanded ? cmd : smartTitle(cmd), soft);
-		},
-	);
+	minimal(pi, createBashTool(cwd), (th) => th.fg("accent", "$"), shellCall);
 
 	// read: `read path[:range]` → `󱞩 N lines`
 	minimal(
@@ -1088,25 +1078,18 @@ function arnativeTools(pi: ExtensionAPI) {
 	);
 }
 
-const EDIT_DIFF_CONFIG_KEY = Symbol.for("pi-arnative.editDiff");
 const SPLIT_DIFF_MIN_WIDTH = 50;
 const INTRA_LINE_MAX_TOKENS = 200;
 
 export type EditDiffMode = "Split" | "Unified";
 export const EDIT_DIFF_CHOICES: readonly EditDiffMode[] = ["Split", "Unified"];
+const editDiffSetting = choiceSetting(EDIT_DIFF_KEY, EDIT_DIFF_CHOICES, "Split");
+const EDIT_DIFF_CONFIG_KEY = editDiffSetting.slot;
 
-export function activeEditDiff(): EditDiffMode {
-	const stored =
-		(globalThis as Record<symbol, unknown>)[EDIT_DIFF_CONFIG_KEY] ??
-		loadChoice(EDIT_DIFF_KEY, EDIT_DIFF_CHOICES);
-	return EDIT_DIFF_CHOICES.includes(stored as EditDiffMode)
-		? (stored as EditDiffMode)
-		: "Split";
-}
+export const activeEditDiff = (): EditDiffMode => editDiffSetting.get();
 
 export function setEditDiff(mode: EditDiffMode): void {
-	(globalThis as Record<symbol, unknown>)[EDIT_DIFF_CONFIG_KEY] = mode;
-	saveChoice(EDIT_DIFF_KEY, mode);
+	editDiffSetting.set(mode);
 	clearRenderCache();
 }
 
