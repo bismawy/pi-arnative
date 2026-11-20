@@ -37,7 +37,7 @@ import { BRAND, renderBoxLines } from "../lib/box.ts";
 import { getActiveTheme, setActiveTheme, softOf, softSecondaryOf, stripAnsi, themeOf } from "../lib/ansi.ts";
 import { capitalize, expandKeyName, modelDisplayParts } from "../lib/format.ts";
 import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
-import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, loadChoice, saveChoice } from "../lib/preset-store.ts";
+import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, choiceSetting } from "../lib/preset-store.ts";
 import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
 
 import { patchOnce } from "../lib/patch.ts";
@@ -417,12 +417,9 @@ export const tabStore: Map<TabKey, string[]> =
 export const HEADER_PRESETS = ["Pi (system)", "Arnative (Full)"] as const;
 export type HeaderPreset = (typeof HEADER_PRESETS)[number];
 export const DEFAULT_HEADER_PRESET: HeaderPreset = "Arnative (Full)";
-const HEADER_PRESET_KEY = Symbol.for("pi-arnative.headerPreset");
+const headerPreset = choiceSetting(HEADER_PRESET_CONFIG_KEY, HEADER_PRESETS, DEFAULT_HEADER_PRESET);
 
-export function activeHeaderPreset(): HeaderPreset {
-	const stored = (globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY] ?? loadChoice(HEADER_PRESET_CONFIG_KEY, HEADER_PRESETS);
-	return HEADER_PRESETS.includes(stored as HeaderPreset) ? (stored as HeaderPreset) : DEFAULT_HEADER_PRESET;
-}
+export const activeHeaderPreset = (): HeaderPreset => headerPreset.get();
 
 /** Hand the header slot to the active preset: arnative's box, or pi's built-in ("Pi (system)"). */
 export function applyHeaderPreset(ctx: ExtensionContext): void {
@@ -435,8 +432,7 @@ export function applyHeaderPreset(ctx: ExtensionContext): void {
 
 /** Select a preset and apply it immediately (real-time: the header swaps on the spot). */
 export function setHeaderPreset(name: HeaderPreset, ctx: ExtensionContext): void {
-	(globalThis as Record<symbol, unknown>)[HEADER_PRESET_KEY] = name;
-	saveChoice(HEADER_PRESET_CONFIG_KEY, name);
+	headerPreset.set(name);
 	applyHeaderPreset(ctx);
 }
 

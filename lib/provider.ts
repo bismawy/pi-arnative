@@ -9,13 +9,14 @@
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext, Theme, TUI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { assert, isMain } from "../lib/check.ts";
-import { buildEffortMap, isEffortProbeable, mergeMeta, parseModelMeta, probeEffort, suggestCompat, type Compat, type ModelMeta } from "./compat.ts";
-import { screenTitle, type ScreenText } from "../lib/box.ts";
-import { stripAnsi } from "../lib/ansi.ts";
+import { join } from "node:path";
+import { assert, isMain } from "./check.ts";
+import { buildCatalogIndex, buildEffortMap, findMetaForId, isEffortProbeable, mergeMeta, parseModelMeta, probeEffort, suggestCompat, type CatalogIndex, type Compat, type ModelMeta } from "./compat.ts";
+import { screenTitle, type ScreenText } from "./box.ts";
+import { stripAnsi } from "./ansi.ts";
+import { writeAtomicSync } from "./preset-store.ts";
 import { announce, statusRows } from "./status-widget.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_MOVE, ListPicker, rowText, type ListRow } from "./list-picker.ts";
 
@@ -384,6 +385,80 @@ function wireModels(name: string, provider: { api?: unknown; baseUrl?: unknown }
 /** A stored selection keeps its level; a new id gets the detected one. A probed limit is
  *  merged into the stored one, and a probed effort map travels with the level, so a reselect
  *  never loses what an earlier probe learned (an `auto` level serializes without a map). */
+const PUBLIC_CATALOG_URL = "https://openrouter.ai/api/v1/models";
+const PUBLIC_CATALOG_TTL_MS = 60 * 60 * 1000;
+let publicCatalogCache: { index: CatalogIndex; at: number } | undefined;
+
+type RegistryLike = { getAll?: () => readonly { id?: unknown; contextWindow?: unknown; maxTokens?: unknown }[] };
+
+async function fetchPublicCatalog(fetchImpl: FetchLike, timeoutMs = 5_000): Promise<CatalogIndex | undefined> {
+	if (fetchImpl === fetch && publicCatalogCache && Date.now() - publicCatalogCache.at < PUBLIC_CATALOG_TTL_MS) {
+		return publicCatalogCache.index;
+	}
+	try {
+		const res = await fetchImpl(PUBLIC_CATALOG_URL, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
+		if (!res.ok) return undefined;
+		const parsed = parseModelMeta(await res.json());
+		const index = buildCatalogIndex(parsed);
+		if (fetchImpl === fetch) publicCatalogCache = { index, at: Date.now() };
+		return index;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Fill missing `contextWindow` (and `maxTokens`) for picked models from pi's local
+ *  model registry first, then from OpenRouter's public catalog if any still lack one. */
+export async function resolveMissingMeta(
+	ids: readonly string[],
+	baseMeta: Map<string, ModelMeta> | undefined,
+	ctx: { modelRegistry?: RegistryLike } | undefined,
+	fetchImpl: FetchLike = fetch,
+): Promise<Map<string, ModelMeta>> {
+	const out = new Map<string, ModelMeta>(baseMeta ?? []);
+	let missing = ids.filter((id) => out.get(id)?.contextWindow === undefined);
+	if (missing.length === 0) return out;
+
+	// Tier 1: pi's built-in catalog and already-configured providers (instant, offline).
+	try {
+		const all = ctx?.modelRegistry?.getAll?.() ?? [];
+		const entries: [string, ModelMeta][] = [];
+		for (const m of all) {
+			if (typeof m?.id !== "string" || typeof m.contextWindow !== "number" || m.contextWindow <= 0) continue;
+			entries.push([m.id, { contextWindow: m.contextWindow, ...(typeof m.maxTokens === "number" && m.maxTokens > 0 ? { maxTokens: m.maxTokens } : {}) }]);
+		}
+		if (entries.length > 0) {
+			const localIdx = buildCatalogIndex(entries);
+			for (const id of missing) {
+				const found = findMetaForId(id, localIdx);
+				if (found) out.set(id, mergeMeta(out.get(id), found));
+			}
+		}
+	} catch {
+		// Stale or partial registry must never block saving a provider.
+	}
+
+	missing = ids.filter((id) => out.get(id)?.contextWindow === undefined);
+	if (missing.length === 0) return out;
+
+	// Tier 2: public model catalog for open/commercial models not yet in local registry.
+	const publicIdx = await fetchPublicCatalog(fetchImpl);
+	if (publicIdx) {
+		for (const id of missing) {
+			const found = findMetaForId(id, publicIdx);
+			if (found) out.set(id, mergeMeta(out.get(id), found));
+		}
+	}
+	return out;
+}
+
+const seedMeta = (entry: ProviderEntry, extra?: Map<string, ModelMeta>): Map<string, ModelMeta> => {
+	const out = new Map<string, ModelMeta>();
+	for (const m of entry.models) if (m.meta) out.set(m.id, m.meta);
+	if (extra) for (const [id, meta] of extra) out.set(id, mergeMeta(out.get(id), meta));
+	return out;
+};
+
 export function mergeLevels(entry: ProviderEntry, ids: string[], meta?: Map<string, ModelMeta>): ProviderModel[] {
 	return ids.map((id) => {
 		const existing = entry.models.find((m) => m.id === id);
@@ -420,14 +495,7 @@ function readJson(path: string): unknown {
 }
 
 function writeJson(path: string, value: unknown): void {
-	mkdirSync(dirname(path), { recursive: true });
-	// Temp + rename, the package's own standard (preset-store.ts, usage-store.ts): a crash
-	// mid-write must never truncate models.json or auth.json — a corrupted auth.json breaks
-	// the stored credentials of every provider, and the wizard refuses to save until it is
-	// repaired by hand.
-	const tmp = `${path}.${process.pid}.tmp`;
-	writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-	renameSync(tmp, path);
+	writeAtomicSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function loadModelsConfig(): unknown {
@@ -706,11 +774,19 @@ const addProviderFlow = async (ctx: ExtensionCommandContext): Promise<void> => {
 		return;
 	}
 
+	probingStatus(ctx, "resolving context limits…");
+	let resolvedMeta: Map<string, ModelMeta>;
+	try {
+		resolvedMeta = await resolveMissingMeta(picked, result?.meta, ctx as never);
+	} finally {
+		probingStatus(ctx, undefined);
+	}
+
 	const entry: ProviderEntry = {
 		name,
 		baseUrl: chatBaseUrl(flavor, endpoint),
 		api: flavor,
-		models: mergeLevels({ name, baseUrl: chatBaseUrl(flavor, endpoint), api: flavor, models: [] }, picked, result?.meta),
+		models: mergeLevels({ name, baseUrl: chatBaseUrl(flavor, endpoint), api: flavor, models: [] }, picked, resolvedMeta),
 	};
 	// A keyless endpoint still needs a resolvable credential for pi to list the models.
 	if (!key) entry.apiKey = result?.keyless ? "ollama" : "dummy";
@@ -814,7 +890,14 @@ const selectModelsFlow = async (ctx: ExtensionCommandContext, name: string, entr
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
-	await saveModelsNamed(ctx, name, mergeLevels(entry, picked));
+	probingStatus(ctx, "resolving context limits…");
+	let resolvedMeta: Map<string, ModelMeta>;
+	try {
+		resolvedMeta = await resolveMissingMeta(picked, seedMeta(entry), ctx as never);
+	} finally {
+		probingStatus(ctx, undefined);
+	}
+	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, resolvedMeta));
 };
 
 const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry: ProviderEntry): Promise<void> => {
@@ -844,7 +927,14 @@ const probeModelsFlow = async (ctx: ExtensionCommandContext, name: string, entry
 		if (answer === undefined || answer === "") return;
 		picked = answer.split(/[\s,]+/).filter(Boolean);
 	}
-	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, result.meta));
+	probingStatus(ctx, "resolving context limits…");
+	let resolvedMeta: Map<string, ModelMeta>;
+	try {
+		resolvedMeta = await resolveMissingMeta(picked, seedMeta(entry, result.meta), ctx as never);
+	} finally {
+		probingStatus(ctx, undefined);
+	}
+	await saveModelsNamed(ctx, name, mergeLevels(entry, picked, resolvedMeta));
 };
 
 const THINKING_LEGEND = "[/] Filter  [Space] Off/auto  [0-6] Set level  [p] Probe  [a/r] All auto/off  [Enter] Save  [Esc] Back";
@@ -876,6 +966,7 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 	let warn: string | undefined;
 	let refresh: () => void = () => {};
 	let closed = false;
+	let probeAbort: AbortController | undefined;
 	const cycle = (label: string): void => {
 		levels.set(label, levels.get(label) === "off" ? "auto" : "off");
 	};
@@ -901,6 +992,9 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 		}
 		busy = label;
 		progress = "starting…";
+		probeAbort?.abort();
+		const controller = new AbortController();
+		probeAbort = controller;
 		refresh();
 		try {
 			const supported = await probeEffort(
@@ -908,12 +1002,14 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 				{
 					baseUrl: entry.baseUrl,
 					key: readAuthKey(name) ?? inlineKey(entry),
+					signal: controller.signal,
 					onLevel: (level, _accepted, index) => {
 						progress = `${level} · ${index + 1}/7`;
 						refresh();
 					},
 				},
 			);
+			if (controller.signal.aborted) return;
 			if (supported.length === 0) {
 				warn = `${label}: no effort level answered — the map is unchanged.`;
 				return;
@@ -922,7 +1018,10 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 			probed.set(label, next);
 			levels.set(label, "auto");
 			warn = `${label}: accepts ${summary(next)}.`;
+		} catch (err) {
+			if (!controller.signal.aborted) throw err;
 		} finally {
+			if (probeAbort === controller) probeAbort = undefined;
 			busy = undefined;
 			progress = undefined;
 			refresh();
@@ -936,6 +1035,7 @@ const thinkingFlow = async (ctx: ExtensionCommandContext, name: string, entry: P
 			};
 			const close = (value: boolean | null) => {
 				closed = true;
+				probeAbort?.abort();
 				done(value);
 			};
 			const picker = new ListPicker(
@@ -1497,6 +1597,20 @@ if (isMain(import.meta.url)) {
 	assert(providerNames(loadModelsConfig()).join() === "t1", "the previous config survives the interrupted save");
 	assert(readAuthKey("t2") === undefined, "the interrupted save never reached auth.json");
 	rmSync(blockedTmp, { recursive: true, force: true });
+
+	// Automatic contextWindow fallback: probed > local modelRegistry > public catalog.
+	const resolved = await resolveMissingMeta(
+		["probed-m", "zai-org/GLM-5.3-Flash", "public/only-model", "unknown-model"],
+		new Map([["probed-m", { contextWindow: 64_000 }]]),
+		{ modelRegistry: { getAll: () => [{ id: "remote/river/zai-org/GLM-5.3-Flash", contextWindow: 1_000_000, maxTokens: 131_072 }] } },
+		route({ "/api/v1/models": { data: [{ id: "public/only-model", context_length: 200_000, top_provider: { max_completion_tokens: 16_384 } }] } }),
+	);
+	assert(resolved.get("probed-m")?.contextWindow === 64_000, "a probed contextWindow stays untouched");
+	assert(resolved.get("zai-org/GLM-5.3-Flash")?.contextWindow === 1_000_000, "missing window falls back to local modelRegistry");
+	assert(resolved.get("public/only-model")?.contextWindow === 200_000 && resolved.get("public/only-model")?.maxTokens === 16_384, "still-missing window falls back to public catalog");
+	assert(resolved.get("unknown-model") === undefined, "unknown models stay undefined without throwing");
+	const offline = await resolveMissingMeta(["x"], undefined, undefined, (async () => { throw new Error("offline"); }) as unknown as typeof fetch);
+	assert(offline.size === 0, "an offline public catalog failure degrades cleanly");
 	assert(readdirSync(tmp).every((f) => !f.endsWith(".tmp")), "a completed save leaves no temp files behind");
 	// Edit writes: the key moves to auth.json and leaves models.json, so the secret lives in
 	// one place; an env reference is configuration and stays put.

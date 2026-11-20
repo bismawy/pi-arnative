@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assert, isMain } from "../lib/check.ts";
-import { PAYLOAD_LIMIT_KEY, loadChoice, loadSetting, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { PAYLOAD_LIMIT_KEY, choiceSetting, loadChoice, loadSetting, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
 import { activeRenderCache, setRenderCache } from "./render-cache.ts";
 
 /** Stored exactly as the picker shows them; `Off` disables the trigger entirely. */
@@ -170,14 +170,10 @@ export function smartPercent(contextWindow: number, renderCacheOn = activeRender
 
 // Active choice on globalThis so the `/arnative` picker (a second module instance, see
 // animations.ts) and this module's event handlers agree without sharing memo caches.
-const AUTO_COMPACT_CONFIG_KEY = Symbol.for("pi-arnative.autoCompact");
+const autoCompactSetting = choiceSetting(AUTO_COMPACT_KEY, AUTO_COMPACT_CHOICES, DEFAULT_AUTO_COMPACT);
+const AUTO_COMPACT_CONFIG_KEY = autoCompactSetting.slot;
 
-export function activeAutoCompact(): AutoCompactChoice {
-	const stored =
-		(globalThis as Record<symbol, unknown>)[AUTO_COMPACT_CONFIG_KEY] ??
-		loadChoice(AUTO_COMPACT_KEY, AUTO_COMPACT_CHOICES);
-	return AUTO_COMPACT_CHOICES.includes(stored as AutoCompactChoice) ? (stored as AutoCompactChoice) : DEFAULT_AUTO_COMPACT;
-}
+export const activeAutoCompact = (): AutoCompactChoice => autoCompactSetting.get();
 
 /** The trigger threshold in context tokens for the given window, or null when the
  *  choice is off or Smart defers this window to pi's own compaction. */
@@ -192,10 +188,7 @@ export function activeAutoCompactThreshold(contextWindow: number): number | null
 }
 
 /** Pick a choice and persist it (the `/arnative` → Auto-compact rows call this). */
-export function setAutoCompact(choice: AutoCompactChoice): void {
-	(globalThis as Record<symbol, unknown>)[AUTO_COMPACT_CONFIG_KEY] = choice;
-	saveChoice(AUTO_COMPACT_KEY, choice);
-}
+export const setAutoCompact = (choice: AutoCompactChoice): void => autoCompactSetting.set(choice);
 
 /** Session-scoped trigger state. Module-local: only this module's registrar mutates it. */
 export interface AutoCompactState {

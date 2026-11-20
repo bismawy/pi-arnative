@@ -119,32 +119,78 @@ export interface ModelMeta {
 
 // Widest window first: max_model_len / max_input_tokens are upstream limits, not the
 // served window, and some channels only publish the input side.
-const CONTEXT_KEYS = ["context_length", "context_window", "max_context_length", "max_model_len", "max_context_window", "max_input_tokens", "max_input_length", "context_size"];
-const OUTPUT_KEYS = ["max_output_tokens", "max_completion_tokens", "max_output_length", "max_tokens"];
+const CONTEXT_KEYS = [
+	"context_length",
+	"context_window",
+	"max_context_length",
+	"max_model_len",
+	"max_context_window",
+	"max_context_window_tokens",
+	"max_input_tokens",
+	"max_input_length",
+	"context_size",
+	"inputTokenLimit",
+	"contextWindow",
+	"maxContextLength",
+	"maxModelLen",
+	"maxContextWindow",
+	"maxInputTokens",
+	"contextSize",
+];
+const OUTPUT_KEYS = [
+	"max_output_tokens",
+	"max_completion_tokens",
+	"max_output_length",
+	"max_tokens",
+	"outputTokenLimit",
+	"maxOutputTokens",
+	"maxCompletionTokens",
+	"maxTokens",
+];
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 const positiveInt = (value: unknown): number | undefined => {
 	const n = typeof value === "string" && value.trim() ? Number(value.trim()) : value;
 	return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
 };
 
-/** Numeric limits from one catalog entry. */
+/** Numeric limits from one catalog entry (top-level or nested `top_provider` / `limit` / `limits` / `capabilities.limits`). */
 export function parseMeta(entry: unknown): ModelMeta {
-	const rec = (entry ?? {}) as Record<string, unknown>;
+	const rec = isRecord(entry) ? entry : {};
+	const sources: Record<string, unknown>[] = [rec];
+	for (const nested of [rec.top_provider, rec.limit, rec.limits, isRecord(rec.capabilities) ? rec.capabilities.limits : undefined]) {
+		if (isRecord(nested)) sources.push(nested);
+	}
 	const out: ModelMeta = {};
-	for (const key of CONTEXT_KEYS) {
-		const value = positiveInt(rec[key]);
-		if (value !== undefined) {
-			out.contextWindow = value;
+	for (const src of sources) {
+		for (const key of CONTEXT_KEYS) {
+			const value = positiveInt(src[key]);
+			if (value !== undefined) {
+				out.contextWindow = value;
+				break;
+			}
+		}
+		if (out.contextWindow === undefined && (src === rec.limit || src === rec.limits)) {
+			const value = positiveInt(src.context);
+			if (value !== undefined) out.contextWindow = value;
+		}
+		if (out.contextWindow !== undefined) break;
+	}
+	for (const src of sources) {
+		for (const key of OUTPUT_KEYS) {
+			const value = positiveInt(src[key]);
+			if (value === undefined) continue;
+			// A "max_tokens" equal to the whole window is the context length, not a cap.
+			if (out.contextWindow !== undefined && value >= out.contextWindow) continue;
+			out.maxTokens = value;
 			break;
 		}
-	}
-	for (const key of OUTPUT_KEYS) {
-		const value = positiveInt(rec[key]);
-		if (value === undefined) continue;
-		// A "max_tokens" equal to the whole window is the context length, not a cap.
-		if (out.contextWindow !== undefined && value >= out.contextWindow) continue;
-		out.maxTokens = value;
-		break;
+		if (out.maxTokens === undefined && (src === rec.limit || src === rec.limits)) {
+			const value = positiveInt(src.output);
+			if (value !== undefined && (out.contextWindow === undefined || value < out.contextWindow)) out.maxTokens = value;
+		}
+		if (out.maxTokens !== undefined) break;
 	}
 	return out;
 }
@@ -179,11 +225,53 @@ export function mergeMeta(prev: ModelMeta | undefined, next: ModelMeta): ModelMe
 	const out: ModelMeta = { ...prev };
 	const ctx = next.contextWindow;
 	if (ctx !== undefined && contextWindowAccepted(ctx, prev?.contextWindow)) out.contextWindow = ctx;
-	const effective = ctx ?? prev?.contextWindow;
+	const effective = out.contextWindow;
 	if (next.maxTokens !== undefined && (prev?.maxTokens === undefined || next.maxTokens > prev.maxTokens)) {
 		out.maxTokens = effective !== undefined && next.maxTokens > effective ? effective : next.maxTokens;
 	}
 	return out;
+}
+
+export interface CatalogIndex {
+	exact: Map<string, ModelMeta>;
+	bare: Map<string, ModelMeta>;
+	stripped: Map<string, ModelMeta>;
+}
+
+const bareModelName = (id: string): string => {
+	const lower = id.trim().toLowerCase();
+	const slash = lower.lastIndexOf("/");
+	return slash >= 0 ? lower.slice(slash + 1) : lower;
+};
+
+const stripVariantSuffix = (name: string): string => name.replace(/(?::(?:free|exacto|thinking)|-(?:fp8|fp16|bf16|int8|int4|awq|gptq))$/i, "");
+
+const putPreferLarger = (map: Map<string, ModelMeta>, key: string, meta: ModelMeta): void => {
+	if (!key || meta.contextWindow === undefined) return;
+	const prev = map.get(key);
+	if (!prev || (prev.contextWindow ?? 0) < meta.contextWindow) map.set(key, meta);
+};
+
+/** Index model metadata by exact id, bare name (after `/`), and variant-stripped name for fallback lookup. */
+export function buildCatalogIndex(entries: Iterable<[string, ModelMeta]>): CatalogIndex {
+	const index: CatalogIndex = { exact: new Map(), bare: new Map(), stripped: new Map() };
+	for (const [id, meta] of entries) {
+		if (meta.contextWindow === undefined) continue;
+		const exactKey = id.trim().toLowerCase();
+		const bare = bareModelName(id);
+		const stripped = stripVariantSuffix(bare);
+		putPreferLarger(index.exact, exactKey, meta);
+		putPreferLarger(index.bare, bare, meta);
+		putPreferLarger(index.stripped, stripped, meta);
+	}
+	return index;
+}
+
+/** Look up fallback `contextWindow` / `maxTokens` for a model id by exact, bare, or variant-stripped name. */
+export function findMetaForId(id: string, index: CatalogIndex): ModelMeta | undefined {
+	const exactKey = id.trim().toLowerCase();
+	const bare = bareModelName(id);
+	return index.exact.get(exactKey) ?? index.bare.get(bare) ?? index.stripped.get(stripVariantSuffix(bare));
 }
 
 // ------------------------------------------------------- thinking effort
@@ -362,6 +450,18 @@ if (isMain(import.meta.url)) {
 	assert(!contextWindowAccepted(8192, 1_000_000), "a per-request number is rejected");
 	assert(mergeMeta({ maxTokens: 4096 }, { maxTokens: 8192 }).maxTokens === 8192, "an output cap only grows");
 	assert(mergeMeta({ contextWindow: 1024 }, { maxTokens: 8192 }).maxTokens === 1024, "a cap above the window clamps to the window");
+	assert(mergeMeta({ contextWindow: 200_000 }, { contextWindow: 4096, maxTokens: 32_000 }).maxTokens === 32_000, "a rejected anomaly window does not clamp maxTokens");
+
+	// Nested shapes (Gemini inputTokenLimit, OpenRouter top_provider, models.dev limit) and fallback index.
+	assert(parseMeta({ inputTokenLimit: 1_048_576, outputTokenLimit: 65_536 }).contextWindow === 1_048_576, "gemini inputTokenLimit parses");
+	assert(parseMeta({ top_provider: { context_length: 200_000, max_completion_tokens: 16_384 } }).contextWindow === 200_000, "nested top_provider parses");
+	assert(parseMeta({ limit: { context: 262_144, output: 32_768 } }).maxTokens === 32_768, "nested limit.context/output parses");
+	const idx = buildCatalogIndex([
+		["z-ai/glm-5.3-flash", { contextWindow: 1_000_000, maxTokens: 131_072 }],
+		["qwen/qwen3.8-27b", { contextWindow: 262_144, maxTokens: 32_768 }],
+	]);
+	assert(findMetaForId("zai-org/GLM-5.3-Flash", idx)?.contextWindow === 1_000_000, "vendor prefix difference still matches bare name");
+	assert(findMetaForId("Qwen/Qwen3.8-27B-FP8", idx)?.contextWindow === 262_144, "quantization suffix strips for fallback lookup");
 
 	assert(buildEffortMap([]) === undefined, "nothing answered writes nothing");
 	const exact = buildEffortMap(["none", "low", "high", "max"])!;

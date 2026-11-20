@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+- **Automatic `contextWindow` and `maxTokens` fallback in `/providers`.** When a provider's `/models` response omits context limits, `/providers` now resolves missing limits from pi's local `modelRegistry` first (matching exact, bare, and variant-stripped model IDs) and then from OpenRouter's public model catalog (`https://openrouter.ai/api/v1/models`). `parseMeta` also reads camelCase limit keys, Gemini `inputTokenLimit`/`outputTokenLimit`, and nested `top_provider`, `limit`/`limits`, and `capabilities.limits` objects (`lib/compat.ts`, `lib/provider.ts`).
+
+### Changed
+- **Automatic cleanup of old completed task lists in `todos/`.** On `session_start`, session todo files older than 30 days whose tasks are all completed or empty are pruned automatically (`extensions/todos.ts`).
+
+### Fixed
+- **Budget total estimate no longer double-counts today's spend.** The Budget modal summed `estimatedToday + estimatedMonth`, even though the rolling 30-day window already includes today (`extensions/budget.ts`).
+- **`/usage` Project view omits empty sessions after a reset or range filter.** Files with zero effective messages are no longer counted into `summary.projects` (`lib/usage-store.ts`).
+- **`mergeMeta` keeps `maxTokens` intact when an anomalous `contextWindow` is rejected.** Output caps now clamp against the accepted `out.contextWindow` instead of the rejected candidate (`lib/compat.ts`).
+- **Closing `/providers` → Thinking aborts any in-flight effort probe, and atomic file writes share Windows lock fallback.** Leaving the Thinking picker cancels pending probe requests via `AbortController`, and all seven atomic-write paths now share `writeAtomicSync` with Windows `EPERM`/`EBUSY`/`EXDEV` fallback and temp-file cleanup (`lib/provider.ts`, `lib/preset-store.ts`, `lib/usage-store.ts`, `lib/model-heal.ts`, `extensions/todos.ts`, `extensions/usage-export.ts`).
+
 ## [0.15.0] - 2026-11-19
 
 ### Changed

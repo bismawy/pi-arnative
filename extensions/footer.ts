@@ -25,9 +25,10 @@ import {
 	CHATBOX_PROMPT_KEY as CHATBOX_PROMPT_CONFIG_KEY,
 	FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY,
 	FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY,
+	choiceSetting,
+	flagSetting,
 	loadChoice,
 	resetPresetCache,
-	saveChoice,
 } from "../lib/preset-store.ts";
 import { formatCost } from "./usage.ts";
 import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
@@ -47,41 +48,34 @@ import { spinnerPainter } from "../lib/spinner.ts";
 export const CHATBOX_PRESETS = ["Pi (system)", "Arnative"] as const;
 export type ChatboxPreset = (typeof CHATBOX_PRESETS)[number];
 export const DEFAULT_CHATBOX_PRESET: ChatboxPreset = "Arnative";
-const CHATBOX_PRESET_KEY = Symbol.for("pi-arnative.chatboxPreset");
+const chatboxPreset = choiceSetting(CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PRESETS, DEFAULT_CHATBOX_PRESET);
+const CHATBOX_PRESET_KEY = chatboxPreset.slot;
 
 export const CHATBOX_PROMPTS = ["❯", ">", "›", "▸", "→", "\uf44f", "\udb82\udf79", "\uf51b", "\udb80\udf7d", "\uf120", "\uf489", "\udb80\udd7a"] as const;
 export type ChatboxPrompt = (typeof CHATBOX_PROMPTS)[number];
 export const DEFAULT_CHATBOX_PROMPT: ChatboxPrompt = "❯";
-const CHATBOX_PROMPT_KEY = Symbol.for("pi-arnative.chatboxPrompt");
+const chatboxPrompt = choiceSetting(CHATBOX_PROMPT_CONFIG_KEY, CHATBOX_PROMPTS, DEFAULT_CHATBOX_PROMPT);
+const CHATBOX_PROMPT_KEY = chatboxPrompt.slot;
 
 export const CHATBOX_DIALOGS = ["Left", "Center", "Right", "Inside", "Outside"] as const;
 export type ChatboxDialog = (typeof CHATBOX_DIALOGS)[number];
 export const DEFAULT_CHATBOX_DIALOG: ChatboxDialog = "Left";
-const CHATBOX_DIALOG_KEY = Symbol.for("pi-arnative.chatboxDialog");
+const chatboxDialog = choiceSetting(CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_DIALOGS, DEFAULT_CHATBOX_DIALOG);
+const CHATBOX_DIALOG_KEY = chatboxDialog.slot;
 
 export const PROMPT_IDLE_MS = 3_000;
 const PROMPT_TYPED_AT_KEY = Symbol.for("pi-arnative.promptTypedAt");
 const PROMPT_IDLE_TIMER_KEY = Symbol.for("pi-arnative.promptIdleTimer");
 
-export function activeChatboxPreset(): ChatboxPreset {
-	const stored = (globalThis as Record<symbol, unknown>)[CHATBOX_PRESET_KEY] ?? loadChoice(CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PRESETS);
-	return CHATBOX_PRESETS.includes(stored as ChatboxPreset) ? (stored as ChatboxPreset) : DEFAULT_CHATBOX_PRESET;
-}
-
+export const activeChatboxPreset = (): ChatboxPreset => chatboxPreset.get();
 export function setChatboxPreset(name: ChatboxPreset): void {
-	(globalThis as Record<symbol, unknown>)[CHATBOX_PRESET_KEY] = name;
-	saveChoice(CHATBOX_PRESET_CONFIG_KEY, name);
+	chatboxPreset.set(name);
 	poke();
 }
 
-export function activeChatboxPrompt(): ChatboxPrompt {
-	const stored = (globalThis as Record<symbol, unknown>)[CHATBOX_PROMPT_KEY] ?? loadChoice(CHATBOX_PROMPT_CONFIG_KEY, CHATBOX_PROMPTS);
-	return CHATBOX_PROMPTS.includes(stored as ChatboxPrompt) ? (stored as ChatboxPrompt) : DEFAULT_CHATBOX_PROMPT;
-}
-
+export const activeChatboxPrompt = (): ChatboxPrompt => chatboxPrompt.get();
 export function setChatboxPrompt(prompt: ChatboxPrompt): void {
-	(globalThis as Record<symbol, unknown>)[CHATBOX_PROMPT_KEY] = prompt;
-	saveChoice(CHATBOX_PROMPT_CONFIG_KEY, prompt);
+	chatboxPrompt.set(prompt);
 	poke();
 }
 
@@ -90,14 +84,9 @@ export function nextChatboxPrompt(current: ChatboxPrompt = activeChatboxPrompt()
 	return CHATBOX_PROMPTS[(idx + 1) % CHATBOX_PROMPTS.length]!;
 }
 
-export function activeChatboxDialog(): ChatboxDialog {
-	const stored = (globalThis as Record<symbol, unknown>)[CHATBOX_DIALOG_KEY] ?? loadChoice(CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_DIALOGS);
-	return CHATBOX_DIALOGS.includes(stored as ChatboxDialog) ? (stored as ChatboxDialog) : DEFAULT_CHATBOX_DIALOG;
-}
-
+export const activeChatboxDialog = (): ChatboxDialog => chatboxDialog.get();
 export function setChatboxDialog(dialog: ChatboxDialog): void {
-	(globalThis as Record<symbol, unknown>)[CHATBOX_DIALOG_KEY] = dialog;
-	saveChoice(CHATBOX_DIALOG_CONFIG_KEY, dialog);
+	chatboxDialog.set(dialog);
 	poke();
 }
 
@@ -206,29 +195,21 @@ export function minimalExpanded(): { left: boolean; right: boolean } {
 	(globalThis as Record<symbol, { left: boolean; right: boolean }>)[MINIMAL_EXPAND_KEY] = fresh;
 	return fresh;
 }
-const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
+const footerPreset = choiceSetting(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET);
+const FOOTER_PRESET_KEY = footerPreset.slot;
 const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
-const FOOTER_COST_KEY = Symbol.for("pi-arnative.footerCost");
+const footerCost = flagSetting(FOOTER_COST_CONFIG_KEY);
 
-/** Is the session cost cell on? Stored as `"on"`/`"off"` so an absent key reads as off
- *  through the same allow-list path every other choice uses. */
-export function activeFooterCost(): boolean {
-	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_COST_KEY] ?? loadChoice(FOOTER_COST_CONFIG_KEY, ["on", "off"] as const);
-	return stored === "on";
-}
+/** Is the session cost cell on? */
+export const activeFooterCost = (): boolean => footerCost.get();
 
-/** Flip the cost cell, persist it, and repaint the footer at once — the choice is a command
- *  the user asked for, so it is not part of the picker's preview/revert dance. */
+/** Flip the cost cell, persist it, and repaint the footer at once. */
 export function setFooterCost(on: boolean): void {
-	(globalThis as Record<symbol, unknown>)[FOOTER_COST_KEY] = on ? "on" : "off";
-	saveChoice(FOOTER_COST_CONFIG_KEY, on ? "on" : "off");
+	footerCost.set(on);
 	poke();
 }
 
-export function activeFooterPreset(): FooterPreset {
-	const stored = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] ?? loadChoice(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS);
-	return FOOTER_PRESETS.includes(stored as FooterPreset) ? (stored as FooterPreset) : DEFAULT_FOOTER_PRESET;
-}
+export const activeFooterPreset = (): FooterPreset => footerPreset.get();
 
 /**
  * Hand the footer slot to the active preset: arnative's grid, or pi's built-in footer.
@@ -245,8 +226,7 @@ export function applyFooterPreset(ctx: ExtensionContext): void {
 }
 /** Select a preset and apply it immediately (the footer swaps on the spot). */
 export function setFooterPreset(name: FooterPreset, ctx: ExtensionContext): void {
-	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = name;
-	saveChoice(FOOTER_PRESET_CONFIG_KEY, name);
+	footerPreset.set(name);
 	applyFooterPreset(ctx);
 }
 
@@ -1343,8 +1323,10 @@ export function wrapInputListener(tui: unknown): () => void {
 	};
 	const target = tui as { handleTerminalInput?: (data: string) => void };
 	if (!target || typeof target.handleTerminalInput !== "function") return () => {};
-	if (!(globalThis as Record<symbol, boolean>)[WRAPPED_TUI_KEY]) {
-		(globalThis as Record<symbol, boolean>)[WRAPPED_TUI_KEY] = true;
+	const g = globalThis as Record<symbol, unknown>;
+	const wrapped = g[WRAPPED_TUI_KEY] instanceof WeakSet ? (g[WRAPPED_TUI_KEY] as WeakSet<object>) : (g[WRAPPED_TUI_KEY] = new WeakSet<object>());
+	if (!wrapped.has(target)) {
+		wrapped.add(target);
 		const original = target.handleTerminalInput;
 		target.handleTerminalInput = function (this: unknown, data: string): void {
 			// One keystroke, one activity. The wrapper runs before `original`, and `pi-tui`

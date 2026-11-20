@@ -5,11 +5,11 @@
  * can import it without importing the settings menu back (no import cycle).
  */
 import { Input, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
-import { softOf, thinkingColorOf } from "../lib/ansi.ts";
-import { renderScreen, screenTitle, type ScreenText } from "../lib/box.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { ROW_DIVIDER } from "../lib/format.ts";
-import { LEGEND_LIVE, LEGEND_MOVE, LEGEND_ROOT, matchesBack } from "../lib/shortcuts.ts";
+import { softOf, thinkingColorOf } from "./ansi.ts";
+import { renderScreen, screenTitle, type ScreenText } from "./box.ts";
+import { assert, isMain } from "./check.ts";
+import { ROW_DIVIDER } from "./format.ts";
+import { LEGEND_LIVE, LEGEND_MOVE, LEGEND_ROOT, matchesBack } from "./shortcuts.ts";
 
 // Legends come from the `KeySet`s the handlers match, so a key cannot be advertised on a
 // screen that does not handle it; the root menu has nothing behind it and omits `←`.

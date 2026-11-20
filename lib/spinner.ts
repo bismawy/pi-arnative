@@ -310,7 +310,7 @@ if (isMain(import.meta.url)) {
 		const def = SPINNER_PRESET_DEFS[p];
 		assert(def.note.length > 0, `${p} carries a picker note`);
 		for (const frame of def.frames) {
-			assert(!/\ufffd|\ue000-\uf8ff/.test(frame), `${p}: frame ${frame} is not a blank private-use cell`);
+			assert(!/[\ufffd\ue000-\uf8ff]/.test(frame), `${p}: frame ${frame} is not a blank private-use cell`);
 		}
 		if (def.frames.length > 0) {
 			assert(def.intervalMs > 0, `${p} with frames must set an interval`);

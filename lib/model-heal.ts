@@ -15,9 +15,9 @@
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { execSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { assert, isMain } from "./check.ts";
 import {
 	buildEffortMap,
@@ -32,7 +32,7 @@ import {
 	type CompatModel,
 	type ModelMeta,
 } from "./compat.ts";
-import { loadChoice, saveChoice } from "./preset-store.ts";
+import { loadChoice, saveChoice, writeAtomicSync } from "./preset-store.ts";
 import { levelToWire, loadModelsConfig, looseJsonParse, readAuthKey, saveModelsConfig, wireToLevel } from "./provider.ts";
 
 // ------------------------------------------------------------- setting
@@ -283,11 +283,7 @@ function loadState(): HealState {
 function saveState(part: Partial<Omit<HealState, "schema">>): void {
 	try {
 		const state = { ...loadState(), ...part };
-		const path = statePath();
-		mkdirSync(dirname(path), { recursive: true });
-		const tmp = `${path}.${process.pid}.tmp`;
-		writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-		renameSync(tmp, path);
+		writeAtomicSync(statePath(), `${JSON.stringify(state, null, 2)}\n`);
 	} catch {
 		// best effort: a lost stamp only costs one extra request next run
 	}
