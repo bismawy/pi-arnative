@@ -377,16 +377,15 @@ export function currentToolVerb(active: ReadonlyMap<string, string>): string {
  * Recognising the label keeps the rule honest: if pi-jev-eye renames its label, this test fails loudly in
  * the self-check below instead of degrading to a plain grey cell.
  */
-export const isJevEyeStatus = (status: string): boolean => /^\s*Eye\s*:/i.test(stripAnsi(status));
+export const isJevEyeStatus = (status: string): boolean => /^(?:(?:\uf21b|\ueb1b|\u{1F440})\s*)?Eye\s*:/iu.test(stripAnsi(status));
 
 /**
- * The pi-jev-eye status cell: `Eye: ● MODE (Backend)`. pi-jev-eye writes the value plain because a status
- * is a fact, not a layout; this decides the painting.
+ * The pi-jev-eye / pi-decision-eye status cell: `[icon] Eye: ● MODE (Backend)`.
  *
  * The trailing parenthesised backend is a modifier, so it takes `dim` while the `Eye:` label and the state
- * keep the soft and state tiers — that is what makes `(Clef Flash)` recede and `Eye: ● ON` stay readable
- * at a glance. The backend name itself is read out of the value, never hardcoded here: the extension
- * reports the active backend from `/jev-eye models`, so the footer cannot know it in advance.
+ * keep the soft and state tiers — that is what makes `(Clef Flash)` / `(mercury-decide)` recede and
+ * `Eye: ● ON` / `Eye: ● BALANCED` stay readable at a glance. The backend name itself is read out of the value,
+ * never hardcoded here.
  */
 export function jevEyeStatusLine(
 	status: string,
@@ -395,18 +394,35 @@ export function jevEyeStatusLine(
 	soft: (text: string) => string,
 	theme?: { fg?: (color: string, text: string) => string },
 ): string {
-	const clean = stripAnsi(status);
-	const isOff = clean.includes("OFF") || clean.includes("\u25CB");
-	const isReview = /REVIEW/i.test(clean);
-	let bullet = isOff ? dim("\u25CB") : acc("\u25CF");
-	if (isReview && typeof theme?.fg === "function") {
+	const clean = stripAnsi(status).replace(/^(?:\uf21b|\ueb1b|\u{1F440})\s*/u, "");
+	const isOff = /\bOFF\b/i.test(clean) || clean.includes("\u25CB");
+	const isReview = /\bREVIEW\b/i.test(clean);
+	const isStrict = /\bSTRICT\b/i.test(clean);
+	const isLight = /\bLIGHT\b/i.test(clean);
+	const isBalanced = /\bBALANCED\b/i.test(clean);
+	const fgToken = (token: string, fallback: (t: string) => string) => {
+		if (typeof theme?.fg !== "function") return fallback("\u25CF");
 		try {
-			bullet = theme.fg("warning", "\u25CF");
+			return theme.fg(token, "\u25CF");
 		} catch {
-			bullet = acc("\u25CF");
+			return fallback("\u25CF");
 		}
-	}
-	const label = isOff ? "OFF" : isReview ? "REVIEW" : "ON";
+	};
+	let bullet = isOff ? dim("\u25CB") : acc("\u25CF");
+	if (isReview) bullet = fgToken("warning", acc);
+	else if (isStrict) bullet = fgToken("mdHeading", acc);
+	else if (isLight) bullet = fgToken("borderAccent", acc);
+	const label = isOff
+		? "OFF"
+		: isReview
+			? "REVIEW"
+			: isStrict
+				? "STRICT"
+				: isLight
+					? "LIGHT"
+					: isBalanced
+						? "BALANCED"
+						: "ON";
 	// `Eye: ● ON (Clef Flash)` -> the base before the first colon, the backend in the trailing parentheses.
 	const base = clean.split(":")[0]!.trim() || "Eye";
 	const at = clean.lastIndexOf("(");
@@ -2503,6 +2519,27 @@ if (isMain(import.meta.url)) {
 	assert(
 		jevEyeStatusLine("Eye: ● ON", jevPlain, jevDim, jevPlain, undefined) === "\uf21b" + " Eye: ● ON",
 		"no backend suffix means no parenthesis, never a guessed one",
+	);
+	assert(isJevEyeStatus("\uf21b Eye: ● BALANCED (mercury-decide)"), "pi-decision-eye nerd-icon status is recognised");
+	assert(
+		jevEyeStatusLine("\uf21b Eye: ● BALANCED (mercury-decide)", jevPlain, jevDim, jevPlain, { fg: (color, text) => `<${color}>${text}</${color}>` }) ===
+			"\uf21b" + " Eye: ● BALANCED [dim](mercury-decide)[/dim]",
+		"BALANCED keeps accent bullet and dim backend",
+	);
+	assert(
+		jevEyeStatusLine("\uf21b Eye: ● STRICT (mercury-decide)", jevPlain, jevDim, jevPlain, { fg: (color, text) => `<${color}>${text}</${color}>` }) ===
+			"\uf21b" + " Eye: <mdHeading>●</mdHeading> STRICT [dim](mercury-decide)[/dim]",
+		"STRICT takes primary (mdHeading) bullet",
+	);
+	assert(
+		jevEyeStatusLine("\uf21b Eye: ● LIGHT (mercury-decide)", jevPlain, jevDim, jevPlain, { fg: (color, text) => `<${color}>${text}</${color}>` }) ===
+			"\uf21b" + " Eye: <borderAccent>●</borderAccent> LIGHT [dim](mercury-decide)[/dim]",
+		"LIGHT takes secondary (borderAccent) bullet",
+	);
+	assert(
+		jevEyeStatusLine("\uf21b Eye: ○ OFF (mercury-decide)", jevPlain, jevDim, jevPlain, undefined) ===
+			"\uf21b" + " Eye: [dim]○[/dim] OFF [dim](mercury-decide)[/dim]",
+		"OFF takes dim bullet and dim backend",
 	);
 
 	// Self-check: session age survives /resume (header timestamp wins over now).

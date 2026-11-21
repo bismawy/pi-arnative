@@ -90,6 +90,39 @@ const BUBBLE_BG_CACHE_MAX = 8192;
 let bubbleBgOpen = "";
 let bubbleBgCache = new Map<string, string>();
 
+function insertBgAfterResets(line: string, bgOpen: string): string {
+	let out = "";
+	let i = 0;
+	const n = line.length;
+	while (i < n) {
+		const c0 = line.indexOf("\x1b[0m", i);
+		const c49 = line.indexOf("\x1b[49m", i);
+		let pos = -1;
+		let tokenLen = 0;
+		if (c0 >= 0 && (c49 < 0 || c0 < c49)) {
+			pos = c0;
+			tokenLen = 4;
+		} else if (c49 >= 0) {
+			pos = c49;
+			tokenLen = 5;
+		}
+		if (pos < 0) {
+			out += line.slice(i);
+			break;
+		}
+		const after = pos + tokenLen;
+		out += line.slice(i, after);
+		// Leave a trailing \x1b[49m alone (it closes the bubble bg), and avoid duplicating
+		// bgOpen when a prior repair already placed it right after the reset.
+		const isTrailingClose = tokenLen === 5 && after === n;
+		if (!isTrailingClose && !line.startsWith(bgOpen, after)) {
+			out += bgOpen;
+		}
+		i = after;
+	}
+	return out.endsWith(bgOpen) ? `${out}\x1b[49m` : out;
+}
+
 export function repairBubbleBg(line: string, bgOpen: string): string {
 	if (!bgOpen || (!line.includes("\x1b[0m") && !line.includes("\x1b[49m"))) return line;
 	if (bgOpen !== bubbleBgOpen) {
@@ -98,12 +131,37 @@ export function repairBubbleBg(line: string, bgOpen: string): string {
 	}
 	const hit = bubbleBgCache.get(line);
 	if (hit !== undefined) return hit;
-	const patched = line.split("\x1b[0m").join(`\x1b[0m${bgOpen}`).split("\x1b[49m").join(`\x1b[49m${bgOpen}`);
-	const result = patched.endsWith(bgOpen) ? `${patched}\x1b[49m` : patched;
+	const result = insertBgAfterResets(line, bgOpen);
 	if (bubbleBgCache.size >= BUBBLE_BG_CACHE_MAX) bubbleBgCache.clear();
 	bubbleBgCache.set(line, result);
 	return result;
 }
+
+function resolveUserTimestamp(comp: { text?: string; timestamp?: string | number }): number | undefined {
+	if (typeof comp.timestamp === "number" && comp.timestamp > 0) return comp.timestamp;
+	if (typeof comp.timestamp === "string" && comp.timestamp) {
+		const parsed = Date.parse(comp.timestamp);
+		if (Number.isFinite(parsed) && parsed > 0) return parsed;
+	}
+	const textKey = comp.text?.trim() ?? "";
+	return USER_TIMESTAMPS_MAP.get(textKey);
+}
+
+type UserRenderCacheEntry = {
+	source: readonly string[];
+	width: number;
+	bgOpen: string;
+	badge: string;
+	lines: string[];
+};
+type AssistantRenderCacheEntry = {
+	source: readonly string[];
+	width: number;
+	badge: string;
+	lines: string[];
+};
+const userRenderCache = new WeakMap<object, UserRenderCacheEntry>();
+const assistantRenderCache = new WeakMap<object, AssistantRenderCacheEntry>();
 
 /**
  * Paste the clock at the right end of a line, 1 column from the right edge.
@@ -127,72 +185,87 @@ export function placeTimeAtRight(
 }
 
 // Both patches reinstall on every load (lib/patch.ts) so a `/reload` applies them.
+// Pi 1.6.0+ Container/Message `render()` returns a shared cached `readonly string[]`, so
+// both wrappers copy before modifying and cache their own output per source array identity.
 if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.prototype?.render) {
 	if (UserMessageComponent?.prototype?.render) {
 		const proto = UserMessageComponent.prototype as any;
-		const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
-		proto.render = markPatched(function (this: any, width: number): string[] {
-			const lines = origRender.call(this, width);
-			if (lines.length < 2) return lines;
+		const origRender = originalOf<(this: any, width: number) => readonly string[]>(proto, "render");
+		proto.render = markPatched(function (this: any, width: number): readonly string[] {
+			const source = origRender.call(this, width);
+			if (source.length < 2) return source;
+
+			const bgOpen = ansiBgOpen(tsState.theme, "userMessageBg");
+			const ts = resolveUserTimestamp(this as { text?: string; timestamp?: string | number });
+			const timeStr = ts ? formatClock(ts) : "";
+			const badge = timeStr ? formatTimeBadge(timeStr, tsState.theme) : "";
+
+			const prev = userRenderCache.get(this);
+			if (prev && prev.source === source && prev.width === width && prev.bgOpen === bgOpen && prev.badge === badge) {
+				return prev.lines;
+			}
 
 			// Fix the bubble bg first (reset Markdown lines make padding dark),
 			// then paste the clock (which deliberately drops the bg in the badge area).
-			const bgOpen = ansiBgOpen(tsState.theme, "userMessageBg");
-			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i], bgOpen);
+			const lines = [...source];
+			for (let i = 0; i < lines.length; i++) lines[i] = repairBubbleBg(lines[i]!, bgOpen);
 
-			const textKey = (this as { text?: string }).text?.trim() ?? "";
-			const ts = USER_TIMESTAMPS_MAP.get(textKey);
 			// No known timestamp -> no clock (a "now" clock would be a lie on old messages).
-			if (!ts) return lines;
-			const timeStr = formatClock(ts);
-			const badge = formatTimeBadge(timeStr, tsState.theme);
-			const timeW = visibleWidth(timeStr);
+			if (timeStr) {
+				const timeW = visibleWidth(timeStr);
+				// First text line sits at index 1 (below the box top padding)
+				const contentLine = lines[1]!;
+				const cleanContent = stripAnsi(contentLine).trimEnd();
+				const contentW = visibleWidth(cleanContent);
+				const minGap = 2;
 
-			// First text line sits at index 1 (below the box top padding)
-			const contentLine = lines[1];
-			const cleanContent = stripAnsi(contentLine).trimEnd();
-			const contentW = visibleWidth(cleanContent);
-			const minGap = 2;
-
-			if (contentW + minGap + timeW <= width) {
-				// Fits on the first text line: paste right-aligned with a 1-space margin
-				lines[1] = placeTimeAtRight(contentLine, width, badge, timeW, bgOpen);
-			} else {
-				// First text line is full: NEVER truncate content!
-				// Clock goes to the TOP padding line (always empty, first line of the bubble)
-				const topLine = lines[0];
-				const oscMatch = topLine.match(/^(\x1b\]133;[A-Z]\x07)+/);
-				const prefix = oscMatch ? oscMatch[0] : "";
-				const rest = topLine.slice(prefix.length);
-				lines[0] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, bgOpen)}`;
+				if (contentW + minGap + timeW <= width) {
+					// Fits on the first text line: paste right-aligned with a 1-space margin
+					lines[1] = placeTimeAtRight(contentLine, width, badge, timeW, bgOpen);
+				} else {
+					// First text line is full: NEVER truncate content!
+					// Clock goes to the TOP padding line (always empty, first line of the bubble)
+					const topLine = lines[0]!;
+					const oscMatch = topLine.match(/^(\x1b\]133;[A-Z]\x07)+/);
+					const prefix = oscMatch ? oscMatch[0] : "";
+					const rest = topLine.slice(prefix.length);
+					lines[0] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, bgOpen)}`;
+				}
 			}
+
+			userRenderCache.set(this, { source, width, bgOpen, badge, lines });
 			return lines;
 		});
 	}
 
 	if (AssistantMessageComponent?.prototype?.render) {
 		const proto = AssistantMessageComponent.prototype as any;
-		const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
-		proto.render = markPatched(function (this: any, width: number): string[] {
-			const lines = origRender.call(this, width);
+		const origRender = originalOf<(this: any, width: number) => readonly string[]>(proto, "render");
+		proto.render = markPatched(function (this: any, width: number): readonly string[] {
+			const source = origRender.call(this, width);
 			const lastMsg = (this as { lastMessage?: AssistantMessage }).lastMessage;
 
 			// Clock only on the final reply (a message with no toolCall)
 			const hasToolCalls = lastMsg?.content?.some((c) => c.type === "toolCall");
-			if (hasToolCalls) return lines;
+			if (hasToolCalls) return source;
 
 			// and only when there is real answer text (not thinking only)
 			const hasText = lastMsg?.content?.some((c) => c.type === "text" && c.text.trim());
-			if (!hasText || lines.length === 0) return lines;
+			if (!hasText || source.length === 0) return source;
 
 			const timeStr = formatClock(lastMsg?.timestamp);
 			const badge = formatTimeBadge(timeStr, tsState.theme);
+			const prev = assistantRenderCache.get(this);
+			if (prev && prev.source === source && prev.width === width && prev.badge === badge) {
+				return prev.lines;
+			}
+
 			const timeW = visibleWidth(timeStr);
 
 			// First text line that is neither an OSC zone nor a thinking header
 			let targetIdx = -1;
-			for (let i = 0; i < lines.length; i++) {
-				const plain = stripAnsi(lines[i].replace(/^(\x1b\]133;[A-Z]\x07)+/, "")).trim();
+			for (let i = 0; i < source.length; i++) {
+				const plain = stripAnsi(source[i]!.replace(/^(\x1b\]133;[A-Z]\x07)+/, "")).trim();
 				// Never paste onto the hidden thinking line: `Thinking...` while it streams, `Thought for 3s` once it ends (plain or with the \uec21 icon)
 				if (plain.length > 0 && !/^(?:\uec21\s+)?(?:thinking|thought for)\b/i.test(plain)) {
 					targetIdx = i;
@@ -202,7 +275,7 @@ if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.protot
 
 			if (targetIdx !== -1) {
 				let prefix = "";
-				let rest = lines[targetIdx];
+				let rest = source[targetIdx]!;
 				const oscMatch = rest.match(/^(\x1b\]133;[A-Z]\x07)+/);
 				if (oscMatch) {
 					prefix = oscMatch[0];
@@ -214,10 +287,13 @@ if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.protot
 				const minGap = 2;
 
 				if (textW + minGap + timeW <= width) {
+					const lines = [...source];
 					lines[targetIdx] = `${prefix}${placeTimeAtRight(rest, width, badge, timeW, "")}`;
+					assistantRenderCache.set(this, { source, width, badge, lines });
+					return lines;
 				}
 			}
-			return lines;
+			return source;
 		});
 	}
 }
@@ -265,11 +341,12 @@ if (isMain(import.meta.url)) {
 	assert(res2.endsWith("\x1b[49m"), "background closed at end of line");
 	assert(visibleWidth(res2) === 30, "line length still matches the width");
 
-	// bubble bg repair: padding after [0m] must be bg'd, line closed with [49m]
+	// bubble bg repair: padding after [0m] must be bg'd, line closed with [49m], and idempotent
 	const dirty = `${bg}Hello\x1b[0m${" ".repeat(5)}\x1b[49m`;
 	const clean = repairBubbleBg(dirty, bg);
 	assert(clean.includes(`\x1b[0m${bg}`), "bg re-applied after the reset");
 	assert(clean.endsWith("\x1b[49m"), "bubble bg closed at end of line");
+	assert(repairBubbleBg(clean, bg) === clean, "repairBubbleBg is idempotent across repeated frames");
 	assert(repairBubbleBg("plain", "") === "plain", "no bgOpen: unchanged");
 
 	// memoized repair: a different bg code resets the cache, so nothing repairs

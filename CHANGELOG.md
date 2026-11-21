@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Pi 1.6.0 render immutability, `childLines` sync, and `wire-bytes` test isolation.** `timestamps.ts` now uses copy-on-write with per-instance render caching and idempotent `repairBubbleBg` so frozen `readonly string[]` outputs from Pi 1.6.0+ never throw `TypeError` or double-append ANSI resets; `render-cache.ts` synchronizes `Container.childLines` alongside `mouseLayout` and hooks Pi 1.6.0+ `InteractiveMode` session-render methods; `autocompact.ts` and `test/wire-bytes.test.ts` reset the preset cache after `PI_CODING_AGENT_DIR` overrides and read live `activeByteCeilings()`. Added `test/pi-compat-contract.test.ts` (`extensions/timestamps.ts`, `extensions/render-cache.ts`, `extensions/autocompact.ts`, `test/wire-bytes.test.ts`, `test/pi-compat-contract.test.ts`).
+
 ## [0.16.0] - 2026-11-20
 
 ### Added
