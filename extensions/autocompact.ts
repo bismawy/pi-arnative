@@ -691,6 +691,7 @@ if (isMain(import.meta.url)) {
 	process.env.PI_CODING_AGENT_DIR = fixture;
 	delete (globalThis as Record<symbol, unknown>)[AUTO_COMPACT_CONFIG_KEY];
 	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
+	resetPresetCache();
 
 	// Payload limit parsing, persistence, and Off mode.
 	assert(parsePayloadLimit("off") === "Off", "parses off case-insensitively");
@@ -706,6 +707,7 @@ if (isMain(import.meta.url)) {
 	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 	saveChoice(PAYLOAD_LIMIT_KEY, "1 MB");
 	resetPresetCache();
+	const liveCeilings = activeByteCeilings()!;
 
 	// Choice parsing and persistence.
 	assert(activeAutoCompact() === "Off", "the default is off");
@@ -818,7 +820,7 @@ if (isMain(import.meta.url)) {
 	// Emergency tail trim: a single massive toolResult in the newest turn still sheds below target.
 	const tailOnlyHuge: MessageLike[] = [
 		{ role: "user", content: [{ type: "text", text: "run tool" }] },
-		{ role: "toolResult", content: [{ type: "text", text: "y".repeat(SHED_TRIGGER_BYTES + 20_000) }] },
+		{ role: "toolResult", content: [{ type: "text", text: "y".repeat(liveCeilings.shedTriggerBytes + 20_000) }] },
 	];
 	const tailShed = shedMessagesForByteLimit(tailOnlyHuge, 100_000);
 	assert(tailShed.changed && tailShed.bytes <= 100_000, "emergency tail trim bounds even a single giant newest message");
@@ -879,17 +881,17 @@ if (isMain(import.meta.url)) {
 	const hugeRunMsgs: MessageLike[] = [
 		{ role: "user", content: [{ type: "text", text: "start" }] },
 		{ role: "assistant", content: [{ type: "toolCall", arguments: { path: "x" } }] },
-		{ role: "toolResult", content: [{ type: "text", text: "z".repeat(SHED_TRIGGER_BYTES + 10_000) }] },
+		{ role: "toolResult", content: [{ type: "text", text: "z".repeat(liveCeilings.shedTriggerBytes + 10_000) }] },
 		{ role: "user", content: [{ type: "text", text: "continue" }] },
 		{ role: "assistant", content: [{ type: "text", text: "ok" }] },
 	];
 	const ctxResult = (await handlers.context!({ messages: hugeRunMsgs }, remoteCtx)) as { messages?: MessageLike[] } | undefined;
 	assert(
 		Array.isArray(ctxResult?.messages) &&
-			jsonByteLength(ctxResult.messages) + DEFAULT_OVERHEAD_BYTES <= SHED_TARGET_BYTES,
+			jsonByteLength(ctxResult.messages) + DEFAULT_OVERHEAD_BYTES <= liveCeilings.shedTargetBytes,
 		"context hook sheds payload with hysteresis down to the target ceiling",
 	);
-	await handlers.before_provider_request!({ payload: { blob: "p".repeat(SHED_TRIGGER_BYTES + 20_000) } }, remoteCtx);
+	await handlers.before_provider_request!({ payload: { blob: "p".repeat(liveCeilings.shedTriggerBytes + 20_000) } }, remoteCtx);
 	await handlers.agent_before_settle!({}, remoteCtx);
 	assert(compactCalls.length === 6, "remote byte shedding does not force premature compaction at 49k tokens");
 
@@ -902,10 +904,10 @@ if (isMain(import.meta.url)) {
 
 	// Compaction input trimming shrinks split-turn prefixes cleanly without triggering follow-ups.
 	const splitTurnPrefix: MessageLike[] = [
-		{ role: "assistant", content: [{ type: "toolCall", arguments: { content: "q".repeat(COMPACT_INPUT_BYTES) } }] },
+		{ role: "assistant", content: [{ type: "toolCall", arguments: { content: "q".repeat(liveCeilings.compactInputBytes) } }] },
 	];
 	await handlers.session_before_compact!({ preparation: { turnPrefixMessages: splitTurnPrefix } }, remoteCtx);
-	assert(jsonByteLength(splitTurnPrefix) < COMPACT_INPUT_BYTES, "session_before_compact trims split-turn prefix messages too");
+	assert(jsonByteLength(splitTurnPrefix) < liveCeilings.compactInputBytes, "session_before_compact trims split-turn prefix messages too");
 
 	// Remote byte silent shedding stays active even when Auto-compact is Off, and never triggers ctx.compact().
 	setAutoCompact("Off");
@@ -924,11 +926,11 @@ if (isMain(import.meta.url)) {
 	// A fixture sized for the 1 MB default says nothing once the wall scales: at 16 MB
 	// the same array is far under the trigger and the hook rightly stays quiet.
 	// Size it against the ceiling in force, or skip when scaling makes that impractical.
-	const overTrigger = jsonByteLength(manyMsgs) > SHED_TRIGGER_BYTES;
+	const overTrigger = jsonByteLength(manyMsgs) > liveCeilings.shedTriggerBytes;
 	if (overTrigger) {
 		assert(
 			Array.isArray(shedMany?.messages) &&
-				jsonByteLength(shedMany.messages) <= SHED_TARGET_BYTES &&
+				jsonByteLength(shedMany.messages) <= liveCeilings.shedTargetBytes &&
 				shedMany.messages[0]?.role === "user",
 			"many-message session sheds below the ceiling even with Auto-compact Off",
 		);
@@ -938,7 +940,7 @@ if (isMain(import.meta.url)) {
 	const compactMany = manyMsgs.slice();
 	await handlers.session_before_compact!({ preparation: { messagesToSummarize: compactMany } }, remoteCtx);
 	assert(
-		jsonByteLength(compactMany) <= COMPACT_INPUT_BYTES && compactMany[0]?.role !== "toolResult",
+		jsonByteLength(compactMany) <= liveCeilings.compactInputBytes && compactMany[0]?.role !== "toolResult",
 		"many-message compaction input trims below 720 KB without orphaned toolResult",
 	);
 	await handlers.agent_before_settle!({}, ctxOf(950000, 1_048_576, { id: "remote/agy-cli/gemini-4-hydrogen" }));
@@ -950,7 +952,7 @@ if (isMain(import.meta.url)) {
 	const after413 = (await handlers.context!({ messages: hugeRunMsgs }, nonRemoteCtx)) as { messages?: MessageLike[] } | undefined;
 	assert(
 		Array.isArray(after413?.messages) &&
-			jsonByteLength(after413.messages) + DEFAULT_OVERHEAD_BYTES <= INITIAL_CEILINGS.shedTargetAfter413Bytes,
+			jsonByteLength(after413.messages) + DEFAULT_OVERHEAD_BYTES <= liveCeilings.shedTargetAfter413Bytes,
 		"saw413 activates tighter silent shedding on any model",
 	);
 	// Payload limit Off skips shedding and clears wireBytesSnapshot even for remote models.

@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resetPresetCache } from "../lib/preset-store.ts";
-import registerAutoCompact, { SHED_TRIGGER_BYTES, cachedArrayBytes, jsonByteLength, shedMessagesForByteLimit, wireBytesSnapshot } from "../extensions/autocompact.ts";
+import registerAutoCompact, {
+	PAYLOAD_LIMIT_CONFIG_KEY,
+	activeByteCeilings,
+	cachedArrayBytes,
+	jsonByteLength,
+	shedMessagesForByteLimit,
+	wireBytesSnapshot,
+} from "../extensions/autocompact.ts";
 
 // Byte-limited models expose payload pressure through wireBytesSnapshot();
 // plain models never populate it.
@@ -51,14 +58,17 @@ test("Unicode payload over the byte trigger sheds on the first context event", a
 	const dir = mkdtempSync(join(tmpdir(), "arnative-wirebytes-unicode-"));
 	const prevDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
+	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 	resetPresetCache();
 	t.after(() => {
 		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevDir;
 		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")];
+		delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 		resetPresetCache();
 		rmSync(dir, { recursive: true, force: true });
 	});
+	const shedTrigger = activeByteCeilings()!.shedTriggerBytes;
 	const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> = {};
 	registerAutoCompact({
 		on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => void (handlers[name] = fn),
@@ -66,15 +76,15 @@ test("Unicode payload over the byte trigger sheds on the first context event", a
 	const messages = [
 		{ role: "user", content: [{ type: "text", text: "start" }] },
 		{ role: "assistant", content: [{ type: "toolCall", id: "call_unicode", name: "read", arguments: { path: "file" } }] },
-		{ role: "toolResult", toolCallId: "call_unicode", content: [{ type: "text", text: "界".repeat(Math.ceil(SHED_TRIGGER_BYTES / 2)) }] },
+		{ role: "toolResult", toolCallId: "call_unicode", content: [{ type: "text", text: "界".repeat(Math.ceil(shedTrigger / 2)) }] },
 		{ role: "user", content: [{ type: "text", text: "continue" }] },
 		{ role: "assistant", content: [{ type: "text", text: "ok" }] },
 	];
 	const original = structuredClone(messages);
-	assert.ok(jsonByteLength(messages) > SHED_TRIGGER_BYTES);
+	assert.ok(jsonByteLength(messages) > shedTrigger);
 	const result = await handlers.context!({ messages }, { model: { id: "remote/test" } }) as { messages?: unknown[] } | undefined;
 	assert.ok(Array.isArray(result?.messages), "UTF-8 size triggers shedding without a previous request");
-	assert.ok(jsonByteLength(result.messages) < SHED_TRIGGER_BYTES);
+	assert.ok(jsonByteLength(result.messages) < shedTrigger);
 	assert.deepEqual(messages, original, "source transcript remains intact");
 });
 
@@ -82,8 +92,10 @@ test("wireBytesSnapshot reports payload pressure only after byte-limited context
 	const dir = mkdtempSync(join(tmpdir(), "arnative-wirebytes-"));
 	const prevDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
+	delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 	resetPresetCache();
 	try {
+		const shedTrigger = activeByteCeilings()!.shedTriggerBytes;
 		const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> = {};
 		registerAutoCompact({
 			on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => void (handlers[name] = fn),
@@ -104,20 +116,21 @@ test("wireBytesSnapshot reports payload pressure only after byte-limited context
 		const snap = wireBytesSnapshot();
 		assert.ok(snap, "remote context event populates the snapshot");
 		assert.equal(snap.bytes, jsonByteLength(remoteMsgs) + 64 * 1024, "bytes are exact messages plus default overhead");
-		assert.equal(snap.limit, SHED_TRIGGER_BYTES, "limit is the live shed trigger, which follows PI_ARNATIVE_BYTE_WALL_MB");
+		assert.equal(snap.limit, shedTrigger, "limit is the live shed trigger, which follows PI_ARNATIVE_BYTE_WALL_MB");
 
 		// A shed (over trigger) is reflected: bytes drop under the target. The fixture is
 		// sized from the live ceiling, so it keeps meaning something when the wall scales.
 		const bigMsgs = [
-			{ role: "user", content: [{ type: "text", text: "x".repeat(SHED_TRIGGER_BYTES + 50 * 1024) }] },
+			{ role: "user", content: [{ type: "text", text: "x".repeat(shedTrigger + 50 * 1024) }] },
 			{ role: "assistant", content: [{ type: "text", text: "ok" }] },
 		];
 		const shed = (await handlers.context!({ messages: bigMsgs }, remoteCtx)) as { messages?: unknown[] } | undefined;
 		assert.ok(Array.isArray(shed?.messages), "oversized remote payload sheds");
 		const after = wireBytesSnapshot();
 		assert.ok(after, "snapshot survives the shed");
-		assert.ok(after.bytes < SHED_TRIGGER_BYTES, `shed snapshot under trigger, got ${(after.bytes / 1024).toFixed(0)}KB`);
+		assert.ok(after.bytes < shedTrigger, `shed snapshot under trigger, got ${(after.bytes / 1024).toFixed(0)}KB`);
 	} finally {
+		delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevDir;
 		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")];

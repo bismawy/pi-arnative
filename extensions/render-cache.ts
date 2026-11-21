@@ -78,6 +78,7 @@ interface ContainerCacheEntry {
 	hasExpanded: boolean;
 	children: unknown[];
 	childMeta: ChildMeta[];
+	parts: Array<readonly string[]>;
 	lines: string[];
 	mouseChildren: Array<{ component: unknown; height: number }>;
 }
@@ -282,8 +283,11 @@ function attachChildHooks(child: unknown): void {
 
 export interface ChatContainerLike {
 	children: unknown[];
+	/** Pi < 1.6.0 mouse layout cache. */
 	mouseLayout?: { width: number; children: Array<{ component: unknown; height: number }> };
-	render(width: number): string[];
+	/** Pi >= 1.6.0 child line + mouse layout cache (`renderChildLines`). */
+	childLines?: { width: number; children: unknown[]; parts: Array<readonly string[]>; lines: readonly string[] };
+	render(width: number): readonly string[];
 	invalidate?: () => void;
 	addChild?: (component: unknown) => void;
 	removeChild?: (component: unknown) => void;
@@ -336,6 +340,7 @@ function renderCachedChatContainer(
 		if (allClean) {
 			state.stats.containerHits += 1;
 			container.mouseLayout = { width, children: cached.mouseChildren };
+			container.childLines = { width, children: cached.children, parts: cached.parts, lines: cached.lines };
 			return cached.lines;
 		}
 	}
@@ -343,14 +348,16 @@ function renderCachedChatContainer(
 	const lines: string[] = [];
 	const mouseChildren: Array<{ component: unknown; height: number }> = [];
 	const snapshot: unknown[] = new Array(children.length);
+	const parts: Array<readonly string[]> = new Array(children.length);
 	const childMeta: ChildMeta[] = new Array(children.length);
 	let allChildrenCacheable = true;
 	let hasExpanded = false;
 
 	for (let i = 0; i < children.length; i++) {
-		const child = children[i] as { render?: (w: number) => string[] } & Record<string | symbol, unknown>;
+		const child = children[i] as { render?: (w: number) => readonly string[] } & Record<string | symbol, unknown>;
 		snapshot[i] = child;
 		if (!child || typeof child.render !== "function") {
+			parts[i] = [];
 			childMeta[i] = { version: 0, scrollOffset: 0, expanded: false };
 			continue;
 		}
@@ -363,7 +370,7 @@ function renderCachedChatContainer(
 		if (expanded) hasExpanded = true;
 		childMeta[i] = { version: ver, scrollOffset, expanded };
 
-		let childLines: string[];
+		let childLines: readonly string[];
 		if (!isCacheableChild(child) || isDynamicChild(child)) {
 			allChildrenCacheable = false;
 			state.stats.childRenders += 1;
@@ -398,7 +405,7 @@ function renderCachedChatContainer(
 							version: ver,
 							scrollOffset,
 							expanded,
-							lines: childLines,
+							lines: [...childLines],
 						},
 						(entry) =>
 							entry.epoch === state.epoch &&
@@ -410,6 +417,7 @@ function renderCachedChatContainer(
 			}
 		}
 
+		parts[i] = childLines;
 		mouseChildren.push({ component: child, height: childLines.length });
 		for (let j = 0; j < childLines.length; j++) {
 			lines.push(childLines[j]!);
@@ -417,6 +425,7 @@ function renderCachedChatContainer(
 	}
 
 	container.mouseLayout = { width, children: mouseChildren };
+	container.childLines = { width, children: snapshot, parts, lines };
 	if (allChildrenCacheable) {
 		putWidthEntry(
 			state.containerCache,
@@ -429,6 +438,7 @@ function renderCachedChatContainer(
 				hasExpanded,
 				children: snapshot,
 				childMeta,
+				parts,
 				lines,
 				mouseChildren,
 			},
@@ -485,6 +495,9 @@ if (InteractiveMode?.prototype) {
 		"init",
 		"handleReloadCommand",
 		"renderSessionContext",
+		"renderSessionEntries",
+		"renderSessionItems",
+		"renderCurrentSessionState",
 		"rebuildChatFromMessages",
 		"addMessageToChat",
 		"handleEvent",
@@ -576,6 +589,13 @@ if (isMain(import.meta.url)) {
 	assert(out2 === out1, "whole-container hit returns cached array reference");
 	assert(c1.renders === 1 && c2.renders === 1, "container hit skips child renders");
 	assert(container.mouseLayout?.children.length === 2, "mouseLayout preserved on container hit");
+	assert(
+		container.childLines?.width === 80 &&
+			container.childLines.children.length === 2 &&
+			container.childLines.parts.length === 2 &&
+			container.childLines.lines === out2,
+		"Pi 1.6.0+ childLines preserved on container hit",
+	);
 
 	// Streaming child bypasses cache while settled sibling stays cached.
 	c2.isStreaming = true;
