@@ -120,7 +120,13 @@ Settings from `/arnative` are saved in `~/.pi/agent/arnative/config.json`:
 | `lib/features/usage.ts` | Token and cost dashboard (`/usage`) |
 | `lib/todos.ts` | Task state, window layout, box rows, and session store |
 | `lib/spinner.ts` | Spinner preset catalog, frames, and gradient painters |
-| `lib/provider.ts` | Custom provider probe, model picker, and config writer |
+| `lib/active-clock.ts` | Active session clock, duration formatting, and input activity filter |
+| `lib/git-status.ts` | Git branch/status/diff-stat collector and path shortener |
+| `lib/chatbox.ts` | Editor frame, prompt glyph styling, scroll borders, and dialog placement |
+| `lib/edit-diff.ts` | Unified and side-by-side word-level edit diff renderer |
+| `lib/provider-store.ts` | Custom provider probe, metadata merge, and `models.json` / `auth.json` store |
+| `lib/provider.ts` | Interactive `/providers` wizard UI |
+| `lib/usage-pricing.ts` | `models.json` price table loader, cost estimation, and UTC range math |
 | `lib/model-heal.ts` | Compat flags, `/models` limit sync, and reasoning effort probe |
 | `lib/list-picker.ts` | Shared live-preview and multi-select picker component |
 

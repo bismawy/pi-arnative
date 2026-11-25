@@ -6,167 +6,121 @@
  * or "Pi (system)".
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { CustomEditor, FooterComponent, InteractiveMode, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { execFile } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
 import { softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
 import { inSpans, textSpans, type TextSpan } from "../box.ts";
 import { capitalize, modelDisplayParts } from "../format.ts";
 import { SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../shortcuts.ts";
-import { markPatched, originalOf, patchOnce } from "../patch.ts";
+import { markPatched, originalOf } from "../patch.ts";
 import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../usage-store.ts";
-import { CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_PRESET_KEY as CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PROMPT_KEY as CHATBOX_PROMPT_CONFIG_KEY, FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, choiceSetting, flagSetting } from "../preset-store.ts";
+import { FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, choiceSetting, flagSetting } from "../preset-store.ts";
 import { formatCost } from "./usage.ts";
 import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
 import { budgetLevelNow } from "./budget.ts";
 import { activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../spinner.ts";
 import { getRuntime } from "../runtime.ts";
+import {
+	ActiveClock,
+	IDLE_PAUSE_MS,
+	formatDuration,
+	isPointerOrFocusInput,
+	resolveSessionStartMs,
+	seedActiveMs,
+} from "../active-clock.ts";
+import {
+	branchFromDisk,
+	collectGitInfo,
+	formatDiffStat,
+	gitParts,
+	run,
+	shortenCwd,
+	sumNumstat,
+	type GitInfo,
+} from "../git-status.ts";
+import {
+	CHATBOX_DIALOG_KEY,
+	CHATBOX_DIALOGS,
+	CHATBOX_PRESET_KEY,
+	CHATBOX_PRESETS,
+	CHATBOX_PROMPT_KEY,
+	CHATBOX_PROMPTS,
+	DEFAULT_CHATBOX_DIALOG,
+	DEFAULT_CHATBOX_PRESET,
+	DEFAULT_CHATBOX_PROMPT,
+	PROMPT_IDLE_MS,
+	activeChatboxDialog,
+	activeChatboxPreset,
+	activeChatboxPrompt,
+	applyChatboxDialog,
+	bindChatboxPoke,
+	boxEditorLines,
+	chatboxPrimaryPaint,
+	isPromptActive,
+	isWideNerdPrompt,
+	markPromptTyped,
+	nextChatboxDialog,
+	nextChatboxPrompt,
+	overlayOutsideDialogOnWidgetLines,
+	paintChatboxPrompt,
+	renderChatboxLines,
+	renderChatboxScrollBorder,
+	setChatboxDialog,
+	setChatboxPreset,
+	setChatboxPrompt,
+	stopPromptIdle,
+	type ChatboxDialog,
+	type ChatboxPreset,
+	type ChatboxPrompt,
+} from "../chatbox.ts";
 
-// ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
-// The TUI drops key-release events before handleInput, so press+release cannot
-// fire this twice even when the terminal reports event types (Kitty flag 2).
+export {
+	ActiveClock,
+	CHATBOX_DIALOGS,
+	CHATBOX_PRESETS,
+	CHATBOX_PROMPTS,
+	DEFAULT_CHATBOX_DIALOG,
+	DEFAULT_CHATBOX_PRESET,
+	DEFAULT_CHATBOX_PROMPT,
+	IDLE_PAUSE_MS,
+	PROMPT_IDLE_MS,
+	activeChatboxDialog,
+	activeChatboxPreset,
+	activeChatboxPrompt,
+	applyChatboxDialog,
+	boxEditorLines,
+	chatboxPrimaryPaint,
+	formatDiffStat,
+	formatDuration,
+	gitParts,
+	isPointerOrFocusInput,
+	isPromptActive,
+	isWideNerdPrompt,
+	markPromptTyped,
+	nextChatboxDialog,
+	nextChatboxPrompt,
+	overlayOutsideDialogOnWidgetLines,
+	paintChatboxPrompt,
+	renderChatboxLines,
+	renderChatboxScrollBorder,
+	resolveSessionStartMs,
+	seedActiveMs,
+	setChatboxDialog,
+	setChatboxPreset,
+	setChatboxPrompt,
+	shortenCwd,
+	stopPromptIdle,
+	sumNumstat,
+	type ChatboxDialog,
+	type ChatboxPreset,
+	type ChatboxPrompt,
+};
 
 // Footer preset chosen through `/arnative footers`. "Arnative (Full)" = this extension's
 // 3-row grid footer; "Pi (system)" = pi's built-in footer (the boxed editor stays arnative
-// in both — pi's `setEditorComponent()` would close the picker mid-preview). The picker
-// lives in arnative.ts, so the choice is shared through globalThis like the header preset.
+// in both — pi's `setEditorComponent()` would close the picker mid-preview).
 // Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
-export const CHATBOX_PRESETS = ["Pi (system)", "Arnative"] as const;
-export type ChatboxPreset = (typeof CHATBOX_PRESETS)[number];
-export const DEFAULT_CHATBOX_PRESET: ChatboxPreset = "Arnative";
-const chatboxPreset = choiceSetting(CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PRESETS, DEFAULT_CHATBOX_PRESET);
-const CHATBOX_PRESET_KEY = chatboxPreset.slot;
-
-export const CHATBOX_PROMPTS = ["❯", ">", "›", "▸", "→", "\uf44f", "\udb82\udf79", "\uf51b", "\udb80\udf7d", "\uf120", "\uf489", "\udb80\udd7a"] as const;
-export type ChatboxPrompt = (typeof CHATBOX_PROMPTS)[number];
-export const DEFAULT_CHATBOX_PROMPT: ChatboxPrompt = "❯";
-const chatboxPrompt = choiceSetting(CHATBOX_PROMPT_CONFIG_KEY, CHATBOX_PROMPTS, DEFAULT_CHATBOX_PROMPT);
-const CHATBOX_PROMPT_KEY = chatboxPrompt.slot;
-
-export const CHATBOX_DIALOGS = ["Left", "Center", "Right", "Inside", "Outside"] as const;
-export type ChatboxDialog = (typeof CHATBOX_DIALOGS)[number];
-export const DEFAULT_CHATBOX_DIALOG: ChatboxDialog = "Left";
-const chatboxDialog = choiceSetting(CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_DIALOGS, DEFAULT_CHATBOX_DIALOG);
-const CHATBOX_DIALOG_KEY = chatboxDialog.slot;
-
-export const PROMPT_IDLE_MS = 3_000;
-
-export const activeChatboxPreset = (): ChatboxPreset => chatboxPreset.get();
-export function setChatboxPreset(name: ChatboxPreset): void {
-	chatboxPreset.set(name);
-	poke();
-}
-
-export const activeChatboxPrompt = (): ChatboxPrompt => chatboxPrompt.get();
-export function setChatboxPrompt(prompt: ChatboxPrompt): void {
-	chatboxPrompt.set(prompt);
-	poke();
-}
-
-export function nextChatboxPrompt(current: ChatboxPrompt = activeChatboxPrompt()): ChatboxPrompt {
-	const idx = CHATBOX_PROMPTS.indexOf(current);
-	return CHATBOX_PROMPTS[(idx + 1) % CHATBOX_PROMPTS.length]!;
-}
-
-export const activeChatboxDialog = (): ChatboxDialog => chatboxDialog.get();
-export function setChatboxDialog(dialog: ChatboxDialog): void {
-	chatboxDialog.set(dialog);
-	poke();
-}
-
-export function nextChatboxDialog(current: ChatboxDialog = activeChatboxDialog()): ChatboxDialog {
-	const idx = CHATBOX_DIALOGS.indexOf(current);
-	return CHATBOX_DIALOGS[(idx + 1) % CHATBOX_DIALOGS.length]!;
-}
-
-export function isPromptActive(
-	now: number = Date.now(),
-	lastTyped: number = getRuntime().promptTypedAt,
-): boolean {
-	return lastTyped > 0 && now - lastTyped <= PROMPT_IDLE_MS;
-}
-
-export function stopPromptIdle(): void {
-	const rt = getRuntime();
-	if (rt.promptIdleTimer) clearTimeout(rt.promptIdleTimer);
-	rt.promptIdleTimer = null;
-}
-
-export function markPromptTyped(now: number = Date.now()): void {
-	const rt = getRuntime();
-	rt.promptTypedAt = now;
-	stopPromptIdle();
-	const timer = setTimeout(() => {
-		getRuntime().promptIdleTimer = null;
-		poke();
-	}, PROMPT_IDLE_MS + 25);
-	timer.unref?.();
-	rt.promptIdleTimer = timer;
-	poke();
-}
-
-export function chatboxPrimaryPaint(
-	th: { fg?(color: string, text: string): string } | null | undefined,
-): (text: string) => string {
-	if (!th?.fg) return (t) => t;
-	for (const token of ["mdHeading", "accent"]) {
-		try {
-			const probe = th.fg(token, "x");
-			if (typeof probe === "string" && probe.includes("x")) return (t) => th.fg!(token, t);
-		} catch {
-			// try next
-		}
-	}
-	return (t) => t;
-}
-
-export function isWideNerdPrompt(glyph: string): boolean {
-	const cp = glyph.codePointAt(0) ?? 0;
-	return (cp >= 0xe000 && cp <= 0xf8ff) || cp >= 0xf0000;
-}
-
-export function paintChatboxPrompt(
-	promptGlyph: string,
-	th: { fg?(color: string, text: string): string } | null | undefined,
-	active: boolean,
-): string {
-	const text = isWideNerdPrompt(promptGlyph) ? ` ${promptGlyph}  ` : ` ${promptGlyph} `;
-	if (!th?.fg) return text;
-	try {
-		if (!active) return th.fg("dim", text);
-		return chatboxPrimaryPaint(th)(text);
-	} catch {
-		return text;
-	}
-}
-
-export function renderChatboxScrollBorder(
-	direction: "\u2191" | "\u2193",
-	hiddenLineCount: number,
-	width: number,
-	borderColor: (text: string) => string,
-	primaryColor: (text: string) => string,
-): string {
-	const availableWidth = Math.max(0, width);
-	if (hiddenLineCount <= 0) return borderColor("\u2500".repeat(availableWidth));
-	const core = `${direction} ${hiddenLineCount} more`;
-	const labelWidth = visibleWidth(core) + 2;
-	if (labelWidth + 2 <= availableWidth) {
-		const leftWidth = Math.floor((availableWidth - labelWidth) / 2);
-		const rightWidth = availableWidth - leftWidth - labelWidth;
-		return `${borderColor(`${"\u2500".repeat(leftWidth)} `)}${primaryColor(core)}${borderColor(` ${"\u2500".repeat(rightWidth)}`)}`;
-	}
-	const prefix = "\u2500\u2500\u2500 ";
-	const remaining = availableWidth - visibleWidth(prefix) - visibleWidth(core) - 1;
-	if (remaining >= 0) {
-		return `${borderColor(prefix)}${primaryColor(core)}${borderColor(` ${"\u2500".repeat(remaining)}`)}`;
-	}
-	return borderColor(".".repeat(Math.min(3, availableWidth)) + "\u2500".repeat(Math.max(0, availableWidth - 3)));
-}
-
 export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
@@ -213,12 +167,35 @@ export function setFooterPreset(name: FooterPreset, ctx: ExtensionContext): void
 	applyFooterPreset(ctx);
 }
 
+interface FooterComponentProto {
+	render(width: number): string[];
+}
+
+interface WorkingUiSurface {
+	setWorkingMessage?: (message?: string) => void;
+	setWorkingIndicator?: (options?: unknown) => void;
+}
+
+interface WorkingIndicatorLike {
+	renderIndicatorVerbatim?: boolean;
+	spinnerColorFn?: (text: string) => string;
+	messageColorFn?: (text: string) => string;
+	updateDisplay?: () => void;
+	renderInBorder?(width: number): string;
+	renderSpinnerInBorder?(width: number): string;
+}
+
+interface OutsideDialogModeLike {
+	editor?: unknown;
+	editorContainer?: { children?: unknown[] };
+}
+
 // Intercept the built-in FooterComponent to force a pure 2-line footer.
 // Reinstalled on every load (lib/patch.ts): `/reload` must pick up a footer change.
 if (FooterComponent?.prototype?.render) {
-	const proto = FooterComponent.prototype as any;
-	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
-	proto.render = markPatched(function (this: any, width: number): string[] {
+	const proto = FooterComponent.prototype as unknown as FooterComponentProto;
+	const origRender = originalOf<(this: FooterComponentProto, width: number) => string[]>(proto, "render");
+	proto.render = markPatched(function (this: FooterComponentProto, width: number): string[] {
 		// "Pi (system)" preset = pi's own footer, so keep its stock line count.
 		if (activeFooterPreset() === "Pi (system)") return origRender.call(this, width);
 		const lines = origRender.call(this, width);
@@ -228,20 +205,7 @@ if (FooterComponent?.prototype?.render) {
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
-type GitInfo = {
-	branch: string;
-	/** Absent (null) when git could not answer — never a false "-"/"clean". */
-	tag: string | null;
-	uncommitted: number | null;
-	/** Working tree vs HEAD, tracked files only (an untracked file is not a diff).
-	 *  Null when git could not answer. */
-	added: number | null;
-	removed: number | null;
-	ahead: number;
-	behind: number;
-} | null;
 let gitRefreshInFlight = false;
-
 let git: GitInfo = null;
 let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
@@ -250,68 +214,6 @@ let lastPokeMs = 0;
 /** Column ranges of the minimal footer's disclosure markers, recorded per render
  *  (mouse coordinates are component-local, so they must come from the same frame). */
 let minimalRanges: { left: [number, number]; right: [number, number] } | null = null;
-
-/** Maximum inactivity window before the session clock freezes (30 seconds). */
-export const IDLE_PAUSE_MS = 30_000;
-
-/**
- * Tracks active session duration, freezing after inactivity periods.
- * State is stored on globalThis to survive module reloads.
- */
-export class ActiveClock {
-	active: number;
-	runStarted: number;
-	lastSeen: number;
-	readonly pauseMs: number;
-
-	constructor(startedAt: number, pauseMs: number = IDLE_PAUSE_MS) {
-		const saved = getRuntime().activeClock;
-		this.pauseMs = pauseMs;
-		this.active = typeof saved?.active === "number" ? saved.active : 0;
-		this.runStarted = typeof saved?.runStarted === "number" ? saved.runStarted : startedAt;
-		this.lastSeen = typeof saved?.lastSeen === "number" ? saved.lastSeen : startedAt;
-	}
-
-	/** Committed runs plus the live one, the live part clamped at `lastSeen + pauseMs`. */
-	total(now: number = Date.now()): number {
-		return this.active + Math.max(0, Math.min(now, this.lastSeen + this.pauseMs) - this.runStarted);
-	}
-
-	/** Activity: commits a run left longer than `pauseMs`, else just moves `lastSeen`. */
-	tick(now: number = Date.now()): void {
-		if (now - this.lastSeen > this.pauseMs) {
-			this.active = this.total(now);
-			this.runStarted = now;
-		}
-		this.lastSeen = now;
-		getRuntime().activeClock = {
-			active: this.active,
-			runStarted: this.runStarted,
-			lastSeen: this.lastSeen,
-		};
-	}
-
-	idle(now: number = Date.now()): boolean {
-		return now - this.lastSeen > this.pauseMs;
-	}
-}
-
-/** Sums active duration from recorded session entries up to pause threshold. */
-export function seedActiveMs(entries: readonly unknown[], pauseMs: number = IDLE_PAUSE_MS, now: number = Date.now()): number {
-	const times: number[] = [];
-	for (const entry of entries) {
-		const ts = (entry as { timestamp?: string } | null)?.timestamp;
-		const parsed = ts ? Date.parse(ts) : NaN;
-		if (Number.isFinite(parsed) && parsed <= now) times.push(parsed);
-	}
-	times.sort((a, b) => a - b);
-	let ms = 0;
-	for (let i = 1; i < times.length; i++) {
-		const gap = times[i]! - times[i - 1]!;
-		if (gap > 0 && gap <= pauseMs) ms += gap;
-	}
-	return ms;
-}
 
 // One shared clock: a /reload re-imports this module, so a fresh instance would restart
 // a session that is already hours old. Exported so a test can drive the render path.
@@ -424,84 +326,10 @@ export function ponytailStatusLine(
 	return `${acc("\uef04")} ${soft("ponytail:")} ${bullet} ${soft(mode)}`;
 }
 
-type RunResult = { ok: boolean; out: string };
-/** Distinguishes "git said nothing" from "git could not run" — the caller must not
- *  invent a clean tree when git is absent or the repo is not ours. */
-function run(cmd: string, args: string[], cwd: string): Promise<RunResult> {
-	return new Promise((resolvePromise) => {
-		execFile(cmd, args, { cwd, timeout: 2000 }, (err, stdout) => {
-			resolvePromise({ ok: !err, out: String(stdout).trim() });
-		});
-	});
-}
-
-/**
- * The branch, straight from `.git/HEAD` — the same trick pi's own footer uses.
- * `git branch --show-current` fails identically for a repo the user does not own
- * (git's dubious-ownership guard), a PATH without git, and a detached HEAD; all
- * three collapsed into a silent null before. Reading the ref needs no binary and
- * no ownership check, so a fresh user sees the branch without installing git.
- */
-function branchFromDisk(cwd: string): string | null {
-	// Walk up like git does: a subfolder of a repo is still inside it.
-	for (let dir = resolve(cwd); ; ) {
-		try {
-			const dotGit = join(dir, ".git");
-			// A worktree/submodule has a `.git` file pointing at the real git dir.
-			const gitDir = statSync(dotGit).isDirectory()
-				? dotGit
-				: resolve(dir, readFileSync(dotGit, "utf8").trim().replace(/^gitdir:\s*/, ""));
-			const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
-			const ref = /^ref:\s+refs\/heads\/(.+)$/.exec(head);
-			return ref ? ref[1] : "detached";
-		} catch (e) {
-			if ((e as NodeJS.ErrnoException).code !== "ENOENT") return null; // unreadable metadata
-		}
-		const parent = dirname(dir);
-		if (parent === dir) return null; // reached the filesystem root: not a repo
-		dir = parent;
-	}
-}
-
 // A refresh arriving while one is in flight is queued (last requested cwd wins) and
 // re-run afterwards — it used to be dropped, leaving the footer's git state stale
 // until the next trigger.
 let gitRefreshQueuedCwd: string | null = null;
-
-/**
- * Row-1 git segment: branch(+sync), tag, worktree state. Halves git cannot answer
- * (no binary, or a repo the user does not own) are omitted, so a fresh user still sees
- * the branch but never a fabricated "-" or "clean".
- */
-export function gitParts(
-	info: GitInfo,
-	acc: (t: string) => string,
-	soft: (t: string) => string,
-): string[] {
-	if (!info) return [];
-	const branch = `${acc("\uf126")} ${soft(info.branch)}${info.ahead > 0 ? ` ${soft(`↑${info.ahead}`)}` : ""}${info.behind > 0 ? ` ${soft(`↓${info.behind}`)}` : ""}`;
-	const parts = [branch];
-	if (info.tag !== null) parts.push(`${acc("\uf02b")} ${soft(info.tag)}`);
-	if (info.uncommitted !== null) parts.push(`${acc("\uf172")}  ${info.uncommitted > 0 ? soft(`~${info.uncommitted}`) : soft("clean")}`);
-	return parts;
-}
-
-/**
- * Working-tree diff vs HEAD as `+500 -100`, or `""` when there is nothing to show:
- * a clean tree, or git cannot answer (not a repo, no binary, unreadable HEAD). This is
- * the whole uncommitted change, not just what this session touched — a snapshot at
- * session start would be needed for that, which is not worth the cost here.
- */
-export function formatDiffStat(
-	info: GitInfo,
-	acc: (t: string) => string,
-	pos: (t: string) => string,
-	neg: (t: string) => string,
-): string {
-	if (!info || info.added === null || info.removed === null) return "";
-	if (info.added + info.removed === 0) return "";
-	return `${acc("\uf4d2")} ${pos(`+${info.added}`)} ${neg(`-${info.removed}`)}`;
-}
 
 async function refreshGit(cwd: string): Promise<void> {
 	if (gitRefreshInFlight) {
@@ -510,36 +338,7 @@ async function refreshGit(cwd: string): Promise<void> {
 	}
 	gitRefreshInFlight = true;
 	try {
-		const branch = branchFromDisk(cwd);
-		if (!branch) {
-			// Clear the shared slot too, or the previous cwd's branch survives a reload.
-			git = null;
-			getRuntime().lastGit = null;
-			return;
-		}
-		const [tag, status, sync, numstat] = await Promise.all([
-			run("git", ["describe", "--tags", "--abbrev=0"], cwd),
-			run("git", ["status", "--porcelain"], cwd),
-			run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
-			run("git", ["diff", "HEAD", "--numstat"], cwd),
-		]);
-		const uncommitted = status.ok ? status.out.split("\n").filter((l) => l.trim().length > 0).length : null;
-		const parts = sync.ok && sync.out !== "" ? sync.out.split(/\s+/).map(Number) : [];
-		const behind = parts.length > 0 && parts[0] > 0 ? parts[0] : 0;
-		const ahead = parts.length > 1 && parts[1] > 0 ? parts[1] : 0;
-		// An unborn HEAD (a repo with no commit yet) makes `diff HEAD` fail; compare the
-		// working tree against the canonical empty tree so a staged first commit still counts.
-		const numstat2 = numstat.ok ? numstat : await run("git", ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"], cwd);
-		const { added, removed } = sumNumstat(numstat2.out);
-		git = {
-			branch,
-			tag: tag.ok && tag.out ? tag.out : null,
-			uncommitted,
-			added: numstat2.ok ? added : null,
-			removed: numstat2.ok ? removed : null,
-			ahead,
-			behind,
-		};
+		git = await collectGitInfo(cwd);
 		getRuntime().lastGit = git;
 	} finally {
 		gitRefreshInFlight = false;
@@ -602,274 +401,6 @@ function formatModelName(
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? capitalize(thinkingLevel) : "";
 	const thinkStr = capThinking ? `${acc("\uee9c")} ${soft(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${primary(name)}${provStr}`;
-}
-
-// Footer is a single line: a deep cwd (`/Users/x/Workspace/personal/proj`)
-// pushes git state and the model off screen. Keep the last 2 segments.
-export function shortenCwd(raw: string): string {
-	const p = (raw || "").trim();
-	if (!p) return p;
-	const drive = p.match(/^[A-Za-z]:/);
-	const body = drive ? p.slice(2) : p;
-	const parts = body.replace(/\\/g, "/").replace(/\/+$/, "").split("/").filter(Boolean);
-	if (parts.length <= 2) return p;
-	const head = drive ? `${drive[0]}/\u2026/` : p.startsWith("/") ? "\u2026/" : "\u2026";
-	return head + parts.slice(-2).join("/");
-}
-
-/** Resolves session start timestamp; reloads preserve state, startup/resume reads header. */
-export function resolveSessionStartMs(reason: string, headerTimestamp: string | undefined, now: number): number {
-	if (reason === "reload") return now;
-	const parsed = headerTimestamp ? Date.parse(headerTimestamp) : NaN;
-	return Number.isFinite(parsed) && parsed > 0 && parsed <= now ? parsed : now;
-}
-
-/** Sum `git diff --numstat` output: `added<TAB>removed<TAB>path` per line. A `-`
- * marks a binary file — no line count, so it is skipped, not counted as 0. */
-export function sumNumstat(out: string): { added: number; removed: number } {
-	let added = 0;
-	let removed = 0;
-	for (const line of out.split("\n")) {
-		const [a, r] = line.split("\t");
-		if (!/^\d+$/.test(a ?? "") || !/^\d+$/.test(r ?? "")) continue;
-		added += Number(a);
-		removed += Number(r);
-	}
-	return { added, removed };
-}
-
-export function formatDuration(ms: number): string {
-	// Sub-second renders as "-" to avoid a "0s" flash on fresh session.
-	if (!ms || ms < 1000) return "-";
-	const totalSec = Math.floor(ms / 1000);
-	const h = Math.floor(totalSec / 3600);
-	const m = Math.floor((totalSec % 3600) / 60);
-	const s = totalSec % 60;
-	if (h > 0) return `${h}h ${m}m`;
-	if (m > 0) return `${m}m ${s}s`;
-	return `${s}s`;
-}
-
-// Full box editor: pi draws only the top/bottom lines (pi-tui editor.js: "no side
-// borders, just horizontal lines above and below") and no prompt char, so the `│`
-// sides, the round ╭╮╰╯ corners and the `> ` prompt are added here. `lines` are
-// already rendered at width - 5 (2 sides + 3 prompt) and the border is patched with
-// dashes to match. `visible` = content line count (private `renderedVisibleLineCount`);
-// autocomplete lines stay outside the box. JetBrainsMono NF has the round glyphs.
-export function renderChatboxLines(
-	preset: ChatboxPreset,
-	renderInner: (w: number) => string[],
-	width: number,
-	visible: number | undefined,
-	color: (text: string) => string,
-	prompt = " > ",
-): string[] {
-	const promptW = visibleWidth(prompt);
-	if (preset === "Pi (system)" || typeof visible !== "number" || width < promptW + 8) return renderInner(width);
-	return boxEditorLines(renderInner(width - (2 + promptW)), visible, color, prompt);
-}
-
-export function boxEditorLines(
-	lines: readonly string[],
-	visible: number,
-	color: (text: string) => string,
-	prompt = " > ",
-): string[] {
-	const inner = lines.length > 0 ? visibleWidth(lines[0]!) : 0;
-	const promptWidth = visibleWidth(prompt);
-	if (inner < promptWidth + 4 || visible < 1 || lines.length < visible + 2) return [...lines];
-	const out = [...lines];
-	const side = color("\u2502");
-	const indent = " ".repeat(promptWidth);
-	for (let i = 1; i <= visible; i++) out[i] = side + (i === 1 ? prompt : indent) + lines[i]! + side;
-	const patch = color("\u2500".repeat(promptWidth));
-	out[0] = color("\u256d") + lines[0]! + patch + color("\u256e");
-	out[visible + 1] = color("\u2570") + lines[visible + 1]! + patch + color("\u256f");
-	return out;
-}
-
-function formatTopBorderDialog(
-	innerW: number,
-	hiddenLineCount: number,
-	dialog: "Left" | "Center" | "Right",
-	status: string,
-	spinnerOnly: string,
-	color: (text: string) => string,
-	primaryColor: (text: string) => string = (t) => t,
-): string {
-	const scrollCore = hiddenLineCount > 0 ? `\u2191 ${hiddenLineCount} more` : "";
-	const scrollW = scrollCore ? visibleWidth(scrollCore) + 2 : 0;
-	const scrollPainted = scrollCore ? `${color(" ")}${primaryColor(scrollCore)}${color(" ")}` : "";
-	const tryPlace = (label: string): string | null => {
-		const lw = visibleWidth(label);
-		if (lw === 0 || innerW < lw + 4) return null;
-		if (dialog === "Left") {
-			if (scrollW > 0) {
-				const centerStart = Math.floor((innerW - scrollW) / 2);
-				if (centerStart >= 4 + lw + 1) {
-					return `${color("\u2500\u2500 ")}${label}${color(` ${"\u2500".repeat(centerStart - (4 + lw))}`)}${scrollPainted}${color("\u2500".repeat(innerW - centerStart - scrollW))}`;
-				}
-				return null;
-			}
-			return color("\u2500\u2500 ") + label + color(` ${"\u2500".repeat(innerW - lw - 4)}`);
-		}
-		if (dialog === "Center") {
-			const leftD = Math.floor((innerW - lw - 2) / 2);
-			const rightD = innerW - lw - 2 - leftD;
-			if (scrollW > 0) {
-				const leftEnd = 2 + scrollW;
-				if (leftD >= leftEnd + 1) {
-					return `${color("\u2500\u2500")}${scrollPainted}${color(`${"\u2500".repeat(leftD - leftEnd)} `)}${label}${color(` ${"\u2500".repeat(rightD)}`)}`;
-				}
-				return null;
-			}
-			return color(`${"\u2500".repeat(leftD)} `) + label + color(` ${"\u2500".repeat(rightD)}`);
-		}
-		// Right
-		if (scrollW > 0) {
-			const centerStart = Math.floor((innerW - scrollW) / 2);
-			if (centerStart + scrollW + 1 <= innerW - lw - 4) {
-				return `${color("\u2500".repeat(centerStart))}${scrollPainted}${color(`${"\u2500".repeat(innerW - lw - 4 - centerStart - scrollW)} `)}${label}${color(" \u2500\u2500")}`;
-			}
-			return null;
-		}
-		return color(`${"\u2500".repeat(innerW - lw - 4)} `) + label + color(" \u2500\u2500");
-	};
-	const placed = tryPlace(status) ?? (spinnerOnly ? tryPlace(spinnerOnly) : null);
-	if (placed) return placed;
-	const fallback = spinnerOnly || status;
-	const fw = visibleWidth(fallback);
-	if (innerW >= fw + 4) {
-		if (dialog === "Right") return color(`${"\u2500".repeat(innerW - fw - 4)} `) + fallback + color(" \u2500\u2500");
-		if (dialog === "Center") {
-			const leftD = Math.floor((innerW - fw - 2) / 2);
-			return color(`${"\u2500".repeat(leftD)} `) + fallback + color(` ${"\u2500".repeat(innerW - fw - 2 - leftD)}`);
-		}
-		return color("\u2500\u2500 ") + fallback + color(` ${"\u2500".repeat(innerW - fw - 4)}`);
-	}
-	const sw = Math.min(fw, innerW);
-	const prefixW = dialog === "Right" ? Math.max(0, innerW - sw) : dialog === "Center" ? Math.max(0, Math.floor((innerW - sw) / 2)) : Math.min(2, Math.max(0, innerW - sw));
-	return color("\u2500".repeat(prefixW)) + truncateToWidth(fallback, sw, "") + color("\u2500".repeat(Math.max(0, innerW - prefixW - sw)));
-}
-
-/** Places the active working/status dialog relative to the chatbox per the user's Dialog preset. */
-export function applyChatboxDialog(
-	lines: readonly string[],
-	boxed: boolean,
-	width: number,
-	hiddenLineCount: number,
-	dialog: ChatboxDialog,
-	status: string,
-	spinnerOnly: string,
-	color: (text: string) => string,
-	primaryColor: (text: string) => string = (t) => t,
-): string[] {
-	const sw = visibleWidth(status);
-	if (sw === 0 || lines.length === 0) return [...lines];
-	const out = [...lines];
-	// Outside renders onto the existing above-editor widget row (no extra line added here).
-	if (dialog === "Outside") return out;
-	if (dialog === "Inside") {
-		if (out.length < 2) return out;
-		const side = boxed ? color("\u2502") : "";
-		if (boxed && (!out[1]!.startsWith(side) || !out[1]!.endsWith(side))) return out;
-		const inner = boxed ? out[1]!.slice(side.length, out[1]!.length - side.length) : out[1]!;
-		const innerW = boxed ? width - 2 : width;
-		const trimmed = inner.replace(/ +$/, "");
-		const gap = innerW - visibleWidth(trimmed);
-		if (gap >= sw + 2) {
-			out[1] = side + trimmed + " ".repeat(gap - sw - 1) + status + " " + side;
-		} else if (innerW >= sw + 6) {
-			const kept = truncateToWidth(trimmed, innerW - sw - 2, "");
-			const pad = Math.max(1, innerW - visibleWidth(kept) - sw - 1);
-			out[1] = side + kept + " ".repeat(pad) + status + " " + side;
-		}
-		return out;
-	}
-	const innerW = boxed ? Math.max(1, width - 2) : width;
-	const topInner = formatTopBorderDialog(innerW, hiddenLineCount, dialog, status, spinnerOnly, color, primaryColor);
-	out[0] = boxed ? color("\u256d") + topInner + color("\u256e") : topInner;
-	return out;
-}
-
-/** Left-aligns the Outside dialog status in the above-editor slot with 1 blank line
- *  above and below so it never crowds adjacent messages, Todos, or the chatbox, while
- *  keeping inline notices beside it on the same row. */
-export function overlayOutsideDialogOnWidgetLines(lines: readonly string[], width: number, status: string): string[] {
-	const sw = visibleWidth(status);
-	if (sw === 0) return [...lines];
-	const leftRow = truncateToWidth(` ${status}`, width, "");
-	if (lines.length === 0) return ["", leftRow, ""];
-	const out = [...lines];
-	const lastIdx = out.length - 1;
-	const last = out[lastIdx]!;
-	const plainLast = stripAnsi(last).trim();
-	if (plainLast.length === 0) {
-		return ["", leftRow, ""];
-	}
-	if (!/^[╭╰│]/.test(plainLast)) {
-		const trimmed = last.replace(/ +$/, "");
-		const rest = trimmed.startsWith(" ") ? trimmed : ` ${trimmed}`;
-		out[lastIdx] = truncateToWidth(` ${status} ${rest}`, width, "");
-		if (stripAnsi(out[0]!).trim().length > 0) out.unshift("");
-		out.push("");
-		return out;
-	}
-	const boxStart = out.findIndex((line) => /^[╭╰│]/.test(stripAnsi(line).trim()));
-	const prefix = out.slice(0, boxStart).filter((line) => stripAnsi(line).trim().length > 0);
-	const boxed = out.slice(boxStart);
-	return prefix.length > 0 ? ["", leftRow, "", ...prefix, "", ...boxed] : ["", leftRow, "", ...boxed];
-}
-
-const ABOVE_WRAPPED_KEY = Symbol.for("pi-arnative.aboveWidgetWrapped");
-const ABOVE_MODE_KEY = Symbol.for("pi-arnative.aboveWidgetMode");
-
-function installAboveEditorHook(widgetContainer: { render?: (w: number) => string[] } | undefined, mode: unknown): void {
-	if (!widgetContainer || typeof widgetContainer.render !== "function") return;
-	const box = widgetContainer as Record<symbol, unknown> & { render: (w: number) => string[] };
-	box[ABOVE_MODE_KEY] = mode;
-	if (box[ABOVE_WRAPPED_KEY]) return;
-	box[ABOVE_WRAPPED_KEY] = true;
-	const ownOrig = Object.hasOwn(box, "render") ? box.render : null;
-	box.render = function (this: Record<symbol, unknown>, width: number): string[] {
-		// Delegate to the live prototype render when not overridden on the instance so `/reload`
-		// changes to Container.prototype.render still apply without touching prototype originals.
-		const baseRender = ownOrig ?? (Object.getPrototypeOf(this) as { render: (w: number) => string[] }).render;
-		const lines = baseRender.call(this, width);
-		try {
-			const hook = getRuntime().outsideDialogHook;
-			return hook ? hook(lines, width, this[ABOVE_MODE_KEY]) : lines;
-		} catch {
-			return lines;
-		}
-	};
-}
-
-if (InteractiveMode?.prototype) {
-	const modeProto = InteractiveMode.prototype as unknown as {
-		renderWidgetContainer?: (container: unknown, widgets: unknown, spacerWhenEmpty: boolean, leadingSpacer: boolean) => void;
-		showStatusIndicator?: (indicator: unknown) => void;
-	};
-	if (typeof modeProto.renderWidgetContainer === "function") {
-		patchOnce(modeProto, "renderWidgetContainer", (orig) => function (
-			this: any,
-			container: unknown,
-			widgets: unknown,
-			spacerWhenEmpty: boolean,
-			leadingSpacer: boolean,
-		): void {
-			if (container && container === this.widgetContainerAbove) {
-				installAboveEditorHook(container as { render?: (w: number) => string[] }, this);
-			}
-			orig.call(this, container, widgets, spacerWhenEmpty, leadingSpacer);
-		});
-	}
-	if (typeof modeProto.showStatusIndicator === "function") {
-		patchOnce(modeProto, "showStatusIndicator", (orig) => function (this: any, indicator: unknown): void {
-			installAboveEditorHook(this.widgetContainerAbove, this);
-			orig.call(this, indicator);
-		});
-	}
 }
 
 /**
@@ -1223,6 +754,7 @@ function poke(): void {
 		// ignore
 	}
 }
+bindChatboxPoke(poke);
 
 /**
  * Tool name → active progress text (gerund).
@@ -1292,11 +824,6 @@ export function repaintIdle(now: number = Date.now()): void {
 	poke();
 }
 
-/** Pointer motion and terminal focus reports are not user activity. */
-export function isPointerOrFocusInput(data: string): boolean {
-	return data.startsWith("\x1b[<") || data.startsWith("\x1b[M") || data === "\x1b[I" || data === "\x1b[O";
-}
-
 /** Intercepts terminal input on TuiBase to register keystroke activity. */
 export function wrapInputListener(tui: unknown): () => void {
 	const rt = getRuntime();
@@ -1357,7 +884,7 @@ export function stopIdleProbe(): void {
 }
 
 /** Start (or restart) the 1s tick from a fresh turn. */
-function startWorkingClock(ctx: { ui?: any }): void {
+function startWorkingClock(ctx: { ui?: WorkingUiSurface }): void {
 	stopWorkingClock();
 	workUI = ctx.ui ?? null;
 	workVerb = WORK_LABEL;
@@ -1366,14 +893,14 @@ function startWorkingClock(ctx: { ui?: any }): void {
 }
 
 /** Swap the verb (tool change) without resetting the turn clock. */
-function setWorkingVerb(ctx: { ui?: any }, verb: string): void {
+function setWorkingVerb(ctx: { ui?: WorkingUiSurface }, verb: string): void {
 	workUI = ctx.ui ?? null;
 	workVerb = verb;
 	if (workStartMs === null) workStartMs = Date.now();
 	paintWorking();
 }
 
-export function getToolWorkingMessage(toolName: string, args?: any): string {
+export function getToolWorkingMessage(toolName: string, args?: Record<string, unknown>): string {
 	const n = (toolName ?? "").trim();
 	if (!n) return WORK_LABEL;
 
@@ -1655,7 +1182,12 @@ export default function (pi: ExtensionAPI) {
 				private topMoreSpans: TextSpan[] = [];
 				private bottomMoreSpans: TextSpan[] = [];
 
-				constructor(tui: any, editorTheme: any, keybindings: any, options?: any) {
+				constructor(
+					tui: ConstructorParameters<typeof CustomEditor>[0],
+					editorTheme: ConstructorParameters<typeof CustomEditor>[1],
+					keybindings: ConstructorParameters<typeof CustomEditor>[2],
+					options?: ConstructorParameters<typeof CustomEditor>[3],
+				) {
 					super(tui, editorTheme, keybindings, { ...options, embedWorkingStatus: true });
 					editorTui = tui;
 					// Published so `/arnative` → Animations can repaint the live spinner without
@@ -1667,7 +1199,7 @@ export default function (pi: ExtensionAPI) {
 					return ctx.ui?.theme ?? activeThemeProxy;
 				}
 
-				private applyFixedIndicatorColors(indicator: any) {
+				private applyFixedIndicatorColors(indicator: WorkingIndicatorLike | undefined) {
 					if (!indicator) return;
 					// Clear renderIndicatorVerbatim so custom frames pass through spinnerColorFn.
 					indicator.renderIndicatorVerbatim = false;
@@ -1683,15 +1215,15 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 
-				setWorkingStatusIndicator(indicator: any) {
+				setWorkingStatusIndicator(indicator: WorkingIndicatorLike | undefined) {
 					this.applyFixedIndicatorColors(indicator);
 					indicator?.updateDisplay?.();
-					super.setWorkingStatusIndicator(indicator);
+					super.setWorkingStatusIndicator(indicator as Parameters<CustomEditor["setWorkingStatusIndicator"]>[0]);
 				}
 
 				renderTopBorder(width: number, hiddenLineCount: number): string {
 					this.lastHiddenLineCount = hiddenLineCount;
-					this.applyFixedIndicatorColors((this as any).workingStatusIndicator);
+					this.applyFixedIndicatorColors((this as unknown as { workingStatusIndicator?: WorkingIndicatorLike }).workingStatusIndicator);
 					if (activeChatboxPreset() === "Arnative") {
 						return renderChatboxScrollBorder(
 							"\u2191",
@@ -1792,9 +1324,7 @@ export default function (pi: ExtensionAPI) {
 				render(width: number): string[] {
 					const preset = activeChatboxPreset();
 					const dialog = activeChatboxDialog();
-					const indicator = (this as any).workingStatusIndicator as
-						| { renderInBorder?(w: number): string; renderSpinnerInBorder?(w: number): string }
-						| undefined;
+					const indicator = (this as unknown as { workingStatusIndicator?: WorkingIndicatorLike }).workingStatusIndicator;
 					this.applyFixedIndicatorColors(indicator);
 					// The box eats 5 columns: 2 sides + the 3-column prompt, so the
 					// content is rendered 5 columns narrower.
@@ -1822,10 +1352,11 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
-			rt.outsideDialogHook = (lines: string[], width: number, mode: any): string[] => {
+			rt.outsideDialogHook = (lines: string[], width: number, modeRaw: unknown): string[] => {
 				if (activeChatboxDialog() !== "Outside") return lines;
+				const mode = modeRaw as OutsideDialogModeLike | null | undefined;
 				const editor = getRuntime().editor as
-					| { workingStatusIndicator?: { renderInBorder?(w: number): string }; applyFixedIndicatorColors?: (ind: any) => void }
+					| { workingStatusIndicator?: WorkingIndicatorLike; applyFixedIndicatorColors?: (ind: WorkingIndicatorLike) => void }
 					| null;
 				if (!editor || mode?.editor !== editor) return lines;
 				const children = mode?.editorContainer?.children;

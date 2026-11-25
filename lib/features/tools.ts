@@ -26,18 +26,68 @@ import { join } from "node:path";
 import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../box.ts";
 import { getActiveTheme, stripAnsi, softSecondaryOf } from "../ansi.ts";
 import { actionWord } from "../todos.ts";
-import { EDIT_DIFF_KEY, choiceSetting } from "../preset-store.ts";
-import { clearRenderCache } from "./render-cache.ts";
+import {
+	EDIT_DIFF_CHOICES,
+	EDIT_DIFF_CONFIG_KEY,
+	activeEditDiff,
+	formatEditDiff,
+	setEditDiff,
+	type EditDiffMode,
+} from "../edit-diff.ts";
 import { markPatched, originalOf } from "../patch.ts";
 import {
 	TOOL_BOX_SCROLL_HOLD_KEY as SCROLL_HOLD,
 	TOOL_BOX_SCROLL_OFFSET_KEY as SCROLL_OFFSET,
 } from "../runtime.ts";
 
+export { EDIT_DIFF_CHOICES, activeEditDiff, formatEditDiff, setEditDiff, type EditDiffMode };
+
 export type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; inverse?(text: string): string };
-type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
-export type TCtx = { isError?: boolean; toolCallId?: string; args?: any; state?: Record<string, unknown>; durationMs?: number };
+type ToolArgs = Record<string, unknown>;
+type ToolDetails = { diff?: string; calls?: CodemodeCall[] } & Record<string, unknown>;
+type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: ToolDetails };
+export type TCtx = { isError?: boolean; toolCallId?: string; args?: ToolArgs; state?: Record<string, unknown>; durationMs?: number; expanded?: boolean };
 type Res = (r: TResult, th: Theme, soft: (s: string) => string, isErr: boolean, expanded: boolean) => string;
+
+interface CodemodeCall {
+	status?: string;
+	durationMs?: number;
+	name?: string;
+	args?: string;
+}
+
+interface RenderableComponent {
+	render?(width: number): string[];
+}
+
+interface ToolMouseEventLike {
+	type: string;
+	button?: string;
+	x: number;
+	y: number;
+}
+
+type ToolRendererFn = (args: ToolArgs, th: Theme, ctx: TCtx) => RenderableComponent;
+type ToolResultRendererFn = (
+	result: TResult,
+	opts: { expanded: boolean; isPartial?: boolean },
+	th: Theme,
+	ctx: TCtx,
+) => RenderableComponent;
+
+interface PatchedToolComponent extends Record<symbol, unknown> {
+	toolName: string;
+	expanded?: boolean;
+	toolDefinition?: { renderShell?: string; renderCall?: ToolRendererFn; renderResult?: ToolResultRendererFn };
+	render(width: number): string[];
+	handleMouse?(event: ToolMouseEventLike): unknown;
+	hasRendererDefinition(): boolean;
+	getRenderShell(): string;
+	getCallRenderer(): ToolRendererFn | undefined;
+	getResultRenderer(): ToolResultRendererFn | undefined;
+	invalidate?: () => void;
+	ui?: { requestRender?: () => void };
+}
 
 const cwd = process.cwd();
 const MAX_TIMINGS = 200;
@@ -195,7 +245,7 @@ const firstHeading = (s: unknown): string =>
 // One-line summary for tools without their own renderer. memory_write appends the
 // heading it just wrote (from args.content) so the line names WHAT was written
 // instead of just "Appended to MEMORY.md".
-export function toolSummary(name: string, text: string, args?: any): string {
+export function toolSummary(name: string, text: string, args?: ToolArgs): string {
 	const head = firstMeaningful(text).trim();
 	const title = name === "memory_write" ? firstHeading(args?.content) : "";
 	return title ? `${head}. ${title}` : head;
@@ -396,9 +446,9 @@ export function capExpandedToolBox(
 // extension in the same process), so a UI fix applies without restarting pi; see
 // lib/patch.ts for the originals/mark bookkeeping that makes that safe.
 if (ToolExecutionComponent?.prototype?.render) {
-	const proto = ToolExecutionComponent.prototype as any;
-	const origRender = originalOf<(this: any, width: number) => string[]>(proto, "render");
-	proto.render = markPatched(function (this: any, width: number): string[] {
+	const proto = ToolExecutionComponent.prototype as unknown as PatchedToolComponent;
+	const origRender = originalOf<(this: PatchedToolComponent, width: number) => string[]>(proto, "render");
+	proto.render = markPatched(function (this: PatchedToolComponent, width: number): string[] {
 		const lines = origRender.call(this, width);
 		const stripped = OWN_BOX.has(this.toolName) || boxTheirRenderers(this) || !hasOwnRendererDef(this);
 		this[STRIPPED_BOX] = stripped;
@@ -444,8 +494,8 @@ if (ToolExecutionComponent?.prototype?.render) {
 	// that follow are swallowed; the click clears the flag, not the release, or that click
 	// would trigger twice. Any other cell is left to pi: a press there starts a selection,
 	// so the output can be copied.
-	const origMouse = originalOf<(this: any, event: any) => any>(proto, "handleMouse");
-	proto.handleMouse = markPatched(function (this: any, event: any): any {
+	const origMouse = originalOf<(this: PatchedToolComponent, event: ToolMouseEventLike) => unknown>(proto, "handleMouse");
+	proto.handleMouse = markPatched(function (this: PatchedToolComponent, event: ToolMouseEventLike): unknown {
 		const onHint = (this[HINT_SPANS] as TextSpan[] | undefined)?.length
 			? inSpans(this[HINT_SPANS] as TextSpan[], event.y, event.x)
 			: false;
@@ -555,13 +605,13 @@ const MCP_TOOL = (name: string): boolean => name === "mcp" || name === "mcpScrip
 // `source_check` is the single exception: its partial phase (curator URLs + approval
 // state) would disappear because our partial path returns nothing.
 const NOT_BOXED = new Set(["source_check"]);
-const boxTheirRenderers = (self: any): boolean =>
+const boxTheirRenderers = (self: Pick<PatchedToolComponent, "toolName" | "toolDefinition">): boolean =>
 	Boolean(self.toolDefinition) &&
-	(self.toolDefinition.renderShell !== "self" || MCP_TOOL(self.toolName)) &&
+	(self.toolDefinition?.renderShell !== "self" || MCP_TOOL(self.toolName)) &&
 	!NOT_BOXED.has(self.toolName);
 
 // The MCP box title names the invoked tool (full args when expanded).
-const mcpInfo = (name: string, args: any, th: Theme): string => {
+const mcpInfo = (name: string, args: ToolArgs | undefined, th: Theme): string => {
 	if (!MCP_TOOL(name)) return "";
 	const tool = String(args?.tool ?? "");
 	const server = String(args?.server ?? "");
@@ -586,7 +636,7 @@ const safeCall = <T>(fn: () => T): T | null => {
 };
 
 // Lines from a third-party renderer component (right padding trimmed, ANSI kept).
-const componentLines = (component: any, width: number): string[] => {
+const componentLines = (component: RenderableComponent | null | undefined, width: number): string[] => {
 	try {
 		const lines = component?.render(Math.max(8, width));
 		return Array.isArray(lines) ? lines.map((l: string) => String(l).trimEnd()) : [];
@@ -621,11 +671,11 @@ const boxedRows = (icon: string, lines: string[]): string[] => {
 export const boxBgOf = (name: string): string | undefined => (name === "memory_write" ? "customMessageBg" : undefined);
 
 if (ToolExecutionComponent?.prototype?.render) {
-	const proto = ToolExecutionComponent.prototype as any;
-	const origCall = originalOf<(this: any) => any>(proto, "getCallRenderer");
-	const origResult = originalOf<(this: any) => any>(proto, "getResultRenderer");
-	const origShell = originalOf<(this: any) => string>(proto, "getRenderShell");
-	const hasOwnRenderer = (self: any): boolean =>
+	const proto = ToolExecutionComponent.prototype as unknown as PatchedToolComponent;
+	const origCall = originalOf<(this: PatchedToolComponent) => ToolRendererFn | undefined>(proto, "getCallRenderer");
+	const origResult = originalOf<(this: PatchedToolComponent) => ToolResultRendererFn | undefined>(proto, "getResultRenderer");
+	const origShell = originalOf<(this: PatchedToolComponent) => string>(proto, "getRenderShell");
+	const hasOwnRenderer = (self: PatchedToolComponent): boolean =>
 		!boxTheirRenderers(self) && Boolean(origCall.call(self) || origResult.call(self));
 	// pi-fff splits title (renderCall) and result (renderResult) — both merge into one box.
 	// Its two naming modes are covered: `find`/`grep` (override) and `ffgrep`/`fffind` (default).
@@ -637,24 +687,24 @@ if (ToolExecutionComponent?.prototype?.render) {
 	// getCallRenderer/getResultRenderer — our patch is bypassed and the call renders
 	// as bare name + pretty-printed args. Claim those calls as defined so they take
 	// the same box path as any other renderer-less tool.
-	const origHasRendererDefinition = originalOf<(this: any) => boolean>(proto, "hasRendererDefinition");
-	proto.hasRendererDefinition = markPatched(function (this: any): boolean {
+	const origHasRendererDefinition = originalOf<(this: PatchedToolComponent) => boolean>(proto, "hasRendererDefinition");
+	proto.hasRendererDefinition = markPatched(function (this: PatchedToolComponent): boolean {
 		return origHasRendererDefinition.call(this) || this.toolDefinition === undefined;
 	});
 
-	proto.getRenderShell = markPatched(function (this: any): string {
+	proto.getRenderShell = markPatched(function (this: PatchedToolComponent): string {
 		if (boxTheirRenderers(this)) return "self";
 		return hasOwnRenderer(this) ? origShell.call(this) : "self";
 	});
 
-	proto.getCallRenderer = markPatched(function (this: any) {
+	proto.getCallRenderer = markPatched(function (this: PatchedToolComponent) {
 			const name: string = this.toolName;
 			const mine = boxTheirRenderers(this);
 			const own = origCall.call(this);
 		// Chrome DevTools' own renderCall is a bare line and pi-mcp-adapter's compact one
 		// is the same flat text; ours replaces both (icon + name + invoked MCP tool).
 		if (own && !mine && !CDP_NAME.has(name)) return own;
-		return (args: any, th: Theme, ctx: TCtx) =>
+		return (args: ToolArgs, th: Theme, ctx: TCtx) =>
 			new Lines((width) => {
 				if ((ctx.state as Record<string, unknown> | undefined)?.hasResult) return [];
 				const icon = CDP_NAME.has(name) ? th.fg("accent", CDP_ICON) : th.fg("warning", spinIcon());
@@ -678,7 +728,7 @@ if (ToolExecutionComponent?.prototype?.render) {
 			});
 	});
 
-	proto.getResultRenderer = markPatched(function (this: any) {
+	proto.getResultRenderer = markPatched(function (this: PatchedToolComponent) {
 		const name: string = this.toolName;
 		const own = origResult.call(this);
 		// pi-fff splits title (renderCall) and result (renderResult); both go in one box.
@@ -792,7 +842,7 @@ function codeLines(code: string): string[] {
 }
 
 /** `✓ todo {"action":"list"} 2ms` — status icon, tool name, muted args, dim duration. */
-function formatCodemodeCall(call: any, th: Theme): string {
+function formatCodemodeCall(call: CodemodeCall, th: Theme): string {
 	const [color, glyph] = STATUS_ICON[String(call?.status ?? "ok")] ?? ["error", "x"];
 	const dur = fmtMs(Number(call?.durationMs));
 	let line = ` ${th.fg(color, glyph)} ${th.fg("accent", String(call?.name ?? ""))}`;
@@ -811,7 +861,9 @@ const STATUS_ICON: Record<string, [string, string]> = {
 
 /** Drop pi's "Script completed\nWall time …\nOutput:" header (a rejected input has none). */
 function codemodeOutput(content: unknown): string {
-	const blocks = (Array.isArray(content) ? content : []).filter((c: any) => c?.type === "text") as Array<{ text?: string }>;
+	const blocks = (Array.isArray(content) ? content : []).filter(
+		(c): c is { type: string; text?: string } => Boolean(c && typeof c === "object" && (c as { type?: unknown }).type === "text"),
+	);
 	const header = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n/;
 	return blocks
 		.map((c, i) => (i === 0 ? String(c.text ?? "").replace(header, "") : String(c.text ?? "")))
@@ -830,8 +882,8 @@ function codemodeScript(code: string, expanded: boolean): { lines: string[]; hid
  *  script's first line, with the rest behind the expand hint. Expanding — or failing —
  *  shows everything: a truncated error would read as a short, successful run. */
 function codemodeBoxRows(
-	args: any,
-	result: { content?: unknown; details?: any } | undefined,
+	args: ToolArgs | undefined,
+	result: { content?: unknown; details?: ToolDetails } | undefined,
 	th: Theme,
 	expanded: boolean,
 	isErr: boolean,
@@ -841,7 +893,7 @@ function codemodeBoxRows(
 ): string[] {
 	const code = typeof args?.code === "string" ? args.code : "";
 	const script = codemodeScript(code, expanded);
-	const calls = (result?.details?.calls as any[] | undefined) ?? [];
+	const calls: CodemodeCall[] = Array.isArray(result?.details?.calls) ? result.details.calls : [];
 	const output = codemodeOutput(result?.content);
 	const outLines = output ? output.split("\n") : [];
 	const shown = expanded || isErr;
@@ -865,9 +917,9 @@ function codemodeBoxRows(
 // (default: first output line / dim detail).
 function minimal(
 	pi: ExtensionAPI,
-	tool: { execute: (...a: any[]) => Promise<any> } & Record<string, unknown>,
+	tool: { execute: (...a: unknown[]) => Promise<unknown> } & Record<string, unknown>,
 	name: (th: Theme, soft: (s: string) => string) => string,
-	call: (a: any, th: Theme, soft: (s: string) => string, expanded: boolean) => string,
+	call: (a: ToolArgs, th: Theme, soft: (s: string) => string, expanded: boolean) => string,
 	res: Res = resText,
 	full: (r: TResult, th: Theme, inner: number) => string[] = fullText,
 ): void {
@@ -875,7 +927,7 @@ function minimal(
 	pi.registerTool({
 		...tool,
 		renderShell: "self",
-		async execute(toolCallId: string, params: any, signal: any, onUpdate: any, ctx: any) {
+		async execute(toolCallId: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown) {
 			const start = performance.now();
 			ACTIVE++;
 			syncTicker();
@@ -887,7 +939,7 @@ function minimal(
 				syncTicker();
 			}
 		},
-		renderCall(args: any, theme: Theme, context: TCtx) {
+		renderCall(args: ToolArgs, theme: Theme, context: TCtx) {
 			return new Lines((width) => {
 				// Read context.state live (never capture): renderResult may create it after renderCall.
 				if (context.state?.hasResult) return [];
@@ -943,7 +995,7 @@ function minimal(
 				return box(theme, width, rows);
 			});
 		},
-	} as any);
+	} as unknown as Parameters<ExtensionAPI["registerTool"]>[0]);
 }
 
 function arnativeTools(pi: ExtensionAPI) {
@@ -1062,190 +1114,12 @@ function arnativeTools(pi: ExtensionAPI) {
 	);
 }
 
-const SPLIT_DIFF_MIN_WIDTH = 50;
-const INTRA_LINE_MAX_TOKENS = 200;
-
-export type EditDiffMode = "Split" | "Unified";
-export const EDIT_DIFF_CHOICES: readonly EditDiffMode[] = ["Split", "Unified"];
-const editDiffSetting = choiceSetting(EDIT_DIFF_KEY, EDIT_DIFF_CHOICES, "Split");
-const EDIT_DIFF_CONFIG_KEY = editDiffSetting.slot;
-
-export const activeEditDiff = (): EditDiffMode => editDiffSetting.get();
-
-export function setEditDiff(mode: EditDiffMode): void {
-	editDiffSetting.set(mode);
-	clearRenderCache();
-}
-
-type DiffSide = { styled: string } | null;
-
-function unifiedDiffLines(diff: string, th: Theme): string[] {
-	return diff.split("\n").map((l) =>
-		l.startsWith("+") && !l.startsWith("+++")
-			? th.fg("toolDiffAdded", l)
-			: l.startsWith("-") && !l.startsWith("---")
-				? th.fg("toolDiffRemoved", l)
-				: th.fg("toolDiffContext", l),
-	);
-}
-
-function tokenizeDiffLine(s: string): string[] {
-	return s.match(/[A-Za-z0-9_]+|\s+|[^\sA-Za-z0-9_]/g) ?? [];
-}
-
-/**
- * Highlights changed tokens between paired old/new lines using `inverse`,
- * keeping leading indentation un-highlighted.
- */
-function highlightLinePair(oldText: string, newText: string, th: Theme): { left: string; right: string } {
-	const a = tokenizeDiffLine(oldText);
-	const b = tokenizeDiffLine(newText);
-	if (a.length === 0 || b.length === 0 || a.length > INTRA_LINE_MAX_TOKENS || b.length > INTRA_LINE_MAX_TOKENS) {
-		return { left: th.fg("toolDiffRemoved", oldText), right: th.fg("toolDiffAdded", newText) };
-	}
-
-	const m = a.length;
-	const n = b.length;
-	const dp: Uint16Array[] = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
-	for (let i = m - 1; i >= 0; i--) {
-		for (let j = n - 1; j >= 0; j--) {
-			dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
-		}
-	}
-
-	const inv = (s: string) => (th.inverse ? th.inverse(s) : `\x1b[7m${s}\x1b[27m`);
-	let left = "";
-	let right = "";
-	let i = 0;
-	let j = 0;
-	let seenNonWsLeft = false;
-	let seenNonWsRight = false;
-
-	const emitChanged = (tok: string, color: string, seenNonWs: boolean): [string, boolean] => {
-		if (!seenNonWs && /^\s+$/.test(tok)) return [th.fg(color, tok), false];
-		return [th.fg(color, inv(tok)), true];
-	};
-
-	while (i < m && j < n) {
-		if (a[i] === b[j]) {
-			const tok = a[i]!;
-			if (tok.trim()) {
-				seenNonWsLeft = true;
-				seenNonWsRight = true;
-			}
-			left += th.fg("toolDiffRemoved", tok);
-			right += th.fg("toolDiffAdded", tok);
-			i++;
-			j++;
-		} else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
-			const [chunk, seen] = emitChanged(a[i]!, "toolDiffRemoved", seenNonWsLeft);
-			left += chunk;
-			seenNonWsLeft = seen;
-			i++;
-		} else {
-			const [chunk, seen] = emitChanged(b[j]!, "toolDiffAdded", seenNonWsRight);
-			right += chunk;
-			seenNonWsRight = seen;
-			j++;
-		}
-	}
-	while (i < m) {
-		const [chunk, seen] = emitChanged(a[i]!, "toolDiffRemoved", seenNonWsLeft);
-		left += chunk;
-		seenNonWsLeft = seen;
-		i++;
-	}
-	while (j < n) {
-		const [chunk, seen] = emitChanged(b[j]!, "toolDiffAdded", seenNonWsRight);
-		right += chunk;
-		seenNonWsRight = seen;
-		j++;
-	}
-	return { left, right };
-}
-
-function wrapDiffCell(side: DiffSide, width: number): string[] {
-	if (!side) return [""];
-	const clean = side.styled.replace(/\t/g, "  ");
-	return clean === "" ? [""] : wrapTextWithAnsi(clean, width);
-}
-
-function renderSplitPair(left: DiffSide, right: DiffSide, leftW: number, rightW: number, sep: string): string[] {
-	const leftLines = wrapDiffCell(left, leftW);
-	const rightLines = wrapDiffCell(right, rightW);
-	const count = Math.max(leftLines.length, rightLines.length);
-	const rows: string[] = [];
-	for (let i = 0; i < count; i++) {
-		const l = leftLines[i] ?? "";
-		const r = rightLines[i] ?? "";
-		const pad = " ".repeat(Math.max(0, leftW - visibleWidth(l)));
-		rows.push(`${l}${pad}${sep}${r}`);
-	}
-	return rows;
-}
-
-/**
- * Formats an `edit` diff side-by-side (Before | After) when the box inner width
- * is at least {@link SPLIT_DIFF_MIN_WIDTH}, falling back to unified diff on
- * narrow terminals or when `details.diff` is absent.
- */
-export function formatEditDiff(r: TResult, th: Theme, inner: number, mode: EditDiffMode = activeEditDiff()): string[] {
-	const diff: string = r.details?.diff ?? "";
-	if (!diff) return fullText(r, th);
-	if (mode === "Unified" || inner < SPLIT_DIFF_MIN_WIDTH) return unifiedDiffLines(diff, th);
-
-	const sep = th.fg("dim", " │ ");
-	const leftW = Math.floor((inner - 3) / 2);
-	const rightW = inner - 3 - leftW;
-	const out: string[] = [
-		`${th.fg("dim", "Before")}${" ".repeat(Math.max(0, leftW - 6))}${sep}${th.fg("dim", "After")}`,
-		th.fg("dim", `${"─".repeat(leftW)}─┼─${"─".repeat(rightW)}`),
-	];
-
-	let dels: string[] = [];
-	let adds: string[] = [];
-	const flushChanges = () => {
-		const count = Math.max(dels.length, adds.length);
-		for (let i = 0; i < count; i++) {
-			const d = dels[i];
-			const a = adds[i];
-			if (d !== undefined && a !== undefined) {
-				const { left, right } = highlightLinePair(d, a, th);
-				out.push(...renderSplitPair({ styled: left }, { styled: right }, leftW, rightW, sep));
-			} else {
-				const left: DiffSide = d !== undefined ? { styled: th.fg("toolDiffRemoved", d) } : null;
-				const right: DiffSide = a !== undefined ? { styled: th.fg("toolDiffAdded", a) } : null;
-				out.push(...renderSplitPair(left, right, leftW, rightW, sep));
-			}
-		}
-		dels = [];
-		adds = [];
-	};
-
-	for (const line of diff.split("\n")) {
-		if (line.startsWith("-") && !line.startsWith("---")) {
-			dels.push(line.slice(1));
-		} else if (line.startsWith("+") && !line.startsWith("+++")) {
-			adds.push(line.slice(1));
-		} else if (line.startsWith(" ")) {
-			flushChanges();
-			const side: DiffSide = { styled: th.fg("toolDiffContext", line.slice(1)) };
-			out.push(...renderSplitPair(side, side, leftW, rightW, sep));
-		} else {
-			flushChanges();
-			out.push(th.fg("toolDiffContext", line));
-		}
-	}
-	flushChanges();
-	return out;
-}
-
 // codemode: pi's renderer wrapped in our box. renderShell "self" keeps the
 // execution defaults; renderCall/renderResult draw the box. state.hasResult
 // guarantees one box per call, also after reload/restore.
 const codemodeRenderers = {
 	renderShell: "self" as const,
-	renderCall(args: any, th: Theme, ctx: TCtx) {
+	renderCall(args: ToolArgs, th: Theme, ctx: TCtx) {
 		return new Lines((width) => {
 			if (ctx.state?.hasResult) return [];
 			const isErr = Boolean(ctx.isError);
@@ -1256,7 +1130,7 @@ const codemodeRenderers = {
 			return box(th, width, codemodeBoxRows(args, undefined, th, Boolean(ctx.expanded), isErr, icon, Math.max(8, width - 4)), bg);
 		});
 	},
-	renderResult(result: TResult & { details?: any }, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) {
+	renderResult(result: TResult, opts: { expanded: boolean; isPartial?: boolean }, th: Theme, ctx: TCtx) {
 		if (opts.isPartial) return EMPTY;
 		((ctx.state ??= {}) as Record<string, unknown>).hasResult = true;
 		const isErr = Boolean(ctx.isError || result.isError);
