@@ -41,7 +41,7 @@
 	},
 	"scripts": {
 		"dev": "pi --extension ./extensions/index.ts",
-		"test": "node lib/box.ts && node lib/patch.ts && node lib/ansi.ts && node lib/color.ts && node lib/shortcuts.ts && node lib/status-widget.ts && node lib/preset-store.ts && node lib/spinner.ts && node lib/todos.ts && node lib/usage-store.ts && node themes/gen-themes.mjs --check && node lib/features/tools.ts && node lib/list-picker.ts && node lib/compat.ts && node lib/provider.ts && node lib/model-heal.ts && node lib/features/footer.ts && node lib/features/timestamps.ts && node lib/features/ui-render-tweaks.ts && node lib/features/render-cache.ts && node lib/features/usage.ts && node lib/features/usage-export.ts && node lib/features/animations.ts && node lib/features/autocompact.ts && node lib/features/budget.ts && node lib/features/model-heal.ts && node lib/features/todos.ts && node lib/features/arnative.ts && node scripts/reporter.mjs --self-check && node --test --test-reporter=./scripts/reporter.mjs",
+		"test": "node themes/gen-themes.mjs --check && node scripts/reporter.mjs --self-check && node --test --test-reporter=./scripts/reporter.mjs",
 		"preview": "node scripts/preview.mjs",
 		"overlay": "node scripts/overlay.mjs",
 		"themes": "node themes/gen-themes.mjs",

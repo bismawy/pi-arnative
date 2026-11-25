@@ -10,11 +10,11 @@
  *
  * Usage: node themes/gen-themes.mjs [--check]
  */
+import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { contrast, hexToOklch, parseOklch, oklchToRgb, toHex } from "../lib/color.ts";
-import { assert } from "../lib/check.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Pi 1.2.0 moved the published schema to pi.dev; older releases validated this
