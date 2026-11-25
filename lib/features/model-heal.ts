@@ -10,8 +10,7 @@
  * once, so two healers never write models.json at the same time.
  */
 import { bindSetModel, reloadCurrentModel } from "../provider.ts";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
 import { REJECTION_RE } from "../compat.ts";

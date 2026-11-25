@@ -57,7 +57,7 @@ const same = [];
 for (const name of RUNTIME_DIRS) {
 	const from = join(root, name);
 	const to = join(installed, name);
-	const sources = walk(from);
+	const sources = walk(from).filter((rel) => name !== "themes" || rel.endsWith(".json"));
 	const wanted = new Set(sources);
 	for (const rel of sources) {
 		const target = join(to, rel);

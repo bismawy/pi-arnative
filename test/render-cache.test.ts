@@ -24,10 +24,10 @@ import registerRenderCache, {
 	type ChatContainerLike,
 } from "../lib/features/render-cache.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";
+import { getRuntime } from "../lib/runtime.ts";
 
 const PATCHED = Symbol.for("pi-arnative.patchedMethod");
 const ORIGINALS = Symbol.for("pi-arnative.protoOriginals");
-const THINKING_STATE_KEY = Symbol.for("pi-arnative.thinkingLabelState");
 const SCROLL_HOLD_KEY = Symbol.for("pi-arnative.toolBoxScrollHold");
 const SCROLL_OFFSET_KEY = Symbol.for("pi-arnative.toolBoxScrollOffset");
 
@@ -202,10 +202,10 @@ test("custom and unknown transcript children render fresh while standard sibling
 });
 
 test("dynamic thinking animation and tool scroll-hold bypass cache cleanly", () => {
-	const g = globalThis as Record<symbol, unknown>;
-	const prevThinking = g[THINKING_STATE_KEY];
+	const rt = getRuntime();
+	const prevThinking = rt.thinkingLabelState;
 	const active = new Set<object>();
-	g[THINKING_STATE_KEY] = { active };
+	rt.thinkingLabelState = { ui: null, active, starts: new WeakMap(), finished: new WeakMap(), timer: null };
 
 	const msg: Record<string | symbol, unknown> = {};
 	assert.equal(isDynamicChild(msg), false);
@@ -221,8 +221,7 @@ test("dynamic thinking animation and tool scroll-hold bypass cache cleanly", () 
 	msg[SCROLL_OFFSET_KEY] = 3;
 	assert.equal(isDynamicChild(msg), false, "released scroll-hold settles at new offset");
 
-	if (prevThinking === undefined) delete g[THINKING_STATE_KEY];
-	else g[THINKING_STATE_KEY] = prevThinking;
+	rt.thinkingLabelState = prevThinking;
 });
 
 test("width LRU keeps a third width warm (3-way terminal toggle)", () => {

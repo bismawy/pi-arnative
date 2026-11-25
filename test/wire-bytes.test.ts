@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resetPresetCache } from "../lib/preset-store.ts";
+import { getRuntime } from "../lib/runtime.ts";
 import registerAutoCompact, {
 	PAYLOAD_LIMIT_CONFIG_KEY,
 	activeByteCeilings,
@@ -63,7 +64,7 @@ test("Unicode payload over the byte trigger sheds on the first context event", a
 	t.after(() => {
 		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevDir;
-		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")];
+		getRuntime().autocompactState = null;
 		delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 		resetPresetCache();
 		rmSync(dir, { recursive: true, force: true });
@@ -133,7 +134,7 @@ test("wireBytesSnapshot reports payload pressure only after byte-limited context
 		delete (globalThis as Record<symbol, unknown>)[PAYLOAD_LIMIT_CONFIG_KEY];
 		if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevDir;
-		delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")];
+		getRuntime().autocompactState = null;
 		resetPresetCache();
 		rmSync(dir, { recursive: true, force: true });
 	}

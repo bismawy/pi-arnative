@@ -7,8 +7,7 @@
  * Opening /model reloads both files. Nothing is hand-edited by the user.
  */
 import { matchesKey } from "@earendil-works/pi-tui";
-import type { ExtensionCommandContext, Theme, TUI } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionCommandContext, type Theme, type TUI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildCatalogIndex, buildEffortMap, findMetaForId, isEffortProbeable, mergeMeta, parseModelMeta, probeEffort, suggestCompat, type CatalogIndex, type Compat, type ModelMeta } from "./compat.ts";

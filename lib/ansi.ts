@@ -1,4 +1,6 @@
 
+import { getRuntime } from "./runtime.ts";
+
 /** Theme bg open-code, stripped of its trailing \x1b[49m reset. */
 export function ansiBgOpen(th: { bg?(color: string, text: string): string } | null, color: string): string {
 	if (!th?.bg) return "";
@@ -24,17 +26,12 @@ export function themeOf<T>(ctx: unknown): T | null {
 	return (ctx as { ui?: { theme?: T } } | null | undefined)?.ui?.theme ?? null;
 }
 
-// Shared active-theme slot. `/reload` re-imports an extension's modules, so two copies
-// can coexist: one carries the session_start handler, the other owns a stacked UI patch.
-// globalThis gives both the same theme, so the patched copy paints instead of drawing
-// uncolored (or, before the null-guard fix, crashing). Set from `session_start`.
-const THEME_PROXY_KEY = Symbol.for("pi-arnative.activeThemeProxy");
+// Shared active-theme slot on RuntimeState so `/reload` keeps the live theme.
 export function getActiveTheme<T>(): T | null {
-	return (globalThis as Record<symbol, T>)[THEME_PROXY_KEY] ?? null;
+	return (getRuntime().activeTheme as T | null) ?? null;
 }
 export function setActiveTheme<T>(th: T | null): void {
-	if (th) (globalThis as Record<symbol, T>)[THEME_PROXY_KEY] = th;
-	else delete (globalThis as Record<symbol, T>)[THEME_PROXY_KEY];
+	getRuntime().activeTheme = (th as object | null) ?? null;
 }
 
 /**

@@ -18,6 +18,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { PAYLOAD_LIMIT_KEY, choiceSetting, loadSetting, saveChoice } from "../preset-store.ts";
+import { getRuntime } from "../runtime.ts";
 import { activeRenderCache } from "./render-cache.ts";
 
 /** Stored exactly as the picker shows them; `Off` disables the trigger entirely. */
@@ -532,7 +533,7 @@ let trackedOverheadBytes = -1;
 export function wireBytesSnapshot(): { bytes: number; limit: number } | null {
 	const ceilings = activeByteCeilings();
 	if (!ceilings) return null;
-	const state = (globalThis as Record<symbol, AutoCompactState | undefined>)[Symbol.for("pi-arnative.autocompactState")];
+	const state = getRuntime().autocompactState as AutoCompactState | null;
 	if (!state || state.lastMessagesBytes <= 0) return null;
 	const overhead = state.overheadBytes > 0 ? state.overheadBytes : DEFAULT_OVERHEAD_BYTES;
 	return { bytes: state.lastMessagesBytes + overhead, limit: ceilings.shedTriggerBytes };
@@ -550,8 +551,8 @@ export default function registerAutoCompact(pi: ExtensionAPI): void {
 		},
 	});
 	(state as { _overheadBytes?: number })._overheadBytes = 0;
-	// Production and self-check both read this snapshot symbol (footer uses wireBytesSnapshot).
-	(globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.autocompactState")] = state;
+	// Production and self-check both read this snapshot via RuntimeState (footer uses wireBytesSnapshot).
+	getRuntime().autocompactState = state;
 
 	const resetByteTracking = (): void => {
 		state.lastMessagesBytes = 0;

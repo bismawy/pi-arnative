@@ -22,6 +22,7 @@ import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf 
 import { contrast } from "../color.ts";
 import { expandKeyName } from "../format.ts";
 import { patchOnce } from "../patch.ts";
+import { getRuntime, type ThinkingLabelState } from "../runtime.ts";
 
 type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; italic?(text: string): string } | null;
 const activeTheme = () => getActiveTheme<Exclude<ActiveTheme, null>>();
@@ -398,21 +399,13 @@ export const THINKING_ICON = "\uec21";
 export const THINKING_DOTS = [".", "..", "..."] as const;
 export const THINKING_DOT_MS = 400;
 
-const THINKING_STATE_KEY = Symbol.for("pi-arnative.thinkingLabelState");
-type ThinkingState = {
-	ui: { requestRender(): void } | null;
-	active: Set<object>;
-	starts: WeakMap<object, number[]>;
-	finished: WeakMap<object, Array<string | undefined>>;
-	timer: ReturnType<typeof setInterval> | null;
-};
-const thinkingState = ((globalThis as Record<symbol, unknown>)[THINKING_STATE_KEY] ??= {
+const thinkingState: ThinkingLabelState = (getRuntime().thinkingLabelState ??= {
 	ui: null,
 	active: new Set<object>(),
 	starts: new WeakMap<object, number[]>(),
 	finished: new WeakMap<object, Array<string | undefined>>(),
 	timer: null,
-}) as ThinkingState;
+});
 
 function stopThinkingTicker(): void {
 	if (thinkingState.timer) {

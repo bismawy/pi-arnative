@@ -7,6 +7,7 @@
  * shared `lib/` modules up to 14 times.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerLifecycleFeatures } from "../lib/runtime.ts";
 import registerAnimations from "../lib/features/animations.ts";
 import registerArnative from "../lib/features/arnative.ts";
 import registerAutoCompact from "../lib/features/autocompact.ts";
@@ -40,7 +41,5 @@ const FEATURES: readonly ((pi: ExtensionAPI) => void)[] = [
 ];
 
 export default function registerPiArnative(pi: ExtensionAPI): void {
-	for (const register of FEATURES) {
-		register(pi);
-	}
+	registerLifecycleFeatures(pi, FEATURES);
 }

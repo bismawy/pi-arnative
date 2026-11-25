@@ -13,6 +13,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { attachChatContainer, clearRenderCache, type ChatContainerLike } from "../lib/features/render-cache.ts";
 import { repairBubbleBg } from "../lib/features/timestamps.ts";
+import { getRuntime } from "../lib/runtime.ts";
 import "../lib/features/footer.ts";
 import "../lib/features/tools.ts";
 import "../lib/features/ui-render-tweaks.ts";
@@ -47,7 +48,7 @@ async function withFrozenOriginal(
 
 test("timestamps.ts never mutates frozen cached UserMessageComponent.render output and stays idempotent", async () => {
 	const bg = "\x1b[48;2;40;42;54m";
-	const tsState = (globalThis as Record<symbol, any>)[Symbol.for("pi-arnative.chatTimestampState")];
+	const tsState = getRuntime().chatTimestampState;
 	const prevTheme = tsState?.theme;
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[36m${t}\x1b[39m`,

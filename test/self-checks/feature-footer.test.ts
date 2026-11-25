@@ -9,9 +9,10 @@ import { stripAnsi } from "../../lib/ansi.ts";
 import { markedLabels } from "../../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../../lib/shortcuts.ts";
 import { CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_PRESET_KEY as CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PROMPT_KEY as CHATBOX_PROMPT_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache } from "../../lib/preset-store.ts";
+import { getRuntime } from "../../lib/runtime.ts";
 import { CHATBOX_PRESETS, DEFAULT_CHATBOX_PRESET, CHATBOX_PROMPTS, DEFAULT_CHATBOX_PROMPT, CHATBOX_DIALOGS, DEFAULT_CHATBOX_DIALOG, activeChatboxPreset, setChatboxPreset, activeChatboxPrompt, setChatboxPrompt, nextChatboxPrompt, activeChatboxDialog, setChatboxDialog, nextChatboxDialog, isPromptActive, stopPromptIdle, markPromptTyped, paintChatboxPrompt, renderChatboxScrollBorder, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET, minimalExpanded, activeFooterPreset, setFooterPreset, IDLE_PAUSE_MS, ActiveClock, seedActiveMs, clock, currentToolVerb, isJevEyeStatus, jevEyeStatusLine, ponytailStatusLine, gitParts, formatDiffStat, placeMinimalHead, shortenCwd, resolveSessionStartMs, sumNumstat, formatDuration, renderChatboxLines, boxEditorLines, applyChatboxDialog, overlayOutsideDialogOnWidgetLines, layoutFooterGrid, piCacheHit, CACHE_WINDOW_MSGS, cacheHitBand, RATE_MIN_ACTIVE_MS, RATE_MIN_WIDTH, costCell, getUsage, workingLabel, isPointerOrFocusInput, armIdleProbe, stopIdleProbe, getToolWorkingMessage, __test } from "../../lib/features/footer.ts";
 
-const { CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, CHATBOX_DIALOG_KEY, PROMPT_TYPED_AT_KEY, PROMPT_IDLE_TIMER_KEY, ARNATIVE_PRESETS, MINIMAL_EXPAND_KEY, FOOTER_PRESET_KEY, FOOTER_REGISTRAR_KEY, WORK_TIMER_KEY, WORK_LABEL, run, branchFromDisk, refreshGit, formatModelName, stopWorkingClock, IDLE_PROBE_EPSILON_MS, startWorkingClock } = __test;
+const { CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, CHATBOX_DIALOG_KEY, ARNATIVE_PRESETS, FOOTER_PRESET_KEY, WORK_LABEL, run, branchFromDisk, refreshGit, formatModelName, stopWorkingClock, IDLE_PROBE_EPSILON_MS, startWorkingClock } = __test;
 
 test("lib/features/footer.ts self-check", async () => {
 	assert(shortenCwd("/run/media/dev/DATA/work/app") === "\u2026/work/app", "cwd inside -> last 2 segments");
@@ -92,9 +93,9 @@ test("lib/features/footer.ts self-check", async () => {
 	assert(currentToolVerb(new Map([["a", "Reading"], ["b", "Writing"]])) === "Writing", "parallel tools: last started wins");
 	assert(currentToolVerb(new Map([["a", "Reading"]])) === "Reading", "after one ends, the remaining tool's label shows");
 	startWorkingClock({ ui: { setWorkingMessage: () => {} } });
-	assert(Boolean((globalThis as Record<symbol, unknown>)[WORK_TIMER_KEY]), "clock starts: timer stored on globalThis");
+	assert(Boolean(getRuntime().workTimer), "clock starts: timer stored on RuntimeState");
 	stopWorkingClock();
-	assert((globalThis as Record<symbol, unknown>)[WORK_TIMER_KEY] == null, "clock stops: reload guard clears the timer");
+	assert(getRuntime().workTimer == null, "clock stops: reload guard clears the timer");
 	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "uniform box width (sides + prompt)");
 	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "too narrow: left unchanged");
 
@@ -328,12 +329,12 @@ test("lib/features/footer.ts self-check", async () => {
 	assert(markedLabels(FOOTER_PRESETS, "Pi (system)").join(" | ") === "● Pi (system) |   Arnative (Full) |   Arnative (Minimal)", "footer preset labels mark the active one");
 	assert(ARNATIVE_PRESETS.join(" | ") === "Arnative (Full) | Arnative (Minimal)", "the arnative-drawn presets exclude pi's built-in footer");
 	// Minimal disclosure: both sides start closed, then toggle independently.
-	delete (globalThis as Record<symbol, unknown>)[MINIMAL_EXPAND_KEY];
+	getRuntime().minimalFooterExpanded = null;
 	const expand0 = minimalExpanded();
 	assert(expand0.left === false && expand0.right === false, "the minimal footer starts fully collapsed");
 	expand0.left = true;
 	assert(minimalExpanded().left === true && minimalExpanded().right === false, "one side opens without opening the other");
-	delete (globalThis as Record<symbol, unknown>)[MINIMAL_EXPAND_KEY];
+	getRuntime().minimalFooterExpanded = null;
 	// Disclosure arrows: the left zone ends the left head, the right one the terminal edge.
 	const normal = placeMinimalHead("L".repeat(20), "R".repeat(10), 80);
 	assert(visibleWidth(normal.row) === 80, "the head row fills the terminal width");
@@ -370,10 +371,10 @@ test("lib/features/footer.ts self-check", async () => {
 	setFooterPreset("Pi (system)", presetCtx);
 	assert(footerCleared === 1 && editorTouched === 0 && activeFooterPreset() === "Pi (system)", "Pi (system) clears the footer only (an editor swap would close the picker)");
 	let registered = 0;
-	(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = () => { registered++; };
+	getRuntime().footerRegistrar = () => { registered++; };
 	setFooterPreset("Arnative (Full)", presetCtx);
 	assert(registered === 1 && activeFooterPreset() === "Arnative (Full)", "Arnative (Full) re-runs the arnative registrar");
-	delete (globalThis as Record<symbol, unknown>)[FOOTER_REGISTRAR_KEY];
+	getRuntime().footerRegistrar = null;
 	// Persist a NON-default value: asserting the default survives proves nothing.
 	setFooterPreset("Pi (system)", presetCtx);
 	assert(loadChoice(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS) === "Pi (system)", "the footer preset is persisted to disk");
@@ -459,10 +460,10 @@ test("lib/features/footer.ts self-check", async () => {
 	};
 	assert(paintChatboxPrompt("❯", fallbackTheme, true) === "<accent> ❯ </accent>", "active prompt falls back to accent when mdHeading is absent");
 	markPromptTyped(Date.now());
-	assert(isPromptActive() === true && (globalThis as Record<symbol, unknown>)[PROMPT_IDLE_TIMER_KEY] != null, "markPromptTyped activates prompt and arms idle timer");
+	assert(isPromptActive() === true && getRuntime().promptIdleTimer != null, "markPromptTyped activates prompt and arms idle timer");
 	stopPromptIdle();
-	assert((globalThis as Record<symbol, unknown>)[PROMPT_IDLE_TIMER_KEY] == null, "stopPromptIdle clears the prompt idle timer");
-	delete (globalThis as Record<symbol, unknown>)[PROMPT_TYPED_AT_KEY];
+	assert(getRuntime().promptIdleTimer == null, "stopPromptIdle clears the prompt idle timer");
+	getRuntime().promptTypedAt = 0;
 	rmSync(presetFixture, { recursive: true, force: true });
 	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
@@ -607,12 +608,11 @@ test("lib/features/footer.ts self-check", async () => {
 	// it off the boundary, where `idle()` is still false (strict `>`). `IDLE_PAUSE_MS` itself is
 	// not pinned: it is a documented knob and the behaviour tests read `pauseMs` from the clock.
 	assert(IDLE_PROBE_EPSILON_MS > 0, "the probe must fire past the boundary, not on it");
-	const idleKey = Symbol.for("pi-arnative.idleTimer");
 	clock.lastSeen = Date.now();
 	armIdleProbe();
-	assert((globalThis as Record<symbol, unknown>)[idleKey] != null, "activity arms the idle watchdog");
+	assert(getRuntime().idleTimer != null, "activity arms the idle watchdog");
 	stopIdleProbe();
-	assert((globalThis as Record<symbol, unknown>)[idleKey] == null, "the watchdog is cleared on stop/shutdown");
+	assert(getRuntime().idleTimer == null, "the watchdog is cleared on stop/shutdown");
 
 	// Only keyboard input is activity. Mouse motion is sent continuously by the terminal
 	// (it asks for all-motion mode), so counting it kept the clock open for as long as

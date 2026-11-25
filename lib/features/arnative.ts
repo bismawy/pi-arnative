@@ -5,7 +5,7 @@
  * Screens share one chrome and one title shape ({@link renderScreen}); a box border takes
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
-import { bindSetModel } from "../provider.ts";
+import { bindSetModel, openProviders } from "../provider.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { screenTitle } from "../box.ts";
@@ -52,7 +52,6 @@ import {
 	type RenderCacheChoice,
 } from "./render-cache.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../list-picker.ts";
-import { openProviders } from "../provider.ts";
 import { openUsage } from "./usage.ts";
 import { SHORTCUT_OPEN_ARNATIVE } from "../shortcuts.ts";
 

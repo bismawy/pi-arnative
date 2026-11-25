@@ -8,10 +8,10 @@
  */
 import { readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { writeAtomicSync } from "../preset-store.ts";
+import { getRuntime } from "../runtime.ts";
 import { inSpans, screenTitle, type TextSpan, textSpans } from "../box.ts";
 import { ListPicker, type ListPickerText } from "../list-picker.ts";
 import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../shortcuts.ts";
@@ -46,8 +46,6 @@ const HOLD_DELAY_MS = 250;
 /** Step interval while holding a `↑`/`↓ n more` counter row. */
 const HOLD_REPEAT_MS = 90;
 
-const STORE_KEY = Symbol.for("pi-arnative.todos.widget");
-
 interface WidgetStore {
 	state: TaskState;
 	expanded: boolean;
@@ -68,12 +66,11 @@ function doneHideMs(): number {
 	return Number.isFinite(raw) && raw >= 0 ? raw : 30_000;
 }
 
-/** Module state on globalThis, like the other arnative extensions: `/reload` re-imports the
- *  module, and a module-local copy would drop the list and the expanded flag. */
+/** Module state on RuntimeState so `/reload` keeps the list and expanded flag. */
 function store(): WidgetStore {
-	const holder = globalThis as Record<symbol, WidgetStore | undefined>;
-	holder[STORE_KEY] ??= { state: emptyTodos(), expanded: false, top: null, registered: false };
-	return holder[STORE_KEY]!;
+	const rt = getRuntime();
+	rt.todosWidget ??= { state: emptyTodos(), expanded: false, top: null, registered: false } satisfies WidgetStore;
+	return rt.todosWidget as WidgetStore;
 }
 
 /** Completed/empty session todo files older than this are pruned on session start. */

@@ -7,11 +7,14 @@ import registerPiArnative from "../extensions/index.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("package.json exposes a single entry point and extensions/ holds only index.ts", () => {
+test("package.json exposes a single entry point and excludes dev generators from files", () => {
 	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+		files?: string[];
 		pi?: { extensions?: string[] };
 	};
 	assert.deepEqual(pkg.pi?.extensions, ["./extensions/index.ts"]);
+	assert.ok(pkg.files?.includes("themes/*.json"), "package.json files should ship only themes/*.json");
+	assert.ok(!pkg.files?.includes("themes"), "package.json files must not ship themes/gen-themes.mjs");
 
 	const entries = readdirSync(join(root, "extensions")).sort();
 	assert.deepEqual(
@@ -67,6 +70,49 @@ test("single entry point registers every feature with zero duplicate commands, t
 	assert.equal(new Set(commands).size, commands.length, `duplicate commands: ${commands.join(", ")}`);
 	assert.equal(new Set(tools).size, tools.length, `duplicate tools: ${tools.join(", ")}`);
 	assert.equal(new Set(shortcuts).size, shortcuts.length, `duplicate shortcuts: ${shortcuts.join(", ")}`);
+	assert.equal(
+		new Set(events).size,
+		events.length,
+		`centralized lifecycle must register at most 1 pi.on() per event type; got duplicates in [${events.join(", ")}]`,
+	);
 	assert.ok(events.includes("session_start"), "missing session_start handlers");
 	assert.ok(events.includes("session_shutdown"), "missing session_shutdown handlers");
+});
+
+test("centralized lifecycle dispatcher preserves ordering, isolates sibling errors, and chains return values", async () => {
+	const { registerLifecycleFeatures } = await import("../lib/runtime.ts");
+	const registered = new Map<string, (event: any, ctx: any) => any>();
+	const mockPi = {
+		on(event: string, handler: (event: any, ctx: any) => any) {
+			registered.set(event, handler);
+		},
+	};
+	const order: string[] = [];
+	registerLifecycleFeatures(mockPi as never, [
+		(pi) => {
+			pi.on("session_shutdown" as never, () => {
+				order.push("first");
+				throw new Error("boom");
+			});
+			pi.on("input" as never, (e: any) => ({ action: "transform", text: `${e.text}!` }));
+			pi.on("context" as never, (e: any) => ({ messages: [...e.messages, "a"] }));
+		},
+		(pi) => {
+			pi.on("session_shutdown" as never, () => {
+				order.push("second");
+			});
+			pi.on("input" as never, (e: any) => ({ action: "transform", text: `${e.text}?` }));
+			pi.on("context" as never, (e: any) => ({ messages: [...e.messages, "b"] }));
+		},
+	]);
+
+	assert.equal(registered.size, 3);
+	await assert.rejects(() => registered.get("session_shutdown")!({}, {}), /boom/);
+	assert.deepEqual(order, ["first", "second"], "sibling shutdown handlers still run after an earlier error");
+
+	const inputRes = await registered.get("input")!({ text: "hi" }, {});
+	assert.deepEqual(inputRes, { action: "transform", text: "hi!?", images: undefined });
+
+	const ctxRes = await registered.get("context")!({ messages: [] }, {});
+	assert.deepEqual(ctxRes, { messages: ["a", "b"] });
 });

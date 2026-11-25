@@ -21,8 +21,9 @@ import { CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_PRESET_KEY as 
 import { formatCost } from "./usage.ts";
 import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
 import { budgetLevelNow } from "./budget.ts";
-import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
+import { activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
 import { spinnerPainter } from "../spinner.ts";
+import { getRuntime } from "../runtime.ts";
 
 // ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
 // The TUI drops key-release events before handleInput, so press+release cannot
@@ -52,8 +53,6 @@ const chatboxDialog = choiceSetting(CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_DIALOGS, 
 const CHATBOX_DIALOG_KEY = chatboxDialog.slot;
 
 export const PROMPT_IDLE_MS = 3_000;
-const PROMPT_TYPED_AT_KEY = Symbol.for("pi-arnative.promptTypedAt");
-const PROMPT_IDLE_TIMER_KEY = Symbol.for("pi-arnative.promptIdleTimer");
 
 export const activeChatboxPreset = (): ChatboxPreset => chatboxPreset.get();
 export function setChatboxPreset(name: ChatboxPreset): void {
@@ -85,27 +84,27 @@ export function nextChatboxDialog(current: ChatboxDialog = activeChatboxDialog()
 
 export function isPromptActive(
 	now: number = Date.now(),
-	lastTyped: number = ((globalThis as Record<symbol, unknown>)[PROMPT_TYPED_AT_KEY] as number | undefined) ?? 0,
+	lastTyped: number = getRuntime().promptTypedAt,
 ): boolean {
 	return lastTyped > 0 && now - lastTyped <= PROMPT_IDLE_MS;
 }
 
 export function stopPromptIdle(): void {
-	const g = globalThis as Record<symbol, ReturnType<typeof setTimeout> | null | undefined>;
-	if (g[PROMPT_IDLE_TIMER_KEY]) clearTimeout(g[PROMPT_IDLE_TIMER_KEY]!);
-	g[PROMPT_IDLE_TIMER_KEY] = null;
+	const rt = getRuntime();
+	if (rt.promptIdleTimer) clearTimeout(rt.promptIdleTimer);
+	rt.promptIdleTimer = null;
 }
 
 export function markPromptTyped(now: number = Date.now()): void {
-	const g = globalThis as Record<symbol, unknown>;
-	g[PROMPT_TYPED_AT_KEY] = now;
+	const rt = getRuntime();
+	rt.promptTypedAt = now;
 	stopPromptIdle();
 	const timer = setTimeout(() => {
-		g[PROMPT_IDLE_TIMER_KEY] = null;
+		getRuntime().promptIdleTimer = null;
 		poke();
 	}, PROMPT_IDLE_MS + 25);
 	timer.unref?.();
-	g[PROMPT_IDLE_TIMER_KEY] = timer;
+	rt.promptIdleTimer = timer;
 	poke();
 }
 
@@ -175,17 +174,13 @@ export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
 const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)"];
 /** Collapse state of the minimal footer: one flag per side, so a click on the left
  *  head does not open the right metrics. Session-scoped, not persisted. */
-const MINIMAL_EXPAND_KEY = Symbol.for("pi-arnative.minimalFooter.expanded");
 export function minimalExpanded(): { left: boolean; right: boolean } {
-	const slot = (globalThis as Record<symbol, { left: boolean; right: boolean } | undefined>)[MINIMAL_EXPAND_KEY];
-	if (slot) return slot;
-	const fresh = { left: false, right: false };
-	(globalThis as Record<symbol, { left: boolean; right: boolean }>)[MINIMAL_EXPAND_KEY] = fresh;
-	return fresh;
+	const rt = getRuntime();
+	rt.minimalFooterExpanded ??= { left: false, right: false };
+	return rt.minimalFooterExpanded;
 }
 const footerPreset = choiceSetting(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET);
 const FOOTER_PRESET_KEY = footerPreset.slot;
-const FOOTER_REGISTRAR_KEY = Symbol.for("pi-arnative.footerRegistrar");
 const footerCost = flagSetting(FOOTER_COST_CONFIG_KEY);
 
 /** Is the session cost cell on? */
@@ -209,7 +204,7 @@ export function applyFooterPreset(ctx: ExtensionContext): void {
 		ctx.ui?.setFooter?.(undefined);
 		return;
 	}
-	const register = (globalThis as Record<symbol, ((ctx: ExtensionContext) => void) | undefined>)[FOOTER_REGISTRAR_KEY];
+	const register = getRuntime().footerRegistrar;
 	register?.(ctx);
 }
 /** Select a preset and apply it immediately (the footer swaps on the spot). */
@@ -270,9 +265,7 @@ export class ActiveClock {
 	readonly pauseMs: number;
 
 	constructor(startedAt: number, pauseMs: number = IDLE_PAUSE_MS) {
-		const saved = (globalThis as Record<symbol, unknown>)[ACTIVE_KEY] as
-			| { active?: number; runStarted?: number; lastSeen?: number }
-			| undefined;
+		const saved = getRuntime().activeClock;
 		this.pauseMs = pauseMs;
 		this.active = typeof saved?.active === "number" ? saved.active : 0;
 		this.runStarted = typeof saved?.runStarted === "number" ? saved.runStarted : startedAt;
@@ -291,7 +284,7 @@ export class ActiveClock {
 			this.runStarted = now;
 		}
 		this.lastSeen = now;
-		(globalThis as Record<symbol, unknown>)[ACTIVE_KEY] = {
+		getRuntime().activeClock = {
 			active: this.active,
 			runStarted: this.runStarted,
 			lastSeen: this.lastSeen,
@@ -322,24 +315,15 @@ export function seedActiveMs(entries: readonly unknown[], pauseMs: number = IDLE
 
 // One shared clock: a /reload re-imports this module, so a fresh instance would restart
 // a session that is already hours old. Exported so a test can drive the render path.
-const ACTIVE_KEY = Symbol.for("pi-arnative.activeClock");
 export let clock = new ActiveClock(Date.now());
 
-const MODEL_KEY = Symbol.for("pi-arnative.currentModel");
-const IDLE_TIMER_KEY = Symbol.for("pi-arnative.idleTimer");
-const CLOCK_TIMER_KEY = Symbol.for("pi-arnative.clockTimer");
-const THINKING_KEY = Symbol.for("pi-arnative.currentThinking");
-const CWD_KEY = Symbol.for("pi-arnative.lastCwd");
-const GIT_KEY = Symbol.for("pi-arnative.lastGit");
-const GEN_KEY = Symbol.for("pi-arnative.footerGen");
-let footerGen = (globalThis as Record<symbol, number>)[GEN_KEY] || 0;
+let footerGen = getRuntime().footerGen || 0;
 
 let assistantStartMs: number | null = null;
 let assistantChars = 0;
 let latestSpeed: number | null = null;
 
 // Live elapsed clock for the working loader: "⠴ Working (50s)".
-const WORK_TIMER_KEY = Symbol.for("pi-arnative.workTimer");
 const WORK_LABEL = "Working";
 let workVerb = WORK_LABEL;
 let workStartMs: number | null = null;
@@ -530,7 +514,7 @@ async function refreshGit(cwd: string): Promise<void> {
 		if (!branch) {
 			// Clear the shared slot too, or the previous cwd's branch survives a reload.
 			git = null;
-			(globalThis as Record<symbol, any>)[GIT_KEY] = null;
+			getRuntime().lastGit = null;
 			return;
 		}
 		const [tag, status, sync, numstat] = await Promise.all([
@@ -556,7 +540,7 @@ async function refreshGit(cwd: string): Promise<void> {
 			ahead,
 			behind,
 		};
-		(globalThis as Record<symbol, any>)[GIT_KEY] = git;
+		getRuntime().lastGit = git;
 	} finally {
 		gitRefreshInFlight = false;
 		if (gitRefreshQueuedCwd !== null) {
@@ -837,7 +821,6 @@ export function overlayOutsideDialogOnWidgetLines(lines: readonly string[], widt
 	return prefix.length > 0 ? ["", leftRow, "", ...prefix, "", ...boxed] : ["", leftRow, "", ...boxed];
 }
 
-const OUTSIDE_HOOK_KEY = Symbol.for("pi-arnative.outsideDialogHook");
 const ABOVE_WRAPPED_KEY = Symbol.for("pi-arnative.aboveWidgetWrapped");
 const ABOVE_MODE_KEY = Symbol.for("pi-arnative.aboveWidgetMode");
 
@@ -854,7 +837,7 @@ function installAboveEditorHook(widgetContainer: { render?: (w: number) => strin
 		const baseRender = ownOrig ?? (Object.getPrototypeOf(this) as { render: (w: number) => string[] }).render;
 		const lines = baseRender.call(this, width);
 		try {
-			const hook = (globalThis as Record<symbol, ((l: string[], w: number, m: unknown) => string[]) | undefined>)[OUTSIDE_HOOK_KEY];
+			const hook = getRuntime().outsideDialogHook;
 			return hook ? hook(lines, width, this[ABOVE_MODE_KEY]) : lines;
 		} catch {
 			return lines;
@@ -1275,9 +1258,9 @@ function paintWorking(): void {
 }
 
 function stopWorkingClock(): void {
-	const t = (globalThis as Record<symbol, any>)[WORK_TIMER_KEY];
-	if (t) clearInterval(t);
-	(globalThis as Record<symbol, any>)[WORK_TIMER_KEY] = null;
+	const rt = getRuntime();
+	if (rt.workTimer) clearInterval(rt.workTimer);
+	rt.workTimer = null;
 	workStartMs = null;
 	workUI = null;
 	activeToolVerbs.clear();
@@ -1294,13 +1277,13 @@ function startClockTick(): void {
 		if (clock.idle()) return stopClockTick();
 		poke();
 	}, 1000);
-	(globalThis as Record<symbol, any>)[CLOCK_TIMER_KEY] = clockTick;
+	getRuntime().clockTimer = clockTick;
 }
 
 function stopClockTick(): void {
 	if (clockTick) clearInterval(clockTick);
 	clockTick = null;
-	(globalThis as Record<symbol, any>)[CLOCK_TIMER_KEY] = null;
+	getRuntime().clockTimer = null;
 }
 
 /** Repaint a frozen clock on the first activity, instead of waiting for the next tick. */
@@ -1315,11 +1298,9 @@ export function isPointerOrFocusInput(data: string): boolean {
 }
 
 /** Intercepts terminal input on TuiBase to register keystroke activity. */
-const WRAPPED_TUI_KEY = Symbol.for("pi-arnative.inputDispatchWrapped");
-const ACTIVITY_HOOK_KEY = Symbol.for("pi-arnative.activityHook");
-
 export function wrapInputListener(tui: unknown): () => void {
-	(globalThis as Record<symbol, any>)[ACTIVITY_HOOK_KEY] = (data: string) => {
+	const rt = getRuntime();
+	rt.activityHook = (data: string) => {
 		if (isPointerOrFocusInput(data)) return;
 		clock.tick();
 		repaintIdle();
@@ -1327,8 +1308,7 @@ export function wrapInputListener(tui: unknown): () => void {
 	};
 	const target = tui as { handleTerminalInput?: (data: string) => void };
 	if (!target || typeof target.handleTerminalInput !== "function") return () => {};
-	const g = globalThis as Record<symbol, unknown>;
-	const wrapped = g[WRAPPED_TUI_KEY] instanceof WeakSet ? (g[WRAPPED_TUI_KEY] as WeakSet<object>) : (g[WRAPPED_TUI_KEY] = new WeakSet<object>());
+	const wrapped = rt.wrappedTuis;
 	if (!wrapped.has(target)) {
 		wrapped.add(target);
 		const original = target.handleTerminalInput;
@@ -1336,7 +1316,7 @@ export function wrapInputListener(tui: unknown): () => void {
 			// One keystroke, one activity. The wrapper runs before `original`, and `pi-tui`
 			// has a single caller for it (`terminal.start`), so there is nothing to dedupe.
 			try {
-				(globalThis as Record<symbol, any>)[ACTIVITY_HOOK_KEY]?.(data);
+				getRuntime().activityHook?.(data);
 			} catch {
 				// activity bookkeeping must never break input
 			}
@@ -1345,7 +1325,7 @@ export function wrapInputListener(tui: unknown): () => void {
 	}
 	return () => {
 		// Only the hook is torn down; the wrapper stays, since a reload re-registers it.
-		(globalThis as Record<symbol, any>)[ACTIVITY_HOOK_KEY] = null;
+		getRuntime().activityHook = null;
 	};
 }
 
@@ -1358,13 +1338,13 @@ export function armIdleProbe(now: number = Date.now()): void {
 	const wait = Math.max(0, clock.pauseMs - (now - clock.lastSeen)) + IDLE_PROBE_EPSILON_MS;
 	idleProbe = setTimeout(() => {
 		idleProbe = null;
-		(globalThis as Record<symbol, any>)[IDLE_TIMER_KEY] = null;
+		getRuntime().idleTimer = null;
 		if (!clock.idle()) return; // activity raced the probe: it re-armed itself
 		idlePauseShown = true;
 		stopClockTick();
 		poke();
 	}, wait);
-	(globalThis as Record<symbol, any>)[IDLE_TIMER_KEY] = idleProbe;
+	getRuntime().idleTimer = idleProbe;
 	poke();
 }
 
@@ -1373,7 +1353,7 @@ export function stopIdleProbe(): void {
 	if (idleProbe) clearTimeout(idleProbe);
 	idleProbe = null;
 	stopClockTick();
-	(globalThis as Record<symbol, any>)[IDLE_TIMER_KEY] = null;
+	getRuntime().idleTimer = null;
 }
 
 /** Start (or restart) the 1s tick from a fresh turn. */
@@ -1382,7 +1362,7 @@ function startWorkingClock(ctx: { ui?: any }): void {
 	workUI = ctx.ui ?? null;
 	workVerb = WORK_LABEL;
 	workStartMs = Date.now();
-	(globalThis as Record<symbol, any>)[WORK_TIMER_KEY] = setInterval(paintWorking, 1000);
+	getRuntime().workTimer = setInterval(paintWorking, 1000);
 }
 
 /** Swap the verb (tool change) without resetting the turn clock. */
@@ -1454,9 +1434,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		// A /reload re-imports this module while the old instance's interval (and its
 		// ctx.ui closures) may still be alive; clear it before starting a new one.
+		const rt = getRuntime();
 		stopWorkingClock();
 		if (event.reason !== "reload") {
-			delete (globalThis as Record<symbol, unknown>)[ACTIVE_KEY];
+			rt.activeClock = null;
 			clock = new ActiveClock(resolveSessionStartMs(event.reason, ctx.sessionManager.getHeader()?.timestamp, Date.now()));
 			try {
 				const now = Date.now();
@@ -1479,22 +1460,20 @@ export default function (pi: ExtensionAPI) {
 			usageScanManager = undefined;
 			usageScanLeaf = undefined;
 		} else {
-			currentModel = (globalThis as Record<symbol, any>)[MODEL_KEY] ?? ctx.model;
-			currentThinkingLevel = (globalThis as Record<symbol, any>)[THINKING_KEY] ?? ctx.thinkingLevel;
-			git = (globalThis as Record<symbol, any>)[GIT_KEY] ?? null;
+			currentModel = (rt.currentModel as typeof currentModel) ?? ctx.model;
+			currentThinkingLevel = (rt.currentThinking as typeof currentThinkingLevel) ?? ctx.thinkingLevel;
+			git = (rt.lastGit as GitInfo) ?? null;
 		}
-		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
-		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
-		(globalThis as Record<symbol, any>)[GIT_KEY] = git;
+		rt.currentModel = currentModel;
+		rt.currentThinking = currentThinkingLevel;
+		rt.lastGit = git;
 		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
 
-		const cwd = (event.reason === "reload" && (globalThis as Record<symbol, any>)[CWD_KEY])
-			? (globalThis as Record<symbol, any>)[CWD_KEY]
-			: ctx.cwd;
-		(globalThis as Record<symbol, any>)[CWD_KEY] = cwd;
+		const cwd = (event.reason === "reload" && rt.lastCwd) ? rt.lastCwd : ctx.cwd;
+		rt.lastCwd = cwd;
 
 		runtimeGen = ++footerGen;
-		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
+		rt.footerGen = footerGen;
 
 		try {
 			armIdleProbe();
@@ -1668,7 +1647,7 @@ export default function (pi: ExtensionAPI) {
 				});
 
 			};
-			(globalThis as Record<symbol, (ctx: ExtensionContext) => void>)[FOOTER_REGISTRAR_KEY] = registerArnative;
+			rt.footerRegistrar = registerArnative;
 			applyFooterPreset(ctx);
 			class ArnativeEditor extends CustomEditor {
 				private lastHiddenLineCount = 0;
@@ -1681,7 +1660,7 @@ export default function (pi: ExtensionAPI) {
 					editorTui = tui;
 					// Published so `/arnative` → Animations can repaint the live spinner without
 					// waiting for the next session, and so workUI has a handle to the Loader.
-					(globalThis as Record<symbol, any>)[EDITOR_KEY] = this;
+					getRuntime().editor = this;
 				}
 
 				private getActiveTheme() {
@@ -1843,11 +1822,11 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
-			(globalThis as Record<symbol, unknown>)[OUTSIDE_HOOK_KEY] = (lines: string[], width: number, mode: any): string[] => {
+			rt.outsideDialogHook = (lines: string[], width: number, mode: any): string[] => {
 				if (activeChatboxDialog() !== "Outside") return lines;
-				const editor = (globalThis as Record<symbol, any>)[EDITOR_KEY] as
+				const editor = getRuntime().editor as
 					| { workingStatusIndicator?: { renderInBorder?(w: number): string }; applyFixedIndicatorColors?: (ind: any) => void }
-					| undefined;
+					| null;
 				if (!editor || mode?.editor !== editor) return lines;
 				const children = mode?.editorContainer?.children;
 				if (Array.isArray(children) && !children.includes(editor)) return lines;
@@ -1865,13 +1844,14 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
+		const rt = getRuntime();
 		clock.tick();
 		armIdleProbe();
 		currentModel = ctx.model;
 		currentThinkingLevel = ctx.thinkingLevel;
-		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
-		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
-		(globalThis as Record<symbol, any>)[CWD_KEY] = ctx.cwd;
+		rt.currentModel = currentModel;
+		rt.currentThinking = currentThinkingLevel;
+		rt.lastCwd = ctx.cwd;
 		startWorkingClock(ctx);
 		void refreshGit(ctx.cwd).then(() => poke());
 	});
@@ -1952,17 +1932,18 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("model_select", async (event) => {
 		currentModel = event.model;
-		(globalThis as Record<symbol, any>)[MODEL_KEY] = currentModel;
+		getRuntime().currentModel = currentModel;
 		poke();
 	});
 
 	pi.on("thinking_level_select", async (event) => {
 		currentThinkingLevel = event.level;
-		(globalThis as Record<symbol, any>)[THINKING_KEY] = currentThinkingLevel;
+		getRuntime().currentThinking = currentThinkingLevel;
 		poke();
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		const rt = getRuntime();
 		usageScanManager = undefined;
 		usageScanLeaf = undefined;
 		stopWorkingClock();
@@ -1970,17 +1951,17 @@ export default function (pi: ExtensionAPI) {
 		stopPromptIdle();
 		stopClockTick();
 		editorTui = null;
-		(globalThis as Record<symbol, unknown>)[OUTSIDE_HOOK_KEY] = null;
+		rt.outsideDialogHook = null;
 		try {
 			ctx.ui?.setWorkingIndicator?.();
 		} catch {
 			// ignore
 		}
 		rerender = null;
-		const cur = ((globalThis as Record<symbol, number>)[GEN_KEY] ?? 0);
+		const cur = rt.footerGen ?? 0;
 		if (cur !== runtimeGen) return;
 		footerGen++;
-		(globalThis as Record<symbol, number>)[GEN_KEY] = footerGen;
+		rt.footerGen = footerGen;
 		try {
 			(ctx as unknown as { ui?: { setFooter?: (f?: undefined) => void } }).ui?.setFooter?.(undefined);
 		} catch {
@@ -1993,19 +1974,14 @@ export const __test = {
 	CHATBOX_PRESET_KEY,
 	CHATBOX_PROMPT_KEY,
 	CHATBOX_DIALOG_KEY,
-	PROMPT_TYPED_AT_KEY,
-	PROMPT_IDLE_TIMER_KEY,
 	ARNATIVE_PRESETS,
-	MINIMAL_EXPAND_KEY,
 	FOOTER_PRESET_KEY,
-	FOOTER_REGISTRAR_KEY,
 	get git() {
 		return git;
 	},
 	set git(v) {
 		git = v;
 	},
-	WORK_TIMER_KEY,
 	WORK_LABEL,
 	run,
 	branchFromDisk,

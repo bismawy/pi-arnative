@@ -8,9 +8,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import register, { armIdleProbe, clock, formatDuration, repaintIdle, stopIdleProbe, wrapInputListener } from "../lib/features/footer.ts";
+import { getRuntime } from "../lib/runtime.ts";
 
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
-const EXPAND_KEY = Symbol.for("pi-arnative.minimalFooter.expanded");
 
 type Footer = { render(width: number): string[]; handleMouse?(e: unknown): unknown };
 
@@ -85,7 +85,7 @@ assert.equal(clock.active, SEED_GAP_MS, "session_start seeds active time from th
 /** A footer component built for the given preset. */
 function footerFor(preset: string): Footer {
 	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = preset;
-	delete (globalThis as Record<symbol, unknown>)[EXPAND_KEY];
+	getRuntime().minimalFooterExpanded = null;
 	assert.ok(footerFactory, "session_start registered a footer factory");
 	return footerFactory(tui, theme, footerData);
 }
@@ -285,10 +285,8 @@ test("an idle clock is dim and typing resumes it", () => {
 });
 
 test("the idle watchdog fires by itself and the 1s tick stops with it", async () => {
-	const idleKey = Symbol.for("pi-arnative.idleTimer");
-	const clockKey = Symbol.for("pi-arnative.clockTimer");
-	const armed = () => (globalThis as Record<symbol, unknown>)[idleKey] != null;
-	const ticking = () => (globalThis as Record<symbol, unknown>)[clockKey] != null;
+	const armed = () => getRuntime().idleTimer != null;
+	const ticking = () => getRuntime().clockTimer != null;
 	stopIdleProbe();
 
 	// Past the threshold: wait is 0, so the probe fires on the next macrotask and clears
@@ -361,8 +359,8 @@ test("the freeze paints itself, with no input and no manual render", async () =>
 test("typing counts as activity, pointer and focus do not", () => {
 	const seen: string[] = [];
 	const fake = { handleTerminalInput(data: string) { seen.push(data); } };
-	const savedHook = (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.activityHook")];
-	delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.inputDispatchWrapped")];
+	const savedHook = getRuntime().activityHook;
+	getRuntime().wrappedTuis = new WeakSet<object>();
 	const detach = wrapInputListener(fake);
 	const freeze = () => {
 		clock.active = 0;
@@ -384,7 +382,7 @@ test("typing counts as activity, pointer and focus do not", () => {
 	assert.ok(seen.includes("a"), "the keystroke still reaches the original dispatch");
 	stopIdleProbe();
 	detach();
-	(globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.activityHook")] = savedHook;
+	getRuntime().activityHook = savedHook;
 });
 
 // pi renders custom working-indicator frames verbatim, skipping `spinnerColorFn`
@@ -402,11 +400,11 @@ test("the spinner frame is coloured accent, the label keeps accentSoft", async (
 
 	// The extension's own seam, driven the way `/arnative` → Animations drives it: publish the
 	// editor, then let paintLiveIndicator install the preset's painter on the live Loader.
-	const { EDITOR_KEY, paintLiveIndicator } = await import("../lib/features/animations.ts");
+	const { paintLiveIndicator } = await import("../lib/features/animations.ts");
 	const { spinnerPainter } = await import("../lib/spinner.ts");
-	(globalThis as Record<symbol, any>)[EDITOR_KEY] = { workingStatusIndicator: loader };
+	getRuntime().editor = { workingStatusIndicator: loader };
 	paintLiveIndicator(spinnerPainter("Diamond Glow", { fg: (c: string, t: string) => `[${c}:${t}]` }));
-	delete (globalThis as Record<symbol, any>)[EDITOR_KEY];
+	getRuntime().editor = null;
 	const line = loader.render(40)[1]!;
 	assert.ok(line.includes("[accent:⬥]"), "the frame goes through the painted accent, verbatim cleared");
 	assert.ok(line.includes("[SOFT:Executing"), "the label keeps its own colour fn, not the spinner's");

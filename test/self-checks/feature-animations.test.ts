@@ -1,7 +1,8 @@
 import test from "node:test";
 import { assert } from "../helpers/check.ts";
 import { DEFAULT_SPINNER_PRESET, SPINNER_PRESETS, SPINNER_PRESET_DEFS } from "../../lib/spinner.ts";
-import registerAnimations, { EDITOR_KEY, activeSpinnerPreset, setSpinnerPreset, paintLiveIndicator, applySpinnerPreset, animationRows, animationRowText, PREVIEW_TICK_MS, animationRowNote, __test } from "../../lib/features/animations.ts";
+import { getRuntime } from "../../lib/runtime.ts";
+import registerAnimations, { activeSpinnerPreset, setSpinnerPreset, paintLiveIndicator, applySpinnerPreset, animationRows, animationRowText, PREVIEW_TICK_MS, animationRowNote, __test } from "../../lib/features/animations.ts";
 
 const { SPINNER_PRESET_CONFIG_KEY } = __test;
 
@@ -45,7 +46,7 @@ test("lib/features/animations.ts self-check", async () => {
 
 	// The painter seam: without a published editor there is nothing to paint, and that must
 	// be a no-op rather than a throw (the editor registers after the first session_start).
-	delete (globalThis as Record<symbol, unknown>)[EDITOR_KEY];
+	getRuntime().editor = null;
 	paintLiveIndicator((t) => t);
 
 	// Picking a preset must apply it NOW, not on the next session — and it must work when the
@@ -78,11 +79,11 @@ test("lib/features/animations.ts self-check", async () => {
 	const indicator = { renderIndicatorVerbatim: true, spinnerColorFn: undefined as unknown, updateDisplay: () => {} };
 	let painted = 0;
 	const editor = { workingStatusIndicator: { ...indicator, updateDisplay: () => painted++ } };
-	(globalThis as Record<symbol, any>)[EDITOR_KEY] = editor;
+	getRuntime().editor = editor;
 	paintLiveIndicator((t) => `<a>${t}`);
 	assert(editor.workingStatusIndicator.renderIndicatorVerbatim === false, "verbatim cleared, else pi skips the painter");
 	assert(painted === 1, "the live indicator repaints at once");
-	delete (globalThis as Record<symbol, any>)[EDITOR_KEY];
+	getRuntime().editor = null;
 
 	console.log("animations.ts self-check OK");
 	})();

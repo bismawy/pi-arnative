@@ -12,8 +12,7 @@
  * in-place fallback `lib/preset-store.ts` uses — and a failed export is swallowed: it must
  * never disturb the session. `PI_ARNATIVE_EXPORT=0` turns the export off.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { renameSync } from "node:fs";
 import { join } from "node:path";
 import { writeAtomicSync } from "../preset-store.ts";

@@ -34,6 +34,11 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { patchOnce } from "../patch.ts";
 import { RENDER_CACHE_KEY, choiceSetting } from "../preset-store.ts";
+import {
+	TOOL_BOX_SCROLL_HOLD_KEY as SCROLL_HOLD_KEY,
+	TOOL_BOX_SCROLL_OFFSET_KEY as SCROLL_OFFSET_KEY,
+	getRuntime,
+} from "../runtime.ts";
 
 /** Stored exactly as the picker shows them; `"On"` is the default. */
 export const RENDER_CACHE_CHOICES = ["On", "Off"] as const;
@@ -41,14 +46,8 @@ export type RenderCacheChoice = (typeof RENDER_CACHE_CHOICES)[number];
 export const DEFAULT_RENDER_CACHE: RenderCacheChoice = "On";
 
 const RENDER_CACHE_CONFIG_KEY = Symbol.for("pi-arnative.renderCache");
-const RENDER_CACHE_STATE_KEY = Symbol.for("pi-arnative.renderCacheState");
 const INSTANCE_WRAP_KEY = Symbol.for("pi-arnative.renderCacheWrapped");
 const INSTANCE_ORIG_KEY = Symbol.for("pi-arnative.renderCacheOriginals");
-
-// Shared symbols from sibling extensions so active animations / scroll-holds bypass cache.
-const THINKING_STATE_KEY = Symbol.for("pi-arnative.thinkingLabelState");
-const SCROLL_OFFSET_KEY = Symbol.for("pi-arnative.toolBoxScrollOffset");
-const SCROLL_HOLD_KEY = Symbol.for("pi-arnative.toolBoxScrollHold");
 
 interface ChildMeta {
 	version: number;
@@ -106,9 +105,9 @@ interface RenderCacheState {
 }
 
 function getCacheState(): RenderCacheState {
-	const g = globalThis as Record<symbol, unknown>;
-	if (!g[RENDER_CACHE_STATE_KEY]) {
-		g[RENDER_CACHE_STATE_KEY] = {
+	const rt = getRuntime();
+	if (!rt.renderCacheState) {
+		rt.renderCacheState = {
 			epoch: 0,
 			versions: new WeakMap(),
 			childCache: new WeakMap(),
@@ -116,7 +115,7 @@ function getCacheState(): RenderCacheState {
 			stats: { containerHits: 0, childHits: 0, childRenders: 0 },
 		} satisfies RenderCacheState;
 	}
-	return g[RENDER_CACHE_STATE_KEY] as RenderCacheState;
+	return rt.renderCacheState as RenderCacheState;
 }
 
 const renderCacheSetting = choiceSetting(RENDER_CACHE_KEY, RENDER_CACHE_CHOICES, DEFAULT_RENDER_CACHE);
@@ -187,9 +186,7 @@ export function isDynamicChild(child: unknown): boolean {
 	if (c.isPartial === true || c.argsPending === true) return true;
 	if (c.status === "running") return true;
 	if (c[SCROLL_HOLD_KEY] !== undefined) return true;
-	const thinking = (globalThis as Record<symbol, unknown>)[THINKING_STATE_KEY] as
-		| { active?: Set<object> }
-		| undefined;
+	const thinking = getRuntime().thinkingLabelState;
 	if (thinking?.active?.has(child)) return true;
 	return false;
 }

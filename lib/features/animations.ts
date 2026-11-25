@@ -25,9 +25,8 @@ import {
 	type SpinnerPreset,
 } from "../spinner.ts";
 import { ROW_DIVIDER } from "../format.ts";
+import { getRuntime } from "../runtime.ts";
 
-/** The arnative editor instance, published by `footer.ts` so the live spinner is reachable. */
-export const EDITOR_KEY = Symbol.for("pi-arnative.editor");
 const spinnerPresetSetting = choiceSetting(SPINNER_PRESET_KEY, SPINNER_PRESETS, DEFAULT_SPINNER_PRESET);
 const spinnerGradientSetting = flagSetting(SPINNER_GRADIENT_KEY);
 const SPINNER_PRESET_CONFIG_KEY = spinnerPresetSetting.slot;
@@ -39,28 +38,24 @@ type WorkingUi = { setWorkingIndicator?: (options?: unknown) => void } | null | 
 /** The live theme, for the accent presets. A gradient preset ignores it. */
 type ThemeLike = { fg?(color: string, text: string): string } | null;
 
-// Active UI and theme are kept on globalThis so choices apply across reloads and multi-instance loads.
-const UI_KEY = Symbol.for("pi-arnative.workingUi");
-const THEME_KEY = Symbol.for("pi-arnative.workingTheme");
-
 /** Record the session's `ctx.ui`, so a later preset pick can install through it. */
 function workingUi(ui: WorkingUi): void {
-	(globalThis as Record<symbol, unknown>)[UI_KEY] = ui ?? undefined;
+	getRuntime().workingUi = ui ?? null;
 }
 
 /** The `ctx.ui` recorded at `session_start`, or null before one ran. */
 function activeWorkingUi(): WorkingUi {
-	return ((globalThis as Record<symbol, unknown>)[UI_KEY] as WorkingUi) ?? null;
+	return (getRuntime().workingUi as WorkingUi) ?? null;
 }
 
 /** Record the session's theme, so accent presets follow it instead of a stale colour. */
 function workingTheme(theme: ThemeLike): void {
-	(globalThis as Record<symbol, unknown>)[THEME_KEY] = theme ?? undefined;
+	getRuntime().workingTheme = theme ?? null;
 }
 
 /** The theme recorded at `session_start`; a gradient preset ignores it. */
 function activeWorkingTheme(): ThemeLike {
-	return ((globalThis as Record<symbol, unknown>)[THEME_KEY] as ThemeLike) ?? null;
+	return (getRuntime().workingTheme as ThemeLike) ?? null;
 }
 
 export const activeSpinnerPreset = (): SpinnerPreset => spinnerPresetSetting.get();
@@ -82,7 +77,7 @@ export function setSpinnerPreset(preset: SpinnerPreset): void {
 
 /** Updates custom painter on live workingStatusIndicator if available. */
 export function paintLiveIndicator(painter: (text: string) => string): void {
-	const editor = (globalThis as Record<symbol, any>)[EDITOR_KEY];
+	const editor = getRuntime().editor as { workingStatusIndicator?: { renderIndicatorVerbatim?: boolean; theme?: { fg: (color: string, text: string) => string } } } | null;
 	const indicator = editor?.workingStatusIndicator;
 	if (!indicator) return;
 	indicator.renderIndicatorVerbatim = false;

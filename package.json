@@ -20,7 +20,7 @@
 	"files": [
 		"extensions",
 		"lib",
-		"themes",
+		"themes/*.json",
 		"CHANGELOG.md",
 		"LICENSE",
 		"README.md"

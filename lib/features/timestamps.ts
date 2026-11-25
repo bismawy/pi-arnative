@@ -14,18 +14,14 @@ import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } fr
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
 import { ansiBgOpen, stripAnsi, themeOf } from "../ansi.ts";
 import { markPatched, originalOf } from "../patch.ts";
+import { getRuntime, type ChatTimestampState } from "../runtime.ts";
 
-// Shared across reloads: /reload re-imports this module (moduleCache: false), but the
-// prototype patches below survive on the class, so the patched closure and the newly
-// registered handlers must read the SAME map and theme. Module-local state would leave
-// the closure on stale data — and a captured ctx even on an invalidated one (pi throws
-// "stale after session replacement or reload" inside the render pass -> uncaughtException).
-type ThemeProxy = { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
-const TS_STATE_KEY = Symbol.for("pi-arnative.chatTimestampState");
-const tsState = ((globalThis as Record<symbol, unknown>)[TS_STATE_KEY] ??= {
+// Shared across reloads via RuntimeState so prototype patches and newly registered
+// handlers read the same map and theme proxy.
+const tsState: ChatTimestampState = (getRuntime().chatTimestampState ??= {
 	map: new Map<string, number>(),
-	theme: null as ThemeProxy,
-}) as { map: Map<string, number>; theme: ThemeProxy };
+	theme: null,
+});
 const USER_TIMESTAMPS_MAP = tsState.map;
 
 function userTextOf(message: { content?: unknown }): string {

@@ -19,8 +19,7 @@
  * scratchpad, MCP…) get the same box: shell "self", one-line summary,
  * `[show]` for the full detail.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createBashTool, createEditTool, createFindTool, createGrepTool, createLsTool, createPowerShellTool, createReadTool, createWriteTool, getMarkdownTheme, highlightCode, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createEditTool, createFindTool, createGrepTool, createLsTool, createPowerShellTool, createReadTool, createWriteTool, getMarkdownTheme, highlightCode, ToolExecutionComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +29,10 @@ import { actionWord } from "../todos.ts";
 import { EDIT_DIFF_KEY, choiceSetting } from "../preset-store.ts";
 import { clearRenderCache } from "./render-cache.ts";
 import { markPatched, originalOf } from "../patch.ts";
+import {
+	TOOL_BOX_SCROLL_HOLD_KEY as SCROLL_HOLD,
+	TOOL_BOX_SCROLL_OFFSET_KEY as SCROLL_OFFSET,
+} from "../runtime.ts";
 
 export type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; inverse?(text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };
@@ -262,8 +265,6 @@ export function stripEdgesKeepingImages(lines: string[]): string[] {
 // target: every other cell of the box keeps pi's text selection, so the output stays
 // copyable. Recomputed on every render, because the label moves with the width and the key.
 const HINT_SPANS = Symbol.for("pi-arnative.toolBoxHintSpans");
-const SCROLL_OFFSET = Symbol.for("pi-arnative.toolBoxScrollOffset");
-const SCROLL_HOLD = Symbol.for("pi-arnative.toolBoxScrollHold");
 const HOLD_DELAY_MS = 250;
 const HOLD_REPEAT_MS = 90;
 
