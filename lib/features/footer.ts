@@ -12,13 +12,13 @@ import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { softOf, softSecondaryOf, stripAnsi } from "../lib/ansi.ts";
-import { inSpans, textSpans, type TextSpan } from "../lib/box.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { capitalize, markedLabels, modelDisplayParts } from "../lib/format.ts";
-import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../lib/shortcuts.ts";
-import { markPatched, originalOf, patchOnce } from "../lib/patch.ts";
-import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../lib/usage-store.ts";
+import { softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
+import { inSpans, textSpans, type TextSpan } from "../box.ts";
+import { assert, isMain } from "../check.ts";
+import { capitalize, markedLabels, modelDisplayParts } from "../format.ts";
+import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../shortcuts.ts";
+import { markPatched, originalOf, patchOnce } from "../patch.ts";
+import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../usage-store.ts";
 import {
 	CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY,
 	CHATBOX_PRESET_KEY as CHATBOX_PRESET_CONFIG_KEY,
@@ -29,12 +29,12 @@ import {
 	flagSetting,
 	loadChoice,
 	resetPresetCache,
-} from "../lib/preset-store.ts";
+} from "../preset-store.ts";
 import { formatCost } from "./usage.ts";
 import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
 import { budgetLevelNow } from "./budget.ts";
 import { EDITOR_KEY, activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
-import { spinnerPainter } from "../lib/spinner.ts";
+import { spinnerPainter } from "../spinner.ts";
 
 // ctrl+alt+r (alt+r on Windows/WSL — see lib/shortcuts.ts).
 // The TUI drops key-release events before handleInput, so press+release cannot

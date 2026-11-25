@@ -14,7 +14,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 // The finished box waits 30s in real use; a test needs the wait, not the 30s.
 process.env.PI_ARNATIVE_TODO_HIDE_MS = "20";
 
-const { default: extension } = await import("../extensions/todos.ts");
+const { default: extension } = await import("../lib/features/todos.ts");
 
 const palette: string[] = [];
 const theme = {

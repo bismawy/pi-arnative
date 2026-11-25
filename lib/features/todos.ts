@@ -12,11 +12,11 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { assert, isMain } from "../lib/check.ts";
-import { writeAtomicSync } from "../lib/preset-store.ts";
-import { inSpans, screenTitle, type TextSpan, textSpans } from "../lib/box.ts";
-import { ListPicker, type ListPickerText } from "../lib/list-picker.ts";
-import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../lib/shortcuts.ts";
+import { assert, isMain } from "../check.ts";
+import { writeAtomicSync } from "../preset-store.ts";
+import { inSpans, screenTitle, type TextSpan, textSpans } from "../box.ts";
+import { ListPicker, type ListPickerText } from "../list-picker.ts";
+import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../shortcuts.ts";
 import {
 	HINT_COLLAPSE,
 	HINT_EXPAND,
@@ -38,7 +38,7 @@ import {
 	todoWindow,
 	type TaskState,
 	type TodoStatus,
-} from "../lib/todos.ts";
+} from "../todos.ts";
 
 /** pi widget key; the extension owns it, so a reload replaces its own box. */
 export const TODO_WIDGET_KEY = "arnative-todos";

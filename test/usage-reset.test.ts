@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { afterEach, beforeEach } from "node:test";
-import { UsageModalComponent } from "../extensions/usage.ts";
+import { UsageModalComponent } from "../lib/features/usage.ts";
 import { collectUsageSummary, getModelAllTimeUsage, resetUsageCache, USAGE_RANGES } from "../lib/usage-store.ts";
 
 let dir: string;

@@ -9,14 +9,14 @@
  * only, Off = nothing. While pi-auto-compat is installed this module defers to it and says so
  * once, so two healers never write models.json at the same time.
  */
-import { bindSetModel, reloadCurrentModel } from "../lib/provider.ts";
+import { bindSetModel, reloadCurrentModel } from "../provider.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type FSWatcher, watch } from "node:fs";
 import { join } from "node:path";
-import { assert, isMain } from "../lib/check.ts";
-import { REJECTION_RE } from "../lib/compat.ts";
-import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../lib/model-heal.ts";
+import { assert, isMain } from "../check.ts";
+import { REJECTION_RE } from "../compat.ts";
+import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../model-heal.ts";
 
 // Nerd Font md-shield-sync (U+F06DE), written as a code point so the source stays ASCII.
 const HEAL_ICON = String.fromCodePoint(0xf06de);

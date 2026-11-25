@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Windows rejects a bare drive path in a dynamic import, so hand over a file URL.
-const file = pathToFileURL(join(root, "extensions", "autocompact.ts")).href;
+const file = pathToFileURL(join(root, "lib", "features", "autocompact.ts")).href;
 
 function limits(mb?: string, storedLimit?: string): { trigger: number; target: number; compactInput: number; active: string } {
 	const dir = mkdtempSync(join(tmpdir(), "arnative-bytewall-"));

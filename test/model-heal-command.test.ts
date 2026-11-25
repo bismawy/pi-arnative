@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { afterEach, beforeEach } from "node:test";
 import { createExtensionRuntime, ExtensionRunner, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import registerModelHeal from "../extensions/model-heal.ts";
+import registerModelHeal from "../lib/features/model-heal.ts";
 import { reloadCurrentModel } from "../lib/provider.ts";
 
 const model = { provider: "relay", id: "m", api: "openai-completions", baseUrl: "https://relay.example/v1", reasoning: true,

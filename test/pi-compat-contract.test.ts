@@ -11,11 +11,11 @@ import {
 	UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { attachChatContainer, clearRenderCache, type ChatContainerLike } from "../extensions/render-cache.ts";
-import { repairBubbleBg } from "../extensions/timestamps.ts";
-import "../extensions/footer.ts";
-import "../extensions/tools.ts";
-import "../extensions/ui-render-tweaks.ts";
+import { attachChatContainer, clearRenderCache, type ChatContainerLike } from "../lib/features/render-cache.ts";
+import { repairBubbleBg } from "../lib/features/timestamps.ts";
+import "../lib/features/footer.ts";
+import "../lib/features/tools.ts";
+import "../lib/features/ui-render-tweaks.ts";
 
 const ORIGINALS_KEY = Symbol.for("pi-arnative.protoOriginals");
 
@@ -64,7 +64,7 @@ test("timestamps.ts never mutates frozen cached UserMessageComponent.render outp
 		UserMessageComponent.prototype as any,
 		"render",
 		() => frozenShort,
-		"extensions/timestamps.ts",
+		"lib/features/timestamps.ts",
 		() => {
 			if (tsState) tsState.theme = fakeTheme;
 			const fakeComp = {
@@ -96,7 +96,7 @@ test("timestamps.ts never mutates frozen cached AssistantMessageComponent.render
 		AssistantMessageComponent.prototype as any,
 		"render",
 		() => frozen,
-		"extensions/timestamps.ts",
+		"lib/features/timestamps.ts",
 		() => {
 			const fakeComp = {
 				lastMessage: {
@@ -122,7 +122,7 @@ test("FooterComponent, ToolExecutionComponent, and Container render wrappers tol
 		FooterComponent.prototype as any,
 		"render",
 		() => frozenFooter,
-		"extensions/footer.ts",
+		"lib/features/footer.ts",
 		() => {
 			const out = (FooterComponent.prototype as any).render.call({}, 80) as readonly string[];
 			assert.deepEqual([...frozenFooter], ["row 1", "row 2", "row 3"]);
@@ -135,7 +135,7 @@ test("FooterComponent, ToolExecutionComponent, and Container render wrappers tol
 		ToolExecutionComponent.prototype as any,
 		"render",
 		() => frozenTool,
-		"extensions/tools.ts",
+		"lib/features/tools.ts",
 		() => {
 			const fakeTool: Record<string, unknown> = { toolName: "read", expanded: false };
 			const out = (ToolExecutionComponent.prototype as any).render.call(fakeTool, 40) as readonly string[];
@@ -150,7 +150,7 @@ test("FooterComponent, ToolExecutionComponent, and Container render wrappers tol
 		containerProto,
 		"render",
 		() => frozenChat,
-		"extensions/ui-render-tweaks.ts",
+		"lib/features/ui-render-tweaks.ts",
 		() => {
 			const out = containerProto.render.call({}, 80) as readonly string[];
 			assert.deepEqual([...out], ["hello", "world"]);

@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderProm } from "../extensions/usage-export.ts";
+import { renderProm } from "../lib/features/usage-export.ts";
 import type { UsageSummary } from "../lib/usage-store.ts";
 
 const NL = String.fromCharCode(10);

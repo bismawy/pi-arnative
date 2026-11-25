@@ -11,7 +11,7 @@ import registerAutoCompact, {
 	jsonByteLength,
 	shedMessagesForByteLimit,
 	wireBytesSnapshot,
-} from "../extensions/autocompact.ts";
+} from "../lib/features/autocompact.ts";
 
 // Byte-limited models expose payload pressure through wireBytesSnapshot();
 // plain models never populate it.

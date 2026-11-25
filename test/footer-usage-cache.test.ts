@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { beforeEach } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { getUsage, piCacheHit } from "../extensions/footer.ts";
+import { getUsage, piCacheHit } from "../lib/features/footer.ts";
 
 let now = Date.now();
 beforeEach((t) => {

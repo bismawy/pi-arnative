@@ -8,22 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const EXTENSIONS = [
-	"tools.ts",
-	"section-headers.ts",
-	"footer.ts",
-	"timestamps.ts",
-	"ui-render-tweaks.ts",
-	"render-cache.ts",
-	"usage.ts",
-	"usage-export.ts",
-	"budget.ts",
-	"animations.ts",
-	"autocompact.ts",
-	"model-heal.ts",
-	"todos.ts",
-	"arnative.ts",
-];
+const EXTENSIONS = ["index.ts"];
 
 // Must stay byte-identical to fingerprint() in the global pre-push hook:
 // the same paths in the same order, hashed the same way.

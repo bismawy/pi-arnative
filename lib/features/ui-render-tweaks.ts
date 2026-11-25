@@ -38,13 +38,13 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { readdirSync, readFileSync } from "node:fs";
-import { renderBoxLines } from "../lib/box.ts";
-import { statusRows } from "../lib/status-widget.ts";
-import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../lib/ansi.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { contrast, hexToRgb, oklchToRgb, parseOklch, rgbToAnsi256, toHex } from "../lib/color.ts";
-import { expandKeyName } from "../lib/format.ts";
-import { patchOnce } from "../lib/patch.ts";
+import { renderBoxLines } from "../box.ts";
+import { statusRows } from "../status-widget.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf, softOf } from "../ansi.ts";
+import { assert, isMain } from "../check.ts";
+import { contrast, hexToRgb, oklchToRgb, parseOklch, rgbToAnsi256, toHex } from "../color.ts";
+import { expandKeyName } from "../format.ts";
+import { patchOnce } from "../patch.ts";
 
 type ActiveTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; italic?(text: string): string } | null;
 const activeTheme = () => getActiveTheme<Exclude<ActiveTheme, null>>();
@@ -656,7 +656,7 @@ if (isMain(import.meta.url)) {
 	// "Jump to latest message" pill: accent bg + canvas text (not grey selectedBg).
 	// Use the REAL theme: the permissive stub would let `bg("accent")` through,
 	// which pi throws on.
-	const themeJson = JSON.parse(readFileSync(new URL("../themes/arnative.json", import.meta.url), "utf8")) as {
+	const themeJson = JSON.parse(readFileSync(new URL("../../themes/arnative.json", import.meta.url), "utf8")) as {
 		vars: Record<string, string>;
 		colors: Record<string, string>;
 	};
@@ -710,7 +710,7 @@ if (isMain(import.meta.url)) {
 	// own canvas (userMessageBg): content >= 3.0, secondary text >= 2.0, thinking
 	// ramp 1.3-4.0, accent pill >= 4.5 — the thresholds that already pass in the
 	// base `arnative` (not invented numbers).
-	const themesDir = new URL("../themes/", import.meta.url);
+	const themesDir = new URL("../../themes/", import.meta.url);
 	const required = Object.keys(themeJson.colors);
 	// Non-text keys (backgrounds/borders/scrollbar) — contrast is not measured.
 	const nonText = new Set([

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { resetPresetCache } from "../lib/preset-store.ts";
-import registerModelHeal from "../extensions/model-heal.ts";
+import registerModelHeal from "../lib/features/model-heal.ts";
 
 // Regression gate for the DEBOUNCE_MS crash (pi exited with
 // "ReferenceError: DEBOUNCE_MS is not defined" from the FSWatcher callback).

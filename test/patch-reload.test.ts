@@ -23,34 +23,34 @@ const ORIGINALS = Symbol.for("pi-arnative.protoOriginals");
 type Site = { name: string; module: string; proto: () => any; key: string };
 
 const sites: Site[] = [
-	{ name: "footer render", module: "../extensions/footer.ts", proto: () => FooterComponent.prototype, key: "render" },
+	{ name: "footer render", module: "../lib/features/footer.ts", proto: () => FooterComponent.prototype, key: "render" },
 	{
 		name: "timestamp user bubble",
-		module: "../extensions/timestamps.ts",
+		module: "../lib/features/timestamps.ts",
 		proto: () => UserMessageComponent.prototype,
 		key: "render",
 	},
 	{
 		name: "section header addChild",
-		module: "../extensions/section-headers.ts",
+		module: "../lib/features/section-headers.ts",
 		proto: () => Object.getPrototypeOf(UserMessageComponent.prototype),
 		key: "addChild",
 	},
 	{
 		name: "compaction summary",
-		module: "../extensions/ui-render-tweaks.ts",
+		module: "../lib/features/ui-render-tweaks.ts",
 		proto: () => CompactionSummaryMessageComponent.prototype,
 		key: "updateDisplay",
 	},
 	{
 		name: "thinking label updateContent",
-		module: "../extensions/ui-render-tweaks.ts",
+		module: "../lib/features/ui-render-tweaks.ts",
 		proto: () => AssistantMessageComponent.prototype,
 		key: "updateContent",
 	},
 	{
 		name: "tool box routing",
-		module: "../extensions/tools.ts",
+		module: "../lib/features/tools.ts",
 		proto: () => ToolExecutionComponent.prototype,
 		key: "getResultRenderer",
 	},

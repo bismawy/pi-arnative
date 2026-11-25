@@ -35,9 +35,9 @@ import { Text } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assert, isMain } from "../lib/check.ts";
-import { patchOnce } from "../lib/patch.ts";
-import { RENDER_CACHE_KEY, choiceSetting, loadChoice, resetPresetCache } from "../lib/preset-store.ts";
+import { assert, isMain } from "../check.ts";
+import { patchOnce } from "../patch.ts";
+import { RENDER_CACHE_KEY, choiceSetting, loadChoice, resetPresetCache } from "../preset-store.ts";
 
 /** Stored exactly as the picker shows them; `"On"` is the default. */
 export const RENDER_CACHE_CHOICES = ["On", "Off"] as const;

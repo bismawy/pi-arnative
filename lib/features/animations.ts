@@ -12,7 +12,7 @@
  * coupling between the two, and it is a published symbol, not an import.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { choiceSetting, flagSetting } from "../lib/preset-store.ts";
+import { choiceSetting, flagSetting } from "../preset-store.ts";
 import {
 	DEFAULT_SPINNER_PRESET,
 	SPINNER_GRADIENT_KEY,
@@ -23,9 +23,9 @@ import {
 	previewFrames,
 	spinnerPainter,
 	type SpinnerPreset,
-} from "../lib/spinner.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { ROW_DIVIDER } from "../lib/format.ts";
+} from "../spinner.ts";
+import { assert, isMain } from "../check.ts";
+import { ROW_DIVIDER } from "../format.ts";
 
 /** The arnative editor instance, published by `footer.ts` so the live spinner is reachable. */
 export const EDITOR_KEY = Symbol.for("pi-arnative.editor");

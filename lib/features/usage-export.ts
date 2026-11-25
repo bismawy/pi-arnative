@@ -17,9 +17,9 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assert, isMain } from "../lib/check.ts";
-import { writeAtomicSync } from "../lib/preset-store.ts";
-import { collectUsageSummary, resetUsageCache, type UsageSummary } from "../lib/usage-store.ts";
+import { assert, isMain } from "../check.ts";
+import { writeAtomicSync } from "../preset-store.ts";
+import { collectUsageSummary, resetUsageCache, type UsageSummary } from "../usage-store.ts";
 
 /** At most one write per minute, whatever the turn rate. */
 export const EXPORT_THROTTLE_MS = 60_000;

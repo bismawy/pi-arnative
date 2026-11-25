@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Single extension entry point (`extensions/index.ts`).** Moved the 14 extension modules into `lib/features/` and registered them through one entry point so Pi loads shared `lib/` modules once per startup or `/reload` instead of up to 14 times (`extensions/index.ts`, `lib/features/*.ts`, `package.json`).
+
 ## [0.16.1] - 2026-11-21
 
 ### Fixed

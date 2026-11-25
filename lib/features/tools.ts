@@ -40,13 +40,13 @@ import { Markdown, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@eare
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../lib/box.ts";
-import { getActiveTheme, stripAnsi, softSecondaryOf } from "../lib/ansi.ts";
-import { actionWord } from "../lib/todos.ts";
-import { EDIT_DIFF_KEY, choiceSetting, resetPresetCache } from "../lib/preset-store.ts";
+import { inSpans, renderBoxLines as box, type TextSpan, textSpans } from "../box.ts";
+import { getActiveTheme, stripAnsi, softSecondaryOf } from "../ansi.ts";
+import { actionWord } from "../todos.ts";
+import { EDIT_DIFF_KEY, choiceSetting, resetPresetCache } from "../preset-store.ts";
 import { clearRenderCache } from "./render-cache.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { markPatched, originalOf } from "../lib/patch.ts";
+import { assert, isMain } from "../check.ts";
+import { markPatched, originalOf } from "../patch.ts";
 
 type Theme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; inverse?(text: string): string };
 type TResult = { content: Array<{ type: string; text?: string }>; isError?: boolean; details?: any };

@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import register, { armIdleProbe, clock, formatDuration, repaintIdle, stopIdleProbe, wrapInputListener } from "../extensions/footer.ts";
+import register, { armIdleProbe, clock, formatDuration, repaintIdle, stopIdleProbe, wrapInputListener } from "../lib/features/footer.ts";
 
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
 const EXPAND_KEY = Symbol.for("pi-arnative.minimalFooter.expanded");
@@ -402,7 +402,7 @@ test("the spinner frame is coloured accent, the label keeps accentSoft", async (
 
 	// The extension's own seam, driven the way `/arnative` → Animations drives it: publish the
 	// editor, then let paintLiveIndicator install the preset's painter on the live Loader.
-	const { EDITOR_KEY, paintLiveIndicator } = await import("../extensions/animations.ts");
+	const { EDITOR_KEY, paintLiveIndicator } = await import("../lib/features/animations.ts");
 	const { spinnerPainter } = await import("../lib/spinner.ts");
 	(globalThis as Record<symbol, any>)[EDITOR_KEY] = { workingStatusIndicator: loader };
 	paintLiveIndicator(spinnerPainter("Diamond Glow", { fg: (c: string, t: string) => `[${c}:${t}]` }));

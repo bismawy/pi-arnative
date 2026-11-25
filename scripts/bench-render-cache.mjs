@@ -21,7 +21,7 @@ import {
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container } from "@earendil-works/pi-tui";
-import { attachChatContainer, clearRenderCache, setRenderCache } from "../extensions/render-cache.ts";
+import { attachChatContainer, clearRenderCache, setRenderCache } from "../lib/features/render-cache.ts";
 
 /** Measured chars per token for this generator's code-heavy text (see targetChars). */
 const CHARS_PER_TOKEN = 2.26;

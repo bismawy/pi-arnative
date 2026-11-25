@@ -10,14 +10,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { recordProfile } from "../extensions/arnative.ts";
-import { activeAutoCompact, savedPayloadLimit } from "../extensions/autocompact.ts";
-import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth } from "../extensions/budget.ts";
-import { activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset } from "../extensions/footer.ts";
-import { activeHeaderPreset } from "../extensions/section-headers.ts";
-import { activeSpinnerGradient, activeSpinnerPreset } from "../extensions/animations.ts";
+import { recordProfile } from "../lib/features/arnative.ts";
+import { activeAutoCompact, savedPayloadLimit } from "../lib/features/autocompact.ts";
+import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth } from "../lib/features/budget.ts";
+import { activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset } from "../lib/features/footer.ts";
+import { activeHeaderPreset } from "../lib/features/section-headers.ts";
+import { activeSpinnerGradient, activeSpinnerPreset } from "../lib/features/animations.ts";
 import { activeModelHeal } from "../lib/model-heal.ts";
-import { activeRenderCache } from "../extensions/render-cache.ts";
+import { activeRenderCache } from "../lib/features/render-cache.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";
 
 /** Fresh fixture per case; the agent dir env var is restored either way. */

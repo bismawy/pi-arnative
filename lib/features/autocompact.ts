@@ -20,8 +20,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assert, isMain } from "../lib/check.ts";
-import { PAYLOAD_LIMIT_KEY, choiceSetting, loadChoice, loadSetting, resetPresetCache, saveChoice } from "../lib/preset-store.ts";
+import { assert, isMain } from "../check.ts";
+import { PAYLOAD_LIMIT_KEY, choiceSetting, loadChoice, loadSetting, resetPresetCache, saveChoice } from "../preset-store.ts";
 import { activeRenderCache, setRenderCache } from "./render-cache.ts";
 
 /** Stored exactly as the picker shows them; `Off` disables the trigger entirely. */

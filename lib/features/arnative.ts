@@ -5,15 +5,15 @@
  * Screens share one chrome and one title shape ({@link renderScreen}); a box border takes
  * the session's thinking slot (`lib/ansi.ts`), so it belongs to the active model.
  */
-import { bindSetModel } from "../lib/provider.ts";
+import { bindSetModel } from "../provider.ts";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
-import { stripAnsi } from "../lib/ansi.ts";
-import { screenTitle } from "../lib/box.ts";
-import { announce } from "../lib/status-widget.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { markedLabels, ROW_DIVIDER } from "../lib/format.ts";
-import { SPINNER_GRADIENT_KEY, SPINNER_PRESET_KEY, SPINNER_PRESETS, type SpinnerPreset } from "../lib/spinner.ts";
+import { stripAnsi } from "../ansi.ts";
+import { screenTitle } from "../box.ts";
+import { announce } from "../status-widget.ts";
+import { assert, isMain } from "../check.ts";
+import { markedLabels, ROW_DIVIDER } from "../format.ts";
+import { SPINNER_GRADIENT_KEY, SPINNER_PRESET_KEY, SPINNER_PRESETS, type SpinnerPreset } from "../spinner.ts";
 import {
 	activeSpinnerGradient,
 	animationsPickerText,
@@ -24,7 +24,7 @@ import {
 	setSpinnerGradient,
 	setSpinnerPreset,
 } from "./animations.ts";
-import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../lib/preset-store.ts";
+import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../preset-store.ts";
 import { EDIT_DIFF_CHOICES, activeEditDiff, setEditDiff, type EditDiffMode } from "./tools.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
@@ -46,17 +46,17 @@ import {
 	type PayloadLimitPreset,
 } from "./autocompact.ts";
 import { cancelManualHeal, healNow } from "./model-heal.ts";
-import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../lib/model-heal.ts";
+import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../model-heal.ts";
 import {
 	RENDER_CACHE_CHOICES,
 	activeRenderCache,
 	setRenderCache,
 	type RenderCacheChoice,
 } from "./render-cache.ts";
-import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
-import { openProviders } from "../lib/provider.ts";
+import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../list-picker.ts";
+import { openProviders } from "../provider.ts";
 import { openUsage } from "./usage.ts";
-import { SHORTCUT_OPEN_ARNATIVE } from "../lib/shortcuts.ts";
+import { SHORTCUT_OPEN_ARNATIVE } from "../shortcuts.ts";
 
 export type MenuGroup = "Appearance" | "Performance" | "Models" | "Spend";
 

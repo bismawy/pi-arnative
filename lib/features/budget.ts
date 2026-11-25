@@ -24,10 +24,10 @@ import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { screenTitle } from "../lib/box.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { announce } from "../lib/status-widget.ts";
-import { ListPicker, rowText, type ListPickerText, type ListRow } from "../lib/list-picker.ts";
+import { screenTitle } from "../box.ts";
+import { assert, isMain } from "../check.ts";
+import { announce } from "../status-widget.ts";
+import { ListPicker, rowText, type ListPickerText, type ListRow } from "../list-picker.ts";
 import {
 	BUDGET_DAY_KEY,
 	BUDGET_ENFORCE_KEY,
@@ -37,8 +37,8 @@ import {
 	loadNumber,
 	resetPresetCache,
 	saveChoice,
-} from "../lib/preset-store.ts";
-import { collectUsageSummary, resetUsageCache } from "../lib/usage-store.ts";
+} from "../preset-store.ts";
+import { collectUsageSummary, resetUsageCache } from "../usage-store.ts";
 import { formatCost } from "./usage.ts";
 
 // ---------------------------------------------------------------- settings

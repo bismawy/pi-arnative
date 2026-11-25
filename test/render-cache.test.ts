@@ -22,7 +22,7 @@ import registerRenderCache, {
 	isDynamicChild,
 	setRenderCache,
 	type ChatContainerLike,
-} from "../extensions/render-cache.ts";
+} from "../lib/features/render-cache.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";
 
 const PATCHED = Symbol.for("pi-arnative.patchedMethod");
@@ -32,14 +32,14 @@ const SCROLL_HOLD_KEY = Symbol.for("pi-arnative.toolBoxScrollHold");
 const SCROLL_OFFSET_KEY = Symbol.for("pi-arnative.toolBoxScrollOffset");
 
 test("InteractiveMode hook reinstalls cleanly across /reload", async () => {
-	await import("../extensions/render-cache.ts?rc=1");
+	await import("../lib/features/render-cache.ts?rc=1");
 	const proto = InteractiveMode.prototype as unknown as Record<string | symbol, any>;
 	const first = proto.rebuildChatFromMessages;
 	assert.equal(typeof first, "function");
 	assert.equal(first[PATCHED], true);
 	assert.equal(proto[ORIGINALS].rebuildChatFromMessages[PATCHED], undefined);
 
-	await import("../extensions/render-cache.ts?rc=2");
+	await import("../lib/features/render-cache.ts?rc=2");
 	const second = proto.rebuildChatFromMessages;
 	assert.notEqual(second, first);
 	assert.equal(second[PATCHED], true);

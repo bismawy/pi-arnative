@@ -32,15 +32,15 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import type { BoxTheme } from "../lib/box.ts";
-import { BRAND, renderBoxLines } from "../lib/box.ts";
-import { getActiveTheme, setActiveTheme, softOf, softSecondaryOf, stripAnsi, themeOf } from "../lib/ansi.ts";
-import { capitalize, expandKeyName, modelDisplayParts } from "../lib/format.ts";
-import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
-import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, choiceSetting } from "../lib/preset-store.ts";
-import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
+import type { BoxTheme } from "../box.ts";
+import { BRAND, renderBoxLines } from "../box.ts";
+import { getActiveTheme, setActiveTheme, softOf, softSecondaryOf, stripAnsi, themeOf } from "../ansi.ts";
+import { capitalize, expandKeyName, modelDisplayParts } from "../format.ts";
+import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../shortcuts.ts";
+import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, choiceSetting } from "../preset-store.ts";
+import { formatTokens, getModelAllTimeUsage } from "../usage-store.ts";
 
-import { patchOnce } from "../lib/patch.ts";
+import { patchOnce } from "../patch.ts";
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Shortcut";
 
 // Tab order for the next-tab shortcut and for the menu line.
@@ -287,7 +287,7 @@ export function extensionTabItems(expanded: string, agentDir: string, cwd: strin
 // Arnative build actually running: package.json one level above this extension file.
 // Reading the module's own package beats reading the npm-installed copy, which lags
 // behind whenever the local clone (or a hand-copied extensions/) is what pi loaded.
-const ARNATIVE_VERSION = readVersion(fileURLToPath(new URL("..", import.meta.url)));
+const ARNATIVE_VERSION = readVersion(fileURLToPath(new URL("../..", import.meta.url)));
 
 export function extractItemsFromBody(body: string): string[] {
 	const plain = stripAnsi(body).trim();

@@ -8,7 +8,7 @@ const dir = mkdtempSync(join(tmpdir(), "arnative-ab-"));
 process.env.PI_CODING_AGENT_DIR = dir;
 writeFileSync(join(dir, "models.json"), JSON.stringify({ providers: {} }), "utf8");
 
-const { default: registerModelHeal } = await import("../../extensions/model-heal.ts");
+const { default: registerModelHeal } = await import("../../lib/features/model-heal.ts");
 
 const handlers = new Map();
 const fakePi = {

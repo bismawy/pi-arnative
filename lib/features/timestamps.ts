@@ -12,9 +12,9 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import { ansiBgOpen, stripAnsi, themeOf } from "../lib/ansi.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { markPatched, originalOf } from "../lib/patch.ts";
+import { ansiBgOpen, stripAnsi, themeOf } from "../ansi.ts";
+import { assert, isMain } from "../check.ts";
+import { markPatched, originalOf } from "../patch.ts";
 
 // Shared across reloads: /reload re-imports this module (moduleCache: false), but the
 // prototype patches below survive on the class, so the patched closure and the newly

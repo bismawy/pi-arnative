@@ -8,11 +8,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { renderScreen, screenTitle } from "../lib/box.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { capitalize } from "../lib/format.ts";
-import { thinkingColorOf, softOf, softSecondaryOf } from "../lib/ansi.ts";
-import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../lib/shortcuts.ts";
+import { renderScreen, screenTitle } from "../box.ts";
+import { assert, isMain } from "../check.ts";
+import { capitalize } from "../format.ts";
+import { thinkingColorOf, softOf, softSecondaryOf } from "../ansi.ts";
+import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../shortcuts.ts";
 import {
 	collectUsageSummary,
 	estimateCost,
@@ -26,7 +26,7 @@ import {
 	USAGE_RANGES,
 	type UsageRange,
 	type UsageSummary,
-} from "../lib/usage-store.ts";
+} from "../usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
