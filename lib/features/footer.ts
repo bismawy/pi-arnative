@@ -8,7 +8,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { setActiveTheme, softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
+import { fgOr, setActiveTheme, softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
 import { inSpans, textSpans, type TextSpan } from "../box.ts";
 import { capitalize, modelDisplayParts } from "../format.ts";
 import { SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../shortcuts.ts";
@@ -204,6 +204,22 @@ if (FooterComponent?.prototype?.render) {
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
+/** Painters for the footer's current theme, rebuilt only when pi hands over a new theme. */
+let themeCache: {
+	theme: unknown;
+	acc: (t: string) => string;
+	dim: (t: string) => string;
+	soft: (t: string) => string;
+	colorOr: (name: string, fallback: (t: string) => string) => (t: string) => string;
+	primary: (t: string) => string;
+	secondarySoft: (t: string) => string;
+	diffAdd: (t: string) => string;
+	diffDel: (t: string) => string;
+	sep: string;
+} | null = null;
+/** The cwd cell and git segment, rebuilt only when theme, cwd, or collected git info changes. */
+let gitCache: { theme: unknown; git: GitInfo; cwd: string; cwdCell: string; gitSeg: string } | null = null;
+
 let gitRefreshInFlight = false;
 let git: GitInfo = null;
 let currentThinkingLevel: string | undefined = undefined;
@@ -329,12 +345,30 @@ export function ponytailStatusLine(
 // re-run afterwards — it used to be dropped, leaving the footer's git state stale
 // until the next trigger.
 let gitRefreshQueuedCwd: string | null = null;
+let lastGitRefreshMs = 0;
+/** Tool bursts (a turn with ten edits) would otherwise run two git processes per tool;
+ *  coalesce them into one refresh per window, with a trailing run so the final state lands. */
+const GIT_REFRESH_MIN_INTERVAL_MS = 500;
+let gitRefreshTrailing: ReturnType<typeof setTimeout> | null = null;
 
-async function refreshGit(cwd: string): Promise<void> {
+async function refreshGit(cwd: string, opts: { force?: boolean } = {}): Promise<void> {
+	if (!opts.force) {
+		const since = Date.now() - lastGitRefreshMs;
+		if (since < GIT_REFRESH_MIN_INTERVAL_MS) {
+			if (gitRefreshTrailing) clearTimeout(gitRefreshTrailing);
+			gitRefreshTrailing = setTimeout(() => {
+				gitRefreshTrailing = null;
+				void refreshGit(cwd, { force: true }).then(() => poke());
+			}, GIT_REFRESH_MIN_INTERVAL_MS - since);
+			gitRefreshTrailing.unref?.();
+			return;
+		}
+	}
 	if (gitRefreshInFlight) {
 		gitRefreshQueuedCwd = cwd;
 		return;
 	}
+	lastGitRefreshMs = Date.now();
 	gitRefreshInFlight = true;
 	try {
 		git = await collectGitInfo(cwd);
@@ -344,7 +378,7 @@ async function refreshGit(cwd: string): Promise<void> {
 		if (gitRefreshQueuedCwd !== null) {
 			const queued = gitRefreshQueuedCwd;
 			gitRefreshQueuedCwd = null;
-			void refreshGit(queued).then(() => poke());
+			void refreshGit(queued, { force: true }).then(() => poke());
 		}
 	}
 }
@@ -421,46 +455,65 @@ export function layoutFooterGrid(
 	vw: (s: string) => number = visibleWidth,
 ): string[] {
 	const half = Math.max(1, Math.floor(width / 2) - 1);
+	// Every cell's width is measured once up front: visibleWidth parses ANSI and
+	// clusters graphemes, and wrap()/pairRow() used to re-measure the same cell 3x.
+	const leftW = left.map(vw);
+	const rightW = right.map(vw);
+	const sepWL = vw(leftSep);
+	const sepWR = vw(rightSep);
 	// Wrap each side at half width; the first break happens at most once (rows 2-3),
 	// after that the rest stays on the last row and the pairing truncates it.
-	const wrap = (cells: readonly string[], sep: string): string[] => {
-		const rows: string[] = [];
+	const wrap = (cells: readonly string[], widths: readonly number[], sep: string, sepW: number): { text: string; width: number }[] => {
+		const rows: { text: string; width: number }[] = [];
 		let line = "";
-		for (const cell of cells) {
-			const candidate = line ? line + sep + cell : cell;
-			if (line && rows.length === 0 && vw(candidate) > half) {
-				rows.push(line);
+		let lineW = 0;
+		for (let i = 0; i < cells.length; i++) {
+			const cell = cells[i]!;
+			const cellW = widths[i]!;
+			if (line && rows.length === 0 && lineW + sepW + cellW > half) {
+				rows.push({ text: line, width: lineW });
 				line = cell;
+				lineW = cellW;
+			} else if (line) {
+				line += sep + cell;
+				lineW += sepW + cellW;
 			} else {
-				line = candidate;
+				line = cell;
+				lineW = cellW;
 			}
 		}
-		if (line) rows.push(line);
+		if (line) rows.push({ text: line, width: lineW });
 		return rows;
 	};
-	const leftRows = wrap(left, leftSep);
-	const rightRows = wrap(right, rightSep);
+	const leftRows = wrap(left, leftW, leftSep, sepWL);
+	const rightRows = wrap(right, rightW, rightSep, sepWR);
 	const out = [pairRow(headLeft, headRight, width, vw)];
 	for (let i = 0; i < Math.max(leftRows.length, rightRows.length); i++) {
 		const l = leftRows[i];
 		const r = rightRows[i];
 		if (l === undefined && r === undefined) break;
-		out.push(pairRow(l ?? "", r ?? "", width, vw));
+		out.push(pairRow(l?.text ?? "", r?.text ?? "", width, vw, l?.width ?? 0, r?.width ?? 0));
 	}
 	return out;
 }
 
-/** One grid row: `left` at the start, `right` flush to the right edge. */
-function pairRow(left: string, right: string, width: number, vw: (s: string) => number): string {
-	if (!right) return truncateToWidth(left, width);
-	const rightWidth = Math.min(vw(right), width);
-	if (!left) return " ".repeat(width - rightWidth) + truncateToWidth(right, width);
-	if (vw(left) + 1 + rightWidth <= width) {
-		return left + " ".repeat(width - vw(left) - rightWidth) + right;
+/** One grid row: `left` at the start, `right` flush to the right edge. `leftW`/`rightW`
+ *  are the caller's measured widths when it already has them, so the row costs no extra pass. */
+function pairRow(left: string, right: string, width: number, vw: (s: string) => number, leftW?: number, rightW?: number): string {
+	const lw = leftW ?? vw(left);
+	if (!right) return lw <= width ? left : truncateToWidth(left, width);
+	const rawRw = rightW ?? vw(right);
+	const rw = Math.min(rawRw, width);
+	if (!left) return " ".repeat(width - rw) + (rawRw <= width ? right : truncateToWidth(right, width));
+	if (lw + 1 + rw <= width) {
+		return left + " ".repeat(width - lw - rw) + (rawRw <= width ? right : truncateToWidth(right, width));
 	}
 	// Too wide together: the right cell keeps its columns, the left one is cut.
-	const room = Math.max(1, width - rightWidth - 1);
-	return truncateToWidth(left, room) + " " + truncateToWidth(right, width - room - 1);
+	const room = Math.max(1, width - rw - 1);
+	const lCut = lw <= room ? left : truncateToWidth(left, room);
+	const rRoom = width - room - 1;
+	const rCut = rawRw <= rRoom ? right : truncateToWidth(right, rRoom);
+	return lCut + " " + rCut;
 }
 
 function parseOptimizer(raw: string | undefined): string | null {
@@ -948,10 +1001,15 @@ export default function (pi: ExtensionAPI) {
 		pi.registerShortcut(key, { description: "Expand/collapse the minimal footer", handler: toggleMinimal });
 	}
 
-	// Assistant speed timer (user message timestamps come from extensions/timestamps.ts)
+	// Assistant speed timer (user message timestamps come from lib/features/timestamps.ts).
+	// Reset for every role: a user or tool message between two assistant runs must not
+	// leave the previous run's start time behind, or the next speed reads a stale elapsed.
 	pi.on("message_start", async (event) => {
 		if (event.message.role === "assistant") {
 			assistantStartMs = Date.now();
+			assistantChars = 0;
+		} else {
+			assistantStartMs = null;
 			assistantChars = 0;
 		}
 	});
@@ -1011,41 +1069,52 @@ export default function (pi: ExtensionAPI) {
 					const dot = wrapInputListener(tui);
 					rerender = () => tui.requestRender();
 					const unsub = footerData.onBranchChange(() => {
-						void refreshGit(cwd).then(() => tui.requestRender());
+						void refreshGit(cwd, { force: true }).then(() => tui.requestRender());
 					});
 					return {
 						dispose() {
 							rerender = null;
 							dot();
 							unsub();
+							if (gitRefreshTrailing) {
+								clearTimeout(gitRefreshTrailing);
+								gitRefreshTrailing = null;
+							}
+							themeCache = null;
+							gitCache = null;
 						},
 						invalidate() {},
 						render(width: number): string[] {
-							const acc = (text: string) => theme.fg("accent", text);
-							const dim = (text: string) => theme.fg("dim", text);
-							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-							// `accentSoft`/`secondarySoft` are vars-only tokens on Pi 1.2+, so both soft tiers
-							// are resolved through the shared painters instead of a raw fg() probe. Icons keep
-							// `accent`; the cwd/branch/clock/status text takes the border-accent tier, so the
-							// footer stays two-toned instead of the text inheriting the accent hue.
-							const soft = softOf(theme as never);
-							const softLabel = softSecondaryOf(theme as never);
-							// Diff colors: the same theme slots pi uses for a diff body, with the
-							// plain soft color as fallback for a theme that omits them.
-							const colorOr = (name: string, fallback: (t: string) => string) => (t: string) => {
-								try {
-									return fgAny(name, t);
-								} catch {
-									return fallback(t);
-								}
+							// Painters and the cwd/model/git segments only change when their inputs do
+							// (theme, cwd, model, thinking level, git info). The footer re-renders on every
+						// stream tick and clock tick, so rebuilding them per frame was pure waste.
+							if (themeCache?.theme !== theme) {
+								const acc = (text: string) => theme.fg("accent", text);
+								const dim = (text: string) => theme.fg("dim", text);
+								// `accentSoft`/`secondarySoft` are vars-only tokens on Pi 1.2+, so both soft tiers
+								// are resolved through the shared painters instead of a raw fg() probe. Icons keep
+								// `accent`; the cwd/branch/clock/status text takes the border-accent tier, so the
+								// footer stays two-toned instead of the text inheriting the accent hue.
+								const soft = softOf(theme as never);
+								const softLabel = softSecondaryOf(theme as never);
+								// Diff colors: the same theme slots pi uses for a diff body, with the
+								// plain soft color as fallback for a theme that omits them. Optional tokens are
+								// probed once per theme (fgOr), not thrown-and-caught on every frame.
+								const colorOr = (name: string, fallback: (t: string) => string) => fgOr(theme, name, fallback);
+								themeCache = {
+									theme,
+									acc,
+									dim,
+									soft,
+									colorOr,
+									primary: colorOr("mdHeading", acc),
+									secondarySoft: softLabel,
+									diffAdd: colorOr("toolDiffAdded", soft),
+									diffDel: colorOr("toolDiffRemoved", soft),
+									sep: dim(" | "),
 							};
-							// `primary` is a var, not a token (Pi 1.2+ rejects custom `colors` keys); its
-							// arnative carrier is the official token it maps to.
-							const primary = colorOr("mdHeading", acc);
-							const secondarySoft = softLabel;
-							const diffAdd = colorOr("toolDiffAdded", soft);
-							const diffDel = colorOr("toolDiffRemoved", soft);
-							const sep = dim(" | ");
+						}
+							const { acc, dim, soft, colorOr, primary, secondarySoft, diffAdd, diffDel, sep } = themeCache!;
 
 							const durationStr = formatDuration(clock.total());
 							const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
@@ -1054,14 +1123,17 @@ export default function (pi: ExtensionAPI) {
 							const clockIcon = paused ? dim("\uf017") : acc("\uf017");
 							const clockText = paused ? dim(durationStr) : secondarySoft(durationStr);
 							const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
-							const cwdShort = shortenCwd(cwd);
+							// The git segment (branch, sync, tag, dirty count) is rebuilt only when theme,
+							// git info, or cwd changes (refreshGit replaces the git object).
+							if (gitCache?.theme !== theme || gitCache?.git !== git || gitCache?.cwd !== cwd) {
+								const cwdCell = `${acc("\uf07b")} ${dim(shortenCwd(cwd))}`;
+								const gitSeg = git ? gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("") : "";
+								gitCache = { theme, git, cwd, cwdCell, gitSeg };
+							}
 							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
 							const open = minimalExpanded();
 							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
-							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
-							if (git) {
-								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("")}`;
-							}
+							let left1 = `${gitCache.cwdCell}${sep}${pDuration}${gitCache.gitSeg}`;
 							if (isMinimal) left1 += arrow(open.left);
 							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim) + (isMinimal ? arrow(open.right) : "");
 
@@ -1371,7 +1443,7 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// fallback
 		}
-		void refreshGit(cwd).then(() => poke());
+		void refreshGit(cwd, { force: true }).then(() => poke());
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
@@ -1384,7 +1456,7 @@ export default function (pi: ExtensionAPI) {
 		rt.currentThinking = currentThinkingLevel;
 		rt.lastCwd = ctx.cwd;
 		startWorkingClock(ctx);
-		void refreshGit(ctx.cwd).then(() => poke());
+		void refreshGit(ctx.cwd, { force: true }).then(() => poke());
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {

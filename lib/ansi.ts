@@ -21,6 +21,38 @@ export function stripAnsi(s: string): string {
 	return s.replace(ANSI_RE, "");
 }
 
+/** Per-theme cache of whether each `fg` token exists. Pi's `Theme.fg` throws for an unknown
+ *  token, and the footer probes optional slots (`toolDiffAdded`, `warning`, ...) on every
+ *  frame — one throw per frame per missing token. The answer never changes for a theme
+ *  instance, so both hits and misses are cached once. */
+const fgTokenSupport = new WeakMap<object, Map<string, boolean>>();
+
+/** Painter for `color` when the theme defines it, else `fallback`. Probed once per theme. */
+export function fgOr(
+	th: { fg?(color: string, text: string): string } | null | undefined,
+	color: string,
+	fallback: (text: string) => string,
+): (text: string) => string {
+	const fg = th?.fg?.bind(th);
+	if (!fg || !th) return fallback;
+	let known = fgTokenSupport.get(th);
+	if (!known) {
+		known = new Map();
+		fgTokenSupport.set(th, known);
+	}
+	let ok = known.get(color);
+	if (ok === undefined) {
+		try {
+			fg(color, "");
+			ok = true;
+		} catch {
+			ok = false;
+		}
+		known.set(color, ok);
+	}
+	return ok ? (text) => fg(color, text) : fallback;
+}
+
 /** The active pi theme out of an event ctx (`ctx.ui.theme`), null when absent. */
 export function themeOf<T>(ctx: unknown): T | null {
 	return (ctx as { ui?: { theme?: T } } | null | undefined)?.ui?.theme ?? null;

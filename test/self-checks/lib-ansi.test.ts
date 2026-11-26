@@ -1,6 +1,6 @@
 import test from "node:test";
 import { assert } from "../helpers/check.ts";
-import { ansiBgOpen, stripAnsi, themeOf, getActiveTheme, setActiveTheme, softOf, softSecondaryOf, thinkingColorOf, __test } from "../../lib/ansi.ts";
+import { ansiBgOpen, fgOr, stripAnsi, themeOf, getActiveTheme, setActiveTheme, softOf, softSecondaryOf, thinkingColorOf, __test } from "../../lib/ansi.ts";
 
 const { thinkingColorSlot } = __test;
 
@@ -70,4 +70,21 @@ test("lib/ansi.ts self-check", async () => {
 		},
 	};
 	assert(thinkingColorOf(noThinking, "max")("x") === "<dim>x</dim>", "thinkingColorOf falls back to dim without the slot");
+
+	// fgOr: probes once per theme instance and caches both hits and misses.
+	let probeCalls = 0;
+	const countingTheme = {
+		fg: (c: string, t: string) => {
+			if (t === "") probeCalls++;
+			if (c === "known") return `<k>${t}</k>`;
+			throw new Error(`Unknown theme color: ${c}`);
+		},
+	};
+	const fb = (t: string) => `<fb>${t}</fb>`;
+	assert(fgOr(countingTheme, "known", fb)("hi") === "<k>hi</k>", "fgOr paints known token");
+	assert(fgOr(countingTheme, "known", fb)("yo") === "<k>yo</k>", "fgOr reuses cached known token");
+	assert(fgOr(countingTheme, "missing", fb)("hi") === "<fb>hi</fb>", "fgOr falls back on missing token");
+	assert(fgOr(countingTheme, "missing", fb)("yo") === "<fb>yo</fb>", "fgOr caches missing token without re-probing");
+	assert(probeCalls === 2, `fgOr probes each token once per theme (got ${probeCalls})`);
+	assert(fgOr(null, "known", fb)("hi") === "<fb>hi</fb>", "fgOr falls back when theme is null");
 });

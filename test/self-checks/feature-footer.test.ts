@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripAnsi } from "../../lib/ansi.ts";
+import { parsePorcelainV2 } from "../../lib/git-status.ts";
 import { markedLabels } from "../../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../../lib/shortcuts.ts";
 import { CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_PRESET_KEY as CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PROMPT_KEY as CHATBOX_PROMPT_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache } from "../../lib/preset-store.ts";
@@ -624,4 +625,24 @@ test("lib/features/footer.ts self-check", async () => {
 	assert(!isPointerOrFocusInput("a") && !isPointerOrFocusInput("\r"), "keystrokes are activity");
 	assert(!isPointerOrFocusInput("\u001b[A") && !isPointerOrFocusInput("\u001b[5~"), "arrow and page keys are activity");
 
+	// parsePorcelainV2: single-call branch sync + uncommitted count, LF and CRLF safe.
+	const pClean = parsePorcelainV2("# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n");
+	assert(pClean.ahead === 0 && pClean.behind === 0 && pClean.uncommitted === 0, "porcelain v2 clean repo");
+	const pDirty = parsePorcelainV2("# branch.head feat\r\n# branch.ab +3 -2\r\n1 .M N... 100644 100644 100644 a b file.ts\r\n? untracked.txt\r\n");
+	assert(pDirty.ahead === 3 && pDirty.behind === 2 && pDirty.uncommitted === 2, "porcelain v2 ahead/behind + dirty + CRLF");
+	const pNoUpstream = parsePorcelainV2("# branch.head local\n1 M. N... 100644 100644 100644 a b a.ts\n");
+	assert(pNoUpstream.ahead === 0 && pNoUpstream.behind === 0 && pNoUpstream.uncommitted === 1, "porcelain v2 without upstream");
+
+	// layoutFooterGrid: pre-measures each body cell once and still truncates a right-only cell wider than width.
+	let vwCalls = 0;
+	const countingVw = (s: string) => {
+		vwCalls++;
+		return s.length;
+	};
+	const gridRows = layoutFooterGrid("H-L", "H-R", ["L1", "L2", "L3"], ["R1", "R2"], " | ", " | ", 80, countingVw);
+	// Expected vw calls: 3 left cells + 2 right cells + 2 seps + 2 head cells = 9 (no re-measurement in wrap/pairRow).
+	assert(vwCalls === 9, `layoutFooterGrid measures each cell once (got ${vwCalls} calls)`);
+	assert(gridRows.length === 2, "layoutFooterGrid packs short rows into 1 body row");
+	const narrowRight = layoutFooterGrid("H", "R", [], ["0123456789abcdef"], " | ", " | ", 8);
+	assert(visibleWidth(narrowRight[1]!) <= 8, "right-only cell wider than width is truncated to fit");
 });

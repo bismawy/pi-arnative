@@ -65,6 +65,27 @@ export function sumNumstat(out: string): { added: number; removed: number } {
 	return { added, removed };
 }
 
+/** Parsed `git status --porcelain=v2 --branch`: branch, upstream sync, and change count in one call. */
+export function parsePorcelainV2(out: string): { ahead: number; behind: number; uncommitted: number } {
+	let ahead = 0;
+	let behind = 0;
+	let uncommitted = 0;
+	for (const line of out.split(/\r?\n/)) {
+		if (line.startsWith("# branch.ab ")) {
+			const m = /^# branch\.ab \+(\d+) -(\d+)$/.exec(line);
+			if (m) {
+				ahead = Number(m[1]);
+				behind = Number(m[2]);
+			}
+		} else if (line.startsWith("# ") || line === "") {
+			continue;
+		} else {
+			uncommitted++;
+		}
+	}
+	return { ahead, behind, uncommitted };
+}
+
 /** Row-1 git segment: branch(+sync), tag, worktree state. */
 export function gitParts(
 	info: GitInfo,
@@ -103,29 +124,41 @@ export function shortenCwd(raw: string): string {
 	return head + parts.slice(-2).join("/");
 }
 
-/** Collect git status, tag, upstream ahead/behind, and working-tree diff stat for `cwd`. */
+/** The tag `git describe --tags --abbrev=0` would print for HEAD, or null. Cached per
+ *  (cwd, branch): a tag only moves on a checkout or a new tag, so one call per branch
+ *  switch is enough — re-running it on every tool call was the most expensive part of the refresh. */
+const tagByBranch = new Map<string, string | null>();
+async function tagFor(cwd: string, branch: string): Promise<string | null> {
+	const key = `${cwd}\0${branch}`;
+	if (tagByBranch.has(key)) return tagByBranch.get(key) ?? null;
+	const tag = await run("git", ["describe", "--tags", "--abbrev=0"], cwd);
+	const value = tag.ok && tag.out ? tag.out : null;
+	tagByBranch.set(key, value);
+	return value;
+}
+
+/** Collect git status, tag, upstream ahead/behind, and working-tree diff stat for `cwd`.
+ *  Two git calls per refresh: `status --porcelain=v2 --branch` answers branch sync and the
+ *  change count together, `diff --numstat` the line counts; the tag is read once per branch. */
 export async function collectGitInfo(cwd: string): Promise<GitInfo> {
 	const branch = branchFromDisk(cwd);
 	if (!branch) return null;
-	const [tag, status, sync, numstat] = await Promise.all([
-		run("git", ["describe", "--tags", "--abbrev=0"], cwd),
-		run("git", ["status", "--porcelain"], cwd),
-		run("git", ["rev-list", "--left-right", "--count", "@{u}...HEAD"], cwd),
+	const [status, numstat] = await Promise.all([
+		run("git", ["status", "--porcelain=v2", "--branch"], cwd),
 		run("git", ["diff", "HEAD", "--numstat"], cwd),
 	]);
-	const uncommitted = status.ok ? status.out.split("\n").filter((l) => l.trim().length > 0).length : null;
-	const parts = sync.ok && sync.out !== "" ? sync.out.split(/\s+/).map(Number) : [];
-	const behind = parts.length > 0 && parts[0]! > 0 ? parts[0]! : 0;
-	const ahead = parts.length > 1 && parts[1]! > 0 ? parts[1]! : 0;
+	const parsed = status.ok ? parsePorcelainV2(status.out) : { ahead: 0, behind: 0, uncommitted: null as number | null };
+	// An unborn HEAD (a repo with no commit yet) makes `diff HEAD` fail; compare the
+	// working tree against the canonical empty tree so a staged first commit still counts.
 	const numstat2 = numstat.ok ? numstat : await run("git", ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"], cwd);
 	const { added, removed } = sumNumstat(numstat2.out);
 	return {
 		branch,
-		tag: tag.ok && tag.out ? tag.out : null,
-		uncommitted,
+		tag: await tagFor(cwd, branch),
+		uncommitted: parsed.uncommitted,
 		added: numstat2.ok ? added : null,
 		removed: numstat2.ok ? removed : null,
-		ahead,
-		behind,
+		ahead: parsed.ahead,
+		behind: parsed.behind,
 	};
 }
