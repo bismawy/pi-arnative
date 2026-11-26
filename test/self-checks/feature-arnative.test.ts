@@ -27,11 +27,13 @@ test("lib/features/arnative.ts self-check", async () => {
 	assert(MENUS.length === 13, "thirteen settings screens");
 	{
 		const catRows = menuRows([...MENU_CATEGORIES]);
-		assert(catRows.map((r) => r.label).join(",") === "Appearance,Performance,Models,Spend", "root menu lists the four categories in order");
+		assert(catRows.map((r) => r.label).join(",") === "Appearance,Display,Models & Context,Spend", "root menu lists the four categories in order");
 		const totalGrouped = MENU_CATEGORIES.reduce((n, c) => n + categoryMenus(c.label).length, 0);
 		assert(totalGrouped === MENUS.length, "every menu item belongs to one of the four categories");
-		const perf = categoryMenus("Performance");
-		assert(perf.map((m) => m.value).join(",") === "compact,render,payload", "Performance group lists Auto-compact, Render cache, Payload limit in order");
+		const display = categoryMenus("Display");
+		assert(display.map((m) => m.value).join(",") === "animations,diffs,render", "Display group lists Animations, Diffs, Render cache in order");
+		const modelsCtx = categoryMenus("Models & Context");
+		assert(modelsCtx.map((m) => m.value).join(",") === "providers,heal,compact,payload", "Models & Context group lists Providers, Model heal, Auto-compact, Payload limit in order");
 		const heal = modelHealRows("Flags");
 		assert(heal.map((r) => r.label).join(",") === "Full,Flags,Off,Run now", "Model heal rows: three modes then Run now");
 		assert(heal.filter((r) => r.chosen).map((r) => r.label).join(",") === "Flags", "Model heal marks only the saved mode");
@@ -206,21 +208,21 @@ test("lib/features/arnative.ts self-check", async () => {
 	);
 	assert(plainMenu.filter((l) => l.includes(ROW_DIVIDER)).every((l) => l.indexOf(ROW_DIVIDER) === row0.indexOf(ROW_DIVIDER)), "every divider sits in one column");
 	assert(
-		plainMenu.some((l) => l.startsWith(`│   ${"Performance".padEnd(widest)}${ROW_DIVIDER}`)),
+		plainMenu.some((l) => l.startsWith(`│   ${"Display".padEnd(widest)}${ROW_DIVIDER}`)),
 		"unselected rows indent to the marker column",
 	);
 
 	// A menu opened with a `current` row starts there. The handler passes the row it last
 	// used, so a submenu reopened by `←` lands back on that row instead of jumping to the
 	// top of the list — the cursor is the user's place, not the component's business.
-	const resumed = new ListPicker(fakeTheme, categoryRows, "Models", {
+	const resumed = new ListPicker(fakeTheme, categoryRows, "Models & Context", {
 		preview: () => {},
 		revert: () => {},
 		done: () => {},
 		requestRender: () => {},
 	}, { title: MENU_TITLE, description: MENU_DESC, legend: LIST_LEGEND_ROOT }, false);
 	const resumedRows = resumed.render(60).map(stripAnsi);
-	assert(resumedRows.some((l) => l.startsWith("│ ❯ Models")), "the menu reopens on the row it was left on");
+	assert(resumedRows.some((l) => l.startsWith("│ ❯ Models & Context")), "the menu reopens on the row it was left on");
 	assert(!resumedRows.some((l) => l.startsWith("│ ❯ Appearance")), "and not on the first row");
 
 	// The box border follows the session's thinking level (theme `thinking*` slot), so the
