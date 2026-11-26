@@ -33,8 +33,8 @@ export const LIST_ICON = "\uf03a";
 export const LIST_ROWS = 5;
 /** Bounds of the adaptive window: fewer than three rows says nothing, more than nine eats the
  *  chat area even on a tall terminal. */
-export const MIN_LIST_ROWS = 3;
-export const MAX_LIST_ROWS = 9;
+const MIN_LIST_ROWS = 3;
+const MAX_LIST_ROWS = 9;
 /** Lines the box spends on everything that is not a task: frame, heading, two counters. */
 const BOX_CHROME = 5;
 /** Lines kept for the editor, the footer and a usable chat area above the box. */
@@ -50,15 +50,15 @@ export function listRowsFor(terminalRows: number | undefined): number {
 	const fit = Math.floor(terminalRows) - BOX_CHROME - SCREEN_RESERVE;
 	return Math.min(MAX_LIST_ROWS, Math.max(MIN_LIST_ROWS, fit));
 }
-export const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
+const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
 /** Token for the task text itself. Queued recedes to dim and a done task reads as ordinary
  *  text; the task in progress takes the soft accent, which is derived rather than a token (see
  *  `softOf`), so it is painted separately. */
-export const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_progress: "text", completed: "text" };
+const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_progress: "text", completed: "text" };
 /** Token per status. In progress borrows the footer's model-name token (`mdHeading`), so the
  *  running task is the brightest row in the box, the way the model is the brightest text in
  *  the footer. */
-export const STATUS_COLOR: Record<TodoStatus, string> = { pending: "dim", in_progress: "mdHeading", completed: "accent" };
+const STATUS_COLOR: Record<TodoStatus, string> = { pending: "dim", in_progress: "mdHeading", completed: "accent" };
 /** Tried when the theme has no such token; pi throws on an unknown color. */
 const STATUS_FALLBACK: Record<TodoStatus, string> = { pending: "dim", in_progress: "accent", completed: "accent" };
 export const HINT_EXPAND = "[show]";
@@ -90,7 +90,7 @@ function fgOr(theme: FgTheme, colors: string[], text: string): string {
 
 /** Every task from a stored file, or `null` when the file is not one. Tolerant on fields,
  *  strict on the shape: a hand-edited or half-written file must not break the widget. */
-export function normalizeState(raw: unknown): TaskState | null {
+export function normalizeState(raw: unknown): TodoState | null {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
 	const tasks = (raw as { tasks?: unknown }).tasks;
 	if (!Array.isArray(tasks)) return null;
@@ -110,7 +110,7 @@ export function normalizeState(raw: unknown): TaskState | null {
 
 /** One row's worth of text: control characters (an ANSI escape in a subject would break the
  *  frame) become spaces, runs collapse, and the tail is cut. */
-export function tidy(text: string): string {
+function tidy(text: string): string {
 	const clean = text
 		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
 		.replace(/\s+/g, " ")
@@ -177,7 +177,7 @@ export const headingText = (state: TodoState): string => {
 };
 
 /** ` · Tulis widget`, or ` · All tasks finished` once nothing is left (empty when idle). */
-export function collapsedSuffix(state: TodoState): string {
+function collapsedSuffix(state: TodoState): string {
 	if (allDone(state)) return ` · ${COLLAPSED_DONE}`;
 	const active = activeTodo(state);
 	return active ? ` · ${active.subject}` : "";
@@ -305,7 +305,7 @@ export function todoLayout(
 
 /** The word the widget and the recap use for a status (`pending` reads as `queued`,
  *  the word the summary line counts). */
-export const statusText = (status: TodoStatus): string =>
+const statusText = (status: TodoStatus): string =>
 	status === "in_progress" ? "in progress" : status === "pending" ? "queued" : status;
 
 /** The word after `todo ·` in the tool box title: the status a task moved to, or the action when

@@ -153,7 +153,7 @@ export const activeFooterPreset = (): FooterPreset => footerPreset.get();
  * The editor is deliberately never touched here — pi's `setEditorComponent()` calls
  * `disposeActiveSelector()`, which would close the `/arnative` picker mid-preview.
  */
-export function applyFooterPreset(ctx: ExtensionContext): void {
+function applyFooterPreset(ctx: ExtensionContext): void {
 	if (activeFooterPreset() === "Pi (system)") {
 		ctx.ui?.setFooter?.(undefined);
 		return;

@@ -19,7 +19,7 @@ import { writeAtomicSync } from "../preset-store.ts";
 import { collectUsageSummary, type UsageSummary } from "../usage-store.ts";
 
 /** At most one write per minute, whatever the turn rate. */
-export const EXPORT_THROTTLE_MS = 60_000;
+const EXPORT_THROTTLE_MS = 60_000;
 /** `PI_ARNATIVE_EXPORT=0` disables the export (a local file with no network, so it ships on). */
 export const EXPORT_ENV = "PI_ARNATIVE_EXPORT";
 

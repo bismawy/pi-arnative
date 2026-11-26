@@ -294,7 +294,7 @@ if (InteractiveMode?.prototype) {
 	}
 }
 
-export class JevReviewBoxComponent implements Component {
+class JevReviewBoxComponent implements Component {
 	private text: string;
 	private th: { fg(c: string, t: string): string; bg?(c: string, t: string): string };
 	public isExpanded: boolean;
@@ -395,9 +395,9 @@ if (CompactionSummaryMessageComponent?.prototype) {
 // in `thinkingText`. Arnative replaces pi's default `"Thinking..."` label with `\uec21`
 // in `accent`, `Thinking...` in `dim`, and animates `.` -> `..` -> `...` while that
 // thinking run is actively streaming. Finished or non-default labels stay static.
-export const THINKING_ICON = "\uec21";
-export const THINKING_DOTS = [".", "..", "..."] as const;
-export const THINKING_DOT_MS = 400;
+const THINKING_ICON = "\uec21";
+const THINKING_DOTS = [".", "..", "..."] as const;
+const THINKING_DOT_MS = 400;
 
 const thinkingState: ThinkingLabelState = (getRuntime().thinkingLabelState ??= {
 	ui: null,
@@ -497,7 +497,7 @@ export function activeThinkingRunIndex(
 	return lastVisibleKind === "thinking" && runIdx >= 0 ? runIdx : null;
 }
 
-export class ThinkingLabelComponent implements Component {
+class ThinkingLabelComponent implements Component {
 	private inner: Text;
 	private isActive: boolean;
 	private startMs: number | undefined;
@@ -540,7 +540,7 @@ function isPlainTextComponent(c: unknown): boolean {
 	return "text" in c && typeof (c as { text?: unknown }).text === "string" && !("theme" in c);
 }
 
-export function patchThinkingInAssistantMessage(comp: {
+function patchThinkingInAssistantMessage(comp: {
 	contentContainer?: { children?: unknown[] };
 	lastMessage?: { content?: Array<{ type?: string; text?: string; thinking?: string }> };
 	isStreaming?: boolean;

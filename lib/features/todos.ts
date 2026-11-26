@@ -34,15 +34,15 @@ import {
 	renderTodoBox,
 	todoLayout,
 	todoWindow,
-	type TaskState,
+	type TodoState,
 	type TodoStatus,
 } from "../todos.ts";
 
 /** pi widget key; the extension owns it, so a reload replaces its own box. */
-export const TODO_WIDGET_KEY = "arnative-todos";
+const TODO_WIDGET_KEY = "arnative-todos";
 
 interface WidgetStore {
-	state: TaskState;
+	state: TodoState;
 	expanded: boolean;
 	/** First visible task after a scroll; null follows the active task. */
 	top: number | null;
@@ -180,7 +180,7 @@ const PARAMS = {
 	},
 } as never;
 
-const SUMMARY = (state: TaskState): string => {
+const SUMMARY = (state: TodoState): string => {
 	const { done, total, doing, queued } = countTodos(state);
 	return `${total} tasks: ${doing} in progress, ${queued} queued, ${done} done`;
 };

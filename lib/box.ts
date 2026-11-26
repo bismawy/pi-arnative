@@ -42,7 +42,7 @@ export const inSpans = (spans: readonly TextSpan[], row: number, x: number): boo
 /** Delay before holding a scroll affordance starts repeating, so a normal click scrolls once. */
 export const HOLD_DELAY_MS = 250;
 /** Repeat interval while holding a scroll affordance. */
-export const HOLD_REPEAT_MS = 90;
+const HOLD_REPEAT_MS = 90;
 
 export interface HoldRepeat {
 	start(step: () => boolean): void;
@@ -90,7 +90,7 @@ export function createHoldRepeat(delayMs = HOLD_DELAY_MS, repeatMs = HOLD_REPEAT
 export type BoxTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; bold?(text: string): string };
 type Dim = (s: string) => string;
 
-export const boxEdge = (l: string, r: string, width: number, dim: Dim): string =>
+const boxEdge = (l: string, r: string, width: number, dim: Dim): string =>
 	dim(`${l}${"─".repeat(Math.max(0, width - 2))}${r}`);
 
 /** Content row: │ <text> │, exactly `width` wide. Content is truncated to preserve border. */

@@ -38,7 +38,7 @@ import { levelToWire, loadModelsConfig, looseJsonParse, modelsPath, readAuthKey,
 export const MODEL_HEAL_CHOICES = ["Full", "Flags", "Off"] as const;
 export type ModelHealChoice = (typeof MODEL_HEAL_CHOICES)[number];
 export const MODEL_HEAL_KEY = "modelHeal";
-export const DEFAULT_MODEL_HEAL: ModelHealChoice = "Full";
+const DEFAULT_MODEL_HEAL: ModelHealChoice = "Full";
 
 export const activeModelHeal = (): ModelHealChoice => loadChoice(MODEL_HEAL_KEY, MODEL_HEAL_CHOICES) ?? DEFAULT_MODEL_HEAL;
 export const setModelHeal = (choice: ModelHealChoice): void => saveChoice(MODEL_HEAL_KEY, choice);

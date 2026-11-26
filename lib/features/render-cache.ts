@@ -43,7 +43,7 @@ import {
 /** Stored exactly as the picker shows them; `"On"` is the default. */
 export const RENDER_CACHE_CHOICES = ["On", "Off"] as const;
 export type RenderCacheChoice = (typeof RENDER_CACHE_CHOICES)[number];
-export const DEFAULT_RENDER_CACHE: RenderCacheChoice = "On";
+const DEFAULT_RENDER_CACHE: RenderCacheChoice = "On";
 
 const RENDER_CACHE_CONFIG_KEY = Symbol.for("pi-arnative.renderCache");
 const INSTANCE_WRAP_KEY = Symbol.for("pi-arnative.renderCacheWrapped");

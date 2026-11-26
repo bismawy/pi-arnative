@@ -24,14 +24,14 @@ import { activeRenderCache } from "./render-cache.ts";
 /** Stored exactly as the picker shows them; `Off` disables the trigger entirely. */
 export const AUTO_COMPACT_CHOICES = ["Off", "Smart", "100k", "150k", "200k", "300k", "400k"] as const;
 export type AutoCompactChoice = (typeof AUTO_COMPACT_CHOICES)[number];
-export const DEFAULT_AUTO_COMPACT: AutoCompactChoice = "Off";
+const DEFAULT_AUTO_COMPACT: AutoCompactChoice = "Off";
 export const AUTO_COMPACT_KEY = "autoCompact";
 
 /** Proxy payload limit presets shown in `/arnative` → Payload limit. */
 export const PAYLOAD_LIMIT_PRESETS = ["Off", "1 MB", "4 MB", "8 MB", "16 MB", "32 MB"] as const;
 export type PayloadLimitPreset = (typeof PAYLOAD_LIMIT_PRESETS)[number];
-export const DEFAULT_PAYLOAD_LIMIT: PayloadLimitPreset = "1 MB";
-export const PAYLOAD_LIMIT_MB_RANGE = { min: 1, max: 1024 } as const;
+const DEFAULT_PAYLOAD_LIMIT: PayloadLimitPreset = "1 MB";
+const PAYLOAD_LIMIT_MB_RANGE = { min: 1, max: 1024 } as const;
 export const PAYLOAD_LIMIT_CONFIG_KEY = Symbol.for("pi-arnative.payloadLimit");
 
 export interface ByteCeilings {
@@ -225,7 +225,7 @@ export function freshAutoCompactState(): AutoCompactState {
 
 /** How much usage must outgrow a previous attempt before it counts as real growth
  *  (5% of the threshold, at least 5k tokens). */
-export function growthMargin(thresholdTokens: number): number {
+function growthMargin(thresholdTokens: number): number {
 	return Math.max(5000, Math.round(thresholdTokens * 0.05));
 }
 

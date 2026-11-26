@@ -103,11 +103,6 @@ export function getRuntime(): RuntimeState {
 	return g[RUNTIME_KEY]!;
 }
 
-/** Reset the shared runtime state bag (intended for isolated tests). */
-export function resetRuntime(): void {
-	delete (globalThis as Record<symbol, RuntimeState | undefined>)[RUNTIME_KEY];
-}
-
 type EventHandler = (event: any, ctx: any) => any;
 
 function createEventDispatcher(eventName: string, handlers: readonly EventHandler[]): EventHandler {

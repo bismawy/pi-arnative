@@ -44,7 +44,7 @@ export const SHORTCUT_SCROLL_TODOS_UP = build("k");
 
 /** The `←` byte matcher. Esc is the advertised way out of a screen (Back, or Close at the
  *  root); `←` stays as an alias so muscle memory keeps working, but no footer names it. */
-export const BACK_KEY_LABEL = "←";
+const BACK_KEY_LABEL = "←";
 export function matchesBack(data: string): boolean {
 	return matchesKey(data, "left");
 }

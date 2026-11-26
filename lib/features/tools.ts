@@ -164,7 +164,7 @@ const firstMeaningful = (s: string): string => {
 const countLines = (s: string): number => (s ? s.split("\n").filter(Boolean).length : 0);
 
 // Tint folder paths / URLs; everything else default.
-export const LINK_RE = /(?:https?:\/\/[^\s"'`)}\]]+|(?:~|\.{1,2})?\/[\w.+@~%/-]+|[\w.+@~-]+(?:\/[\w.+@~%/-]+)+)/g;
+const LINK_RE = /(?:https?:\/\/[^\s"'`)}\]]+|(?:~|\.{1,2})?\/[\w.+@~%/-]+|[\w.+@~-]+(?:\/[\w.+@~%/-]+)+)/g;
 export function paintLinks(text: string, soft: (s: string) => string): string {
 	return text.replace(LINK_RE, (m) => soft(m));
 }
@@ -177,7 +177,7 @@ export function smartTitle(cmd: string, maxWords = 6): string {
 }
 
 // Result line prefix: 󱞩 dim (duration lives at the right end of the title).
-export function resHead(theme: Theme): string {
+function resHead(theme: Theme): string {
 	return theme.fg("dim", "󱞩");
 }
 
@@ -387,7 +387,7 @@ export function paintScrollEdge(
 	return `${bgOpen}${content}${bgClose}`;
 }
 
-export function capExpandedToolBox(
+function capExpandedToolBox(
 	drawn: string[],
 	scrollOffset: number,
 	maxBody: number,

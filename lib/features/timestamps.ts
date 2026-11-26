@@ -56,7 +56,7 @@ function formatClock(timestamp?: number): string {
 	return `${h}:${m}`;
 }
 
-export function formatTimeBadge(timeStr: string, th: { fg(color: string, text: string): string } | null): string {
+function formatTimeBadge(timeStr: string, th: { fg(color: string, text: string): string } | null): string {
 	if (th) {
 		try {
 			return th.fg("accent", timeStr);

@@ -23,14 +23,14 @@ export function formatCost(n: number): string {
 	return `$${(n / 1000).toFixed(1)}k`;
 }
 
-export function formatCount(n: number): string {
+function formatCount(n: number): string {
 	return n > 0 ? n.toLocaleString("en-US") : "-";
 }
 // =============================================================================
 // /usage TUI component
 // =============================================================================
 
-export interface RowItem {
+interface RowItem {
 	type: "project" | "provider" | "model" | "price";
 	/** Set on project rows, and on the provider rows nested under one in Project view. */
 	projectName?: string;

@@ -43,9 +43,9 @@ import { getRuntime } from "../runtime.ts";
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Shortcut";
 
 // Tab order for the next-tab shortcut and for the menu line.
-export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Shortcut"];
+const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Shortcut"];
 
-export const SECTION_ICONS: Record<TabKey, string> = {
+const SECTION_ICONS: Record<TabKey, string> = {
 	Model: "\uf1b2",
 	Directory: "\uf07b",
 	Context: "\udb84\uddd7",
@@ -63,7 +63,7 @@ export const HEADER_BRAND = `Arnative${BRAND}`;
 export type Themeish = { fg?(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 
 // First theme color that the theme really defines
-export function fgFirst(th: Themeish, names: string[], text: string): string {
+function fgFirst(th: Themeish, names: string[], text: string): string {
 	if (!th?.fg) return text;
 	for (const name of names) {
 		try {
@@ -85,7 +85,7 @@ export function fgFirst(th: Themeish, names: string[], text: string): string {
  * the same tint from the resolved accent; a theme that genuinely defines `accentSoft`
  * still wins first.
  */
-export function softFirst(th: Themeish, fallbacks: string[], text: string): string {
+function softFirst(th: Themeish, fallbacks: string[], text: string): string {
 	return softOnTier(softOf(th as never), th, fallbacks, text);
 }
 
@@ -94,7 +94,7 @@ export function softFirst(th: Themeish, fallbacks: string[], text: string): stri
  * counts). Same colour language as the footer: marks take `accent`, their text takes the
  * soft border-accent tier, so a header line and the footer under it agree.
  */
-export function softLabelFirst(th: Themeish, fallbacks: string[], text: string): string {
+function softLabelFirst(th: Themeish, fallbacks: string[], text: string): string {
 	return softOnTier(softSecondaryOf(th as never), th, fallbacks, text);
 }
 
@@ -119,7 +119,7 @@ export function sectionBodyOf(child: any): string | null {
 }
 
 /** Text of a themed text line, whichever pi version built it (pi 0.99 defers it to `build`). */
-export function themedTextOf(child: any): string {
+function themedTextOf(child: any): string {
 	if (typeof child?.build === "function") return String(child.build());
 	const direct = child?.text ?? child?.content;
 	if (typeof direct === "string" && direct !== "") return direct;
@@ -152,7 +152,7 @@ export function deviceUser(): string {
 	return u || "there";
 }
 
-export function readVersion(dir: string): string | null {
+function readVersion(dir: string): string | null {
 	try {
 		const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: unknown };
 		return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
@@ -302,7 +302,7 @@ export function extractItemsFromBody(body: string): string[] {
 
 // Cheatsheet for the Shortcut tab. Mirrors README "Shortcuts" plus the bindings the
 // extensions themselves own (footer.ts). Kept as plain text so the data line can wrap it.
-export const SHORTCUTS: string[] = [
+const SHORTCUTS: string[] = [
 	"[Esc] Interrupt",
 	"[Ctrl+c/d] Exit",
 	"[/] Commands",
@@ -317,7 +317,7 @@ export function wrapCommaItems(items: string[], maxWidth: number): string[] {
 	return wrapTokens(items, maxWidth, ", ", ",");
 }
 
-export function wrapTokens(items: string[], maxWidth: number, sep = "  ", trailing = ""): string[] {
+function wrapTokens(items: string[], maxWidth: number, sep = "  ", trailing = ""): string[] {
 	const lines: string[] = [];
 	let cur = "";
 	for (const item of items) {
@@ -414,7 +414,7 @@ const headerPreset = choiceSetting(HEADER_PRESET_CONFIG_KEY, HEADER_PRESETS, DEF
 export const activeHeaderPreset = (): HeaderPreset => headerPreset.get();
 
 /** Hand the header slot to the active preset: arnative's box, or pi's built-in ("Pi (system)"). */
-export function applyHeaderPreset(ctx: ExtensionContext): void {
+function applyHeaderPreset(ctx: ExtensionContext): void {
 	if (activeHeaderPreset() === "Pi (system)") {
 		ctx.ui?.setHeader?.(undefined);
 	} else {
@@ -454,7 +454,7 @@ export function formatModelDisplayName(model?: { id?: string; name?: string; pro
 
 // Full working directory for the Directory tab. ctx.cwd is authoritative; the
 // snapshot survives header re-creation when ctx is missing.
-export function getCwd(ctx?: { cwd?: string }): string {
+function getCwd(ctx?: { cwd?: string }): string {
 	return ctx?.cwd || getRuntime().lastCwd || "";
 }
 

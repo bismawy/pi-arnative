@@ -818,7 +818,7 @@ async function openMainMenu(ctx: ExtensionCommandContext, startGroup?: MenuGroup
 	}
 }
 
-export async function arnativeHandler(args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function arnativeHandler(args: string, ctx: ExtensionCommandContext): Promise<void> {
 	if (!ctx.hasUI) return;
 	const sub = args.trim().toLowerCase();
 
@@ -849,7 +849,7 @@ export function arnativeCompletions(prefix: string): AutocompleteItem[] | null {
 
 /** The theme this package ships. Applied only when pi has no theme setting of its own, so a
  *  fresh install lands on Arnative without ever overriding a choice someone made. */
-export const DEFAULT_THEME = "arnative";
+const DEFAULT_THEME = "arnative";
 
 /** A theme of this package's family: `arnative` itself or an `arnative-<variant>`. The
  *  generator (`themes/gen-themes.mjs`) ships only such names, so the name is the identity —

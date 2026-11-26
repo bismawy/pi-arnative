@@ -101,7 +101,7 @@ export interface BudgetVerdict {
 }
 
 /** `warn` starts at this fraction of a cap. */
-export const WARN_PCT = 0.8;
+const WARN_PCT = 0.8;
 
 /**
  * Pure decision — no I/O, the unit under test. `warn` at ≥80% of any set cap, `over` at ≥100%.
@@ -205,7 +205,7 @@ function changeBudgetRow(index: number): void {
 // ---------------------------------------------------------------- the Budget screen (TUI)
 
 /** Width of the spend-vs-cap bar, in cells. */
-export const BUDGET_BAR_WIDTH = 20;
+const BUDGET_BAR_WIDTH = 20;
 
 /** Total estimated spend across the displayed windows: rolling 30d already includes today. */
 export function estimatedWindowTotal(spend: BudgetSpend | null): number {
