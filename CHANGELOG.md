@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- **Arnative (Argon) centered footer preset.** Added a centered footer layout showing `cwd · clock` and the model label on one row with an inline `···` git toggle, exclusive left/right click toggles for the centered detail row, and keyboard cycling (`lib/features/footer.ts`, `lib/runtime.ts`, `test/footer-argon.test.ts`).
+
 ### Changed
+- **Responsive stacked footer on narrow terminals, dot separators, and compact model route labels.** `Arnative (Minimal)` and `Arnative (Full)` stack left and right layouts vertically with auto-wrap and row-aware click zones when both head cells do not fit on one line; left-side footer items use `·` instead of `|`; `modelDisplayParts()` strips verbose proxy metadata (`· ...`) and moves the remote backend segment into the provider suffix such as `Gemini 4 Neon (Magpie/agy-cli)` (`lib/features/footer.ts`, `lib/format.ts`, `test/footer-minimal.test.ts`, `test/format.test.ts`).
 - **Single extension entry point (`extensions/index.ts`).** Moved the 14 extension modules into `lib/features/` and registered them through one entry point so Pi loads shared `lib/` modules once per startup or `/reload` instead of up to 14 times (`extensions/index.ts`, `lib/features/*.ts`, `package.json`).
 - **Extracted inline self-checks out of runtime modules.** Moved all 27 inline `isMain` self-check suites (~5,680 lines, ~356 KB) and `lib/check.ts` out of the published `lib/` runtime payload into `test/self-checks/` and `test/helpers/check.ts`, running them in parallel under `node --test` (`lib/*.ts`, `lib/features/*.ts`, `test/self-checks/*.test.ts`, `package.json`).
 - **Centralized runtime context and event lifecycle (`lib/runtime.ts`).** Consolidated 26 scattered `globalThis` `Symbol.for` runtime slots into one typed `RuntimeState` bag, combined 43 separate `pi.on()` registrations into 19 single-listener event dispatchers (one per event type), and excluded dev-only `themes/gen-themes.mjs` from published package files and overlay (`lib/runtime.ts`, `extensions/index.ts`, `lib/features/*.ts`, `package.json`, `scripts/overlay.mjs`).
@@ -11,6 +15,10 @@
 - **Non-blocking `!cmd` secret resolution in model heal (`lib/model-heal.ts`).** Replaced synchronous `execSync` (up to 5 s UI stall) with async `exec` wired to the pass's `AbortSignal`, and linked `AbortSignal` into `fetchMeta()` so canceled `/model-heal` passes stop immediately.
 - **Unified 1 s footer ticker, merged micro-features, and deduplicated usage scans.** Fixed `/reload` timer leaks by tracking `clockTimer` and `idleTimer` solely on `RuntimeState` and sharing one 1 s interval across the active footer clock and working indicator; merged `usage-export` into `lib/features/usage.ts` and `animations` into `lib/spinner.ts` while unifying `activeTheme` across timestamps and spinner painters; added `markUsageDirty()` so the budget input gate reuses a fresh `turn_end` scan instead of repeating a forced disk scan.
 - **Rebalanced `/arnative` settings menu into four groups.** Grouped the 13 settings into `Appearance` (Themes, Headers, Footers, Chatbox), `Display` (Animations, Diffs, Render cache), `Models & Context` (Providers, Model heal, Auto-compact, Payload limit), and `Spend` (Usage, Budget) while keeping all `/arnative <subcommand>` shortcuts unchanged (`lib/features/arnative.ts`).
+- **Reduced footer git subprocesses and per-frame render work.** Merged `git status` and upstream ahead/behind into one `git status --porcelain=v2 --branch` call, cached `git describe --tags` per `(cwd, branch)`, throttled `tool_execution_end` refreshes to 500 ms with a trailing run, cached theme `fg` token support in `fgOr()`, memoized theme painters and cwd/git segments across frames, pre-measured cell widths once in `layoutFooterGrid()`, and reset `assistantStartMs` on every `message_start` role (`lib/git-status.ts`, `lib/ansi.ts`, `lib/features/footer.ts`).
+
+### Fixed
+- **Selectable text on the minimal footer head row.** Pressing on `cwd`, git, or model text in `Arnative (Minimal)` now leaves the press event to Pi so drag, double-click, and triple-click text selection work, while single-click without drag and pressing the `▲`/`▼` arrow still toggle each side (`lib/features/footer.ts`, `test/footer-minimal.test.ts`).
 
 ## [0.16.1] - 2026-11-21
 

@@ -2,13 +2,13 @@
  * Arnative footer (fixed 3-row grid). Row 1: cwd | active time | branch — model + thinking;
  * rows 2-3: extension status | tok/s · cache · token, each side wrapped in its half of the
  * width. The clock counts active time, not wall-clock age — see {@link ActiveClock}.
- * Preset (`/arnative footers`), live: "Arnative (Full)" (default), "Arnative (Minimal)"
- * or "Pi (system)".
+ * Preset (`/arnative footers`), live: "Arnative (Full)" (default), "Arnative (Minimal)",
+ * "Argon" or "Pi (system)".
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { setActiveTheme, softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { fgOr, setActiveTheme, softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
 import { inSpans, textSpans, type TextSpan } from "../box.ts";
 import { capitalize, modelDisplayParts } from "../format.ts";
 import { SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../shortcuts.ts";
@@ -120,17 +120,24 @@ export {
 // 3-row grid footer; "Pi (system)" = pi's built-in footer (the boxed editor stays arnative
 // in both — pi's `setEditorComponent()` would close the picker mid-preview).
 // Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
-export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)"] as const;
+export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)", "Argon"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
 /** Presets that this extension's registrar draws (everything but pi's built-in footer). */
-const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)"];
+const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)", "Argon"];
 /** Collapse state of the minimal footer: one flag per side, so a click on the left
  *  head does not open the right metrics. Session-scoped, not persisted. */
 export function minimalExpanded(): { left: boolean; right: boolean } {
 	const rt = getRuntime();
 	rt.minimalFooterExpanded ??= { left: false, right: false };
 	return rt.minimalFooterExpanded;
+}
+/** Collapse state of the Argon footer: `git` toggles inline git expansion after `···`,
+ *  and `detail` opens one centered second row at a time (`left` statuses or `right` metrics). */
+export function argonExpanded(): { git: boolean; detail: "left" | "right" | null } {
+	const rt = getRuntime();
+	rt.argonFooterExpanded ??= { git: false, detail: null };
+	return rt.argonFooterExpanded;
 }
 const footerPreset = choiceSetting(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET);
 const FOOTER_PRESET_KEY = footerPreset.slot;
@@ -204,15 +211,46 @@ if (FooterComponent?.prototype?.render) {
 
 let activeThemeProxy: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null = null;
 
+/** Painters for the footer's current theme, rebuilt only when pi hands over a new theme. */
+let themeCache: {
+	theme: unknown;
+	acc: (t: string) => string;
+	dim: (t: string) => string;
+	soft: (t: string) => string;
+	colorOr: (name: string, fallback: (t: string) => string) => (t: string) => string;
+	primary: (t: string) => string;
+	secondarySoft: (t: string) => string;
+	diffAdd: (t: string) => string;
+	diffDel: (t: string) => string;
+	sep: string;
+} | null = null;
+/** The cwd cell and git segment, rebuilt only when theme, cwd, or collected git info changes. */
+let gitCache: { theme: unknown; git: GitInfo; cwd: string; cwdCell: string; gitItems: string[]; gitSeg: string } | null = null;
+
 let gitRefreshInFlight = false;
 let git: GitInfo = null;
 let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 let lastPokeMs = 0;
-/** Column ranges of the minimal footer's disclosure markers, recorded per render
+/** Column ranges of the minimal footer's head cells and disclosure arrows, recorded per render
  *  (mouse coordinates are component-local, so they must come from the same frame). */
-let minimalRanges: { left: [number, number]; right: [number, number] } | null = null;
+interface MinimalSpan {
+	y: number;
+	x0: number;
+	x1: number;
+}
+let minimalRanges: {
+	left: MinimalSpan[];
+	right: MinimalSpan[];
+	leftArrow: MinimalSpan | null;
+	rightArrow: MinimalSpan | null;
+} | null = null;
+let argonRanges: {
+	left: MinimalSpan[];
+	right: MinimalSpan[];
+	dots: MinimalSpan | null;
+} | null = null;
 
 // One shared clock: a /reload re-imports this module, so a fresh instance would restart
 // a session that is already hours old. Exported so a test can drive the render path.
@@ -329,12 +367,30 @@ export function ponytailStatusLine(
 // re-run afterwards — it used to be dropped, leaving the footer's git state stale
 // until the next trigger.
 let gitRefreshQueuedCwd: string | null = null;
+let lastGitRefreshMs = 0;
+/** Tool bursts (a turn with ten edits) would otherwise run two git processes per tool;
+ *  coalesce them into one refresh per window, with a trailing run so the final state lands. */
+const GIT_REFRESH_MIN_INTERVAL_MS = 500;
+let gitRefreshTrailing: ReturnType<typeof setTimeout> | null = null;
 
-async function refreshGit(cwd: string): Promise<void> {
+async function refreshGit(cwd: string, opts: { force?: boolean } = {}): Promise<void> {
+	if (!opts.force) {
+		const since = Date.now() - lastGitRefreshMs;
+		if (since < GIT_REFRESH_MIN_INTERVAL_MS) {
+			if (gitRefreshTrailing) clearTimeout(gitRefreshTrailing);
+			gitRefreshTrailing = setTimeout(() => {
+				gitRefreshTrailing = null;
+				void refreshGit(cwd, { force: true }).then(() => poke());
+			}, GIT_REFRESH_MIN_INTERVAL_MS - since);
+			gitRefreshTrailing.unref?.();
+			return;
+		}
+	}
 	if (gitRefreshInFlight) {
 		gitRefreshQueuedCwd = cwd;
 		return;
 	}
+	lastGitRefreshMs = Date.now();
 	gitRefreshInFlight = true;
 	try {
 		git = await collectGitInfo(cwd);
@@ -344,7 +400,7 @@ async function refreshGit(cwd: string): Promise<void> {
 		if (gitRefreshQueuedCwd !== null) {
 			const queued = gitRefreshQueuedCwd;
 			gitRefreshQueuedCwd = null;
-			void refreshGit(queued).then(() => poke());
+			void refreshGit(queued, { force: true }).then(() => poke());
 		}
 	}
 }
@@ -361,7 +417,13 @@ export function placeMinimalHead(
 	left: string,
 	right: string,
 	width: number,
-): { row: string; left: [number, number]; right: [number, number] } {
+): {
+	row: string;
+	left: [number, number];
+	right: [number, number];
+	leftTruncated: boolean;
+	rightTruncated: boolean;
+} {
 	const lw = visibleWidth(left);
 	const rw = visibleWidth(right);
 	if (lw + 1 + rw <= width) {
@@ -370,6 +432,8 @@ export function placeMinimalHead(
 			row: left + " ".repeat(rightStart - lw) + right,
 			left: lw > 0 ? [0, lw - 1] : [-1, -1],
 			right: rw > 0 ? [rightStart, width - 1] : [-1, -1],
+			leftTruncated: false,
+			rightTruncated: false,
 		};
 	}
 	// Too wide: the left head is cut, the right one keeps its edge column like pairRow.
@@ -383,7 +447,101 @@ export function placeMinimalHead(
 		row: lCut + " " + rCut,
 		left: lCutW > 0 ? [0, lCutW - 1] : [-1, -1],
 		right: rCutW > 0 ? [rightStart, rightStart + rCutW - 1] : [-1, -1],
+		leftTruncated: lCut !== left,
+		rightTruncated: rCut !== right,
 	};
+}
+
+function centerLine(text: string, width: number): { line: string; pad: number; textW: number } {
+	const textW = visibleWidth(text);
+	const pad = Math.max(0, Math.floor((width - textW) / 2));
+	return { line: pad > 0 ? " ".repeat(pad) + text : text, pad, textW };
+}
+
+/**
+ * Centered head row(s) for the Argon footer, plus exact 0-based inclusive hit zones for
+ * `left` (cwd + clock), `right` (model), and `dots` (`···` git toggle). Measured directly
+ * from the placed strings so click zones never drift across widths or narrow wraps.
+ */
+export function placeArgonHead(
+	left: string,
+	right: string,
+	sep: string,
+	dots: string,
+	gitText: string,
+	width: number,
+): {
+	rows: string[];
+	left: MinimalSpan[];
+	right: MinimalSpan[];
+	dots: MinimalSpan | null;
+} {
+	const w = Math.max(1, width);
+	const leftW = visibleWidth(left);
+	const sepW = visibleWidth(sep);
+	const rightW = visibleWidth(right);
+	const dotsW = dots ? visibleWidth(dots) : 0;
+	const gitW = gitText ? visibleWidth(gitText) : 0;
+	const base = `${left}${sep}${right}${dotsW > 0 ? ` ${dots}` : ""}`;
+	const baseW = leftW + sepW + rightW + (dotsW > 0 ? 1 + dotsW : 0);
+	const fullW = baseW + (gitW > 0 ? 1 + gitW : 0);
+
+	if (fullW <= w) {
+		const rowText = gitW > 0 ? `${base} ${gitText}` : base;
+		const pad = Math.max(0, Math.floor((w - fullW) / 2));
+		const rightStart = pad + leftW + sepW;
+		const dotsStart = rightStart + rightW + 1;
+		return {
+			rows: [pad > 0 ? " ".repeat(pad) + rowText : rowText],
+			left: leftW > 0 ? [{ y: 0, x0: pad, x1: pad + leftW - 1 }] : [],
+			right: rightW > 0 ? [{ y: 0, x0: rightStart, x1: rightStart + rightW - 1 }] : [],
+			dots: dotsW > 0 ? { y: 0, x0: dotsStart, x1: dotsStart + dotsW - 1 } : null,
+		};
+	}
+
+	if (baseW <= w && gitW > 0) {
+		const pad = Math.max(0, Math.floor((w - baseW) / 2));
+		const rightStart = pad + leftW + sepW;
+		const dotsStart = rightStart + rightW + 1;
+		const gitRows = wrapTextWithAnsi(gitText, w).map((l) => centerLine(l, w).line);
+		return {
+			rows: [pad > 0 ? " ".repeat(pad) + base : base, ...gitRows],
+			left: leftW > 0 ? [{ y: 0, x0: pad, x1: pad + leftW - 1 }] : [],
+			right: rightW > 0 ? [{ y: 0, x0: rightStart, x1: rightStart + rightW - 1 }] : [],
+			dots: dotsW > 0 ? { y: 0, x0: dotsStart, x1: dotsStart + dotsW - 1 } : null,
+		};
+	}
+
+	// Narrow viewport: wrap each head centered so nothing clips and zones stay exact.
+	const rows: string[] = [];
+	const leftSpans: MinimalSpan[] = [];
+	for (const seg of wrapTextWithAnsi(left, w)) {
+		const { line, pad, textW } = centerLine(seg, w);
+		if (textW > 0) leftSpans.push({ y: rows.length, x0: pad, x1: pad + textW - 1 });
+		rows.push(line);
+	}
+	const rightSpans: MinimalSpan[] = [];
+	let dotsSpan: MinimalSpan | null = null;
+	const rightWrapped = wrapTextWithAnsi(dotsW > 0 ? `${right} ${dots}` : right, w);
+	for (let i = 0; i < rightWrapped.length; i++) {
+		const { line, pad, textW } = centerLine(rightWrapped[i]!, w);
+		const y = rows.length;
+		const isLast = i === rightWrapped.length - 1;
+		if (isLast && dotsW > 0 && textW >= dotsW) {
+			const dotsStart = pad + textW - dotsW;
+			dotsSpan = { y, x0: dotsStart, x1: pad + textW - 1 };
+			// Exclude the trailing ` ···` from the right-text zone so clicks on `···` stay distinct.
+			const rightEnd = dotsStart - 2;
+			if (rightEnd >= pad) rightSpans.push({ y, x0: pad, x1: rightEnd });
+		} else if (textW > 0) {
+			rightSpans.push({ y, x0: pad, x1: pad + textW - 1 });
+		}
+		rows.push(line);
+	}
+	if (gitW > 0) {
+		for (const seg of wrapTextWithAnsi(gitText, w)) rows.push(centerLine(seg, w).line);
+	}
+	return { rows, left: leftSpans, right: rightSpans, dots: dotsSpan };
 }
 
 function formatModelName(
@@ -420,47 +578,78 @@ export function layoutFooterGrid(
 	width: number,
 	vw: (s: string) => number = visibleWidth,
 ): string[] {
+	const headLeftW = headLeft ? vw(headLeft) : 0;
+	const headRightW = headRight ? vw(headRight) : 0;
+	// Narrow / mobile viewport: when the two head cells cannot share one row,
+	// stack left layout (head + statuses, auto-wrapped) above right layout (head + metrics, auto-wrapped).
+	if (headLeft && headRight && headLeftW + 1 + headRightW > width) {
+		const w = Math.max(1, width);
+		const out: string[] = [...wrapTextWithAnsi(headLeft, w)];
+		if (left.length > 0) out.push(...wrapTextWithAnsi(left.join(leftSep), w));
+		out.push(...wrapTextWithAnsi(headRight, w));
+		if (right.length > 0) out.push(...wrapTextWithAnsi(right.join(rightSep), w));
+		return out;
+	}
 	const half = Math.max(1, Math.floor(width / 2) - 1);
+	// Every cell's width is measured once up front: visibleWidth parses ANSI and
+	// clusters graphemes, and wrap()/pairRow() used to re-measure the same cell 3x.
+	const leftW = left.map(vw);
+	const rightW = right.map(vw);
+	const sepWL = vw(leftSep);
+	const sepWR = vw(rightSep);
 	// Wrap each side at half width; the first break happens at most once (rows 2-3),
 	// after that the rest stays on the last row and the pairing truncates it.
-	const wrap = (cells: readonly string[], sep: string): string[] => {
-		const rows: string[] = [];
+	const wrap = (cells: readonly string[], widths: readonly number[], sep: string, sepW: number): { text: string; width: number }[] => {
+		const rows: { text: string; width: number }[] = [];
 		let line = "";
-		for (const cell of cells) {
-			const candidate = line ? line + sep + cell : cell;
-			if (line && rows.length === 0 && vw(candidate) > half) {
-				rows.push(line);
+		let lineW = 0;
+		for (let i = 0; i < cells.length; i++) {
+			const cell = cells[i]!;
+			const cellW = widths[i]!;
+			if (line && rows.length === 0 && lineW + sepW + cellW > half) {
+				rows.push({ text: line, width: lineW });
 				line = cell;
+				lineW = cellW;
+			} else if (line) {
+				line += sep + cell;
+				lineW += sepW + cellW;
 			} else {
-				line = candidate;
+				line = cell;
+				lineW = cellW;
 			}
 		}
-		if (line) rows.push(line);
+		if (line) rows.push({ text: line, width: lineW });
 		return rows;
 	};
-	const leftRows = wrap(left, leftSep);
-	const rightRows = wrap(right, rightSep);
-	const out = [pairRow(headLeft, headRight, width, vw)];
+	const leftRows = wrap(left, leftW, leftSep, sepWL);
+	const rightRows = wrap(right, rightW, rightSep, sepWR);
+	const out = [pairRow(headLeft, headRight, width, vw, headLeftW, headRightW)];
 	for (let i = 0; i < Math.max(leftRows.length, rightRows.length); i++) {
 		const l = leftRows[i];
 		const r = rightRows[i];
 		if (l === undefined && r === undefined) break;
-		out.push(pairRow(l ?? "", r ?? "", width, vw));
+		out.push(pairRow(l?.text ?? "", r?.text ?? "", width, vw, l?.width ?? 0, r?.width ?? 0));
 	}
 	return out;
 }
 
-/** One grid row: `left` at the start, `right` flush to the right edge. */
-function pairRow(left: string, right: string, width: number, vw: (s: string) => number): string {
-	if (!right) return truncateToWidth(left, width);
-	const rightWidth = Math.min(vw(right), width);
-	if (!left) return " ".repeat(width - rightWidth) + truncateToWidth(right, width);
-	if (vw(left) + 1 + rightWidth <= width) {
-		return left + " ".repeat(width - vw(left) - rightWidth) + right;
+/** One grid row: `left` at the start, `right` flush to the right edge. `leftW`/`rightW`
+ *  are the caller's measured widths when it already has them, so the row costs no extra pass. */
+function pairRow(left: string, right: string, width: number, vw: (s: string) => number, leftW?: number, rightW?: number): string {
+	const lw = leftW ?? vw(left);
+	if (!right) return lw <= width ? left : truncateToWidth(left, width);
+	const rawRw = rightW ?? vw(right);
+	const rw = Math.min(rawRw, width);
+	if (!left) return " ".repeat(width - rw) + (rawRw <= width ? right : truncateToWidth(right, width));
+	if (lw + 1 + rw <= width) {
+		return left + " ".repeat(width - lw - rw) + (rawRw <= width ? right : truncateToWidth(right, width));
 	}
 	// Too wide together: the right cell keeps its columns, the left one is cut.
-	const room = Math.max(1, width - rightWidth - 1);
-	return truncateToWidth(left, room) + " " + truncateToWidth(right, width - room - 1);
+	const room = Math.max(1, width - rw - 1);
+	const lCut = lw <= room ? left : truncateToWidth(left, room);
+	const rRoom = width - room - 1;
+	const rCut = rawRw <= rRoom ? right : truncateToWidth(right, rRoom);
+	return lCut + " " + rCut;
 }
 
 function parseOptimizer(raw: string | undefined): string | null {
@@ -938,6 +1127,20 @@ export default function (pi: ExtensionAPI) {
 	// fullscreen mode, so pi's own rule ("always design a keyboard path") needs this.
 	// One key toggles both sides: expand all unless everything is already open.
 	const toggleMinimal = () => {
+		if (activeFooterPreset() === "Argon") {
+			const state = argonExpanded();
+			if (state.detail === null && !state.git) {
+				state.detail = "left";
+				state.git = true;
+			} else if (state.detail === "left") {
+				state.detail = "right";
+			} else {
+				state.detail = null;
+				state.git = false;
+			}
+			poke();
+			return;
+		}
 		const state = minimalExpanded();
 		const allOpen = state.left && state.right;
 		state.left = !allOpen;
@@ -948,10 +1151,15 @@ export default function (pi: ExtensionAPI) {
 		pi.registerShortcut(key, { description: "Expand/collapse the minimal footer", handler: toggleMinimal });
 	}
 
-	// Assistant speed timer (user message timestamps come from extensions/timestamps.ts)
+	// Assistant speed timer (user message timestamps come from lib/features/timestamps.ts).
+	// Reset for every role: a user or tool message between two assistant runs must not
+	// leave the previous run's start time behind, or the next speed reads a stale elapsed.
 	pi.on("message_start", async (event) => {
 		if (event.message.role === "assistant") {
 			assistantStartMs = Date.now();
+			assistantChars = 0;
+		} else {
+			assistantStartMs = null;
 			assistantChars = 0;
 		}
 	});
@@ -1011,41 +1219,54 @@ export default function (pi: ExtensionAPI) {
 					const dot = wrapInputListener(tui);
 					rerender = () => tui.requestRender();
 					const unsub = footerData.onBranchChange(() => {
-						void refreshGit(cwd).then(() => tui.requestRender());
+						void refreshGit(cwd, { force: true }).then(() => tui.requestRender());
 					});
+					// Swallows the follow-up release/click after a press on the ▲/▼ arrow so it never toggles twice.
+					let swallowMinimalClick = false;
 					return {
 						dispose() {
 							rerender = null;
 							dot();
 							unsub();
+							if (gitRefreshTrailing) {
+								clearTimeout(gitRefreshTrailing);
+								gitRefreshTrailing = null;
+							}
+							themeCache = null;
+							gitCache = null;
 						},
 						invalidate() {},
 						render(width: number): string[] {
-							const acc = (text: string) => theme.fg("accent", text);
-							const dim = (text: string) => theme.fg("dim", text);
-							const fgAny = theme.fg.bind(theme) as (color: string, text: string) => string;
-							// `accentSoft`/`secondarySoft` are vars-only tokens on Pi 1.2+, so both soft tiers
-							// are resolved through the shared painters instead of a raw fg() probe. Icons keep
-							// `accent`; the cwd/branch/clock/status text takes the border-accent tier, so the
-							// footer stays two-toned instead of the text inheriting the accent hue.
-							const soft = softOf(theme as never);
-							const softLabel = softSecondaryOf(theme as never);
-							// Diff colors: the same theme slots pi uses for a diff body, with the
-							// plain soft color as fallback for a theme that omits them.
-							const colorOr = (name: string, fallback: (t: string) => string) => (t: string) => {
-								try {
-									return fgAny(name, t);
-								} catch {
-									return fallback(t);
-								}
+							// Painters and the cwd/model/git segments only change when their inputs do
+							// (theme, cwd, model, thinking level, git info). The footer re-renders on every
+						// stream tick and clock tick, so rebuilding them per frame was pure waste.
+							if (themeCache?.theme !== theme) {
+								const acc = (text: string) => theme.fg("accent", text);
+								const dim = (text: string) => theme.fg("dim", text);
+								// `accentSoft`/`secondarySoft` are vars-only tokens on Pi 1.2+, so both soft tiers
+								// are resolved through the shared painters instead of a raw fg() probe. Icons keep
+								// `accent`; the cwd/branch/clock/status text takes the border-accent tier, so the
+								// footer stays two-toned instead of the text inheriting the accent hue.
+								const soft = softOf(theme as never);
+								const softLabel = softSecondaryOf(theme as never);
+								// Diff colors: the same theme slots pi uses for a diff body, with the
+								// plain soft color as fallback for a theme that omits them. Optional tokens are
+								// probed once per theme (fgOr), not thrown-and-caught on every frame.
+								const colorOr = (name: string, fallback: (t: string) => string) => fgOr(theme, name, fallback);
+								themeCache = {
+									theme,
+									acc,
+									dim,
+									soft,
+									colorOr,
+									primary: colorOr("mdHeading", acc),
+									secondarySoft: softLabel,
+									diffAdd: colorOr("toolDiffAdded", soft),
+									diffDel: colorOr("toolDiffRemoved", soft),
+									sep: ` ${dim("·")} `,
 							};
-							// `primary` is a var, not a token (Pi 1.2+ rejects custom `colors` keys); its
-							// arnative carrier is the official token it maps to.
-							const primary = colorOr("mdHeading", acc);
-							const secondarySoft = softLabel;
-							const diffAdd = colorOr("toolDiffAdded", soft);
-							const diffDel = colorOr("toolDiffRemoved", soft);
-							const sep = dim(" | ");
+						}
+							const { acc, dim, soft, colorOr, primary, secondarySoft, diffAdd, diffDel, sep } = themeCache!;
 
 							const durationStr = formatDuration(clock.total());
 							const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
@@ -1053,17 +1274,25 @@ export default function (pi: ExtensionAPI) {
 							idlePauseShown = paused;
 							const clockIcon = paused ? dim("\uf017") : acc("\uf017");
 							const clockText = paused ? dim(durationStr) : secondarySoft(durationStr);
-							const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
-							const cwdShort = shortenCwd(cwd);
-							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
+							const clockCell = `${clockIcon} ${clockText}`;
+							const pDuration = `${clockCell}${diffStat ? `${sep}${diffStat}` : ""}`;
+							// The git segment (branch, sync, tag, dirty count) is rebuilt only when theme,
+							// git info, or cwd changes (refreshGit replaces the git object).
+							if (gitCache?.theme !== theme || gitCache?.git !== git || gitCache?.cwd !== cwd) {
+								const cwdCell = `${acc("\uf07b")} ${dim(shortenCwd(cwd))}`;
+								const gitItems = git ? gitParts(git, acc, secondarySoft) : [];
+								const gitSeg = gitItems.map((p) => `${sep}${p}`).join("");
+								gitCache = { theme, git, cwd, cwdCell, gitItems, gitSeg };
+							}
+							const preset = activeFooterPreset();
+							const isMinimal = preset === "Arnative (Minimal)";
+							const isArgon = preset === "Argon";
 							const open = minimalExpanded();
 							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
-							let left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}`;
-							if (git) {
-								left1 = `${acc("\uf07b")} ${dim(cwdShort)}${sep}${pDuration}${gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("")}`;
-							}
+							let left1 = `${gitCache.cwdCell}${sep}${pDuration}${gitCache.gitSeg}`;
 							if (isMinimal) left1 += arrow(open.left);
-							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim) + (isMinimal ? arrow(open.right) : "");
+							const modelText = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim);
+							const right1 = modelText + (isMinimal ? arrow(open.right) : "");
 
 							const statuses: ReadonlyMap<string, string> = (() => {
 								try {
@@ -1137,37 +1366,137 @@ export default function (pi: ExtensionAPI) {
 							const cacheCell = opt ? `${(bandPaint ?? acc)("\udb80\udf5b")} ${(bandPaint ?? secondarySoft)(opt)}` : "";
 							const metricCells = [speedStr, cacheCell, usageStr].filter(Boolean);
 
+							if (isArgon) {
+								minimalRanges = null;
+								const argon = argonExpanded();
+								const argonLeft = `${gitCache.cwdCell}${sep}${clockCell}`;
+								const argonGitCells = [diffStat, ...gitCache.gitItems].filter(Boolean);
+								const hasGit = argonGitCells.length > 0;
+								const dots = hasGit ? (argon.git ? acc("···") : dim("···")) : "";
+								const gitText = hasGit && argon.git ? argonGitCells.join(sep) : "";
+								const placed = placeArgonHead(argonLeft, modelText, ` ${dim("|")} `, dots, gitText, width);
+								argonRanges = { left: placed.left, right: placed.right, dots: placed.dots };
+								const detailCells = argon.detail === "left" ? groups : argon.detail === "right" ? metricCells : [];
+								const w = Math.max(1, width);
+								const detailLines = detailCells.length > 0
+									? wrapTextWithAnsi(detailCells.join(sep), w).map((l) => centerLine(l, w).line)
+									: [];
+								return [...placed.rows, ...detailLines];
+							}
+							argonRanges = null;
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
 							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
 							// and reveals the same rows on click/keypress, one side at a time.
 							const leftRows = isMinimal && !open.left ? [] : groups;
 							const rightRows = isMinimal && !open.right ? [] : metricCells;
 							if (isMinimal) {
-								// Own head row: it reports the zones measured from what it actually placed.
+								const rightSep = ` ${dim("·")} `;
+								if (visibleWidth(left1) + 1 + visibleWidth(right1) > width) {
+									// Narrow / mobile viewport: stack left layout (head + expanded statuses)
+									// then right layout (head + expanded metrics), each auto-wrapped to full width.
+									const w = Math.max(1, width);
+									const leftHeadLines = wrapTextWithAnsi(left1, w);
+									const leftDetailLines = leftRows.length > 0 ? wrapTextWithAnsi(leftRows.join(sep), w) : [];
+									const rightHeadY = leftHeadLines.length + leftDetailLines.length;
+									const rightHeadLines = wrapTextWithAnsi(right1, w);
+									const rightDetailLines = rightRows.length > 0 ? wrapTextWithAnsi(rightRows.join(rightSep), w) : [];
+									const spansOf = (lines: string[], startY: number): MinimalSpan[] => {
+										const spans: MinimalSpan[] = [];
+										for (let i = 0; i < lines.length; i++) {
+											const lw = visibleWidth(lines[i]!);
+											if (lw > 0) spans.push({ y: startY + i, x0: 0, x1: lw - 1 });
+										}
+										return spans;
+									};
+									const arrowOf = (spans: MinimalSpan[]): MinimalSpan | null => {
+										const last = spans[spans.length - 1];
+										return last ? { y: last.y, x0: Math.max(last.x0, last.x1 - 1), x1: last.x1 } : null;
+									};
+									const leftSpans = spansOf(leftHeadLines, 0);
+									const rightSpans = spansOf(rightHeadLines, rightHeadY);
+									minimalRanges = {
+										left: leftSpans,
+										right: rightSpans,
+										leftArrow: arrowOf(leftSpans),
+										rightArrow: arrowOf(rightSpans),
+									};
+									return [...leftHeadLines, ...leftDetailLines, ...rightHeadLines, ...rightDetailLines];
+								}
+								// Wide viewport: single head row with measured click zones.
 								const placed = placeMinimalHead(left1, right1, width);
-								minimalRanges = { left: placed.left, right: placed.right };
-								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, ` ${dim("·")} `, width).slice(1);
+								const leftSpans: MinimalSpan[] = placed.left[0] >= 0 ? [{ y: 0, x0: placed.left[0], x1: placed.left[1] }] : [];
+								const rightSpans: MinimalSpan[] = placed.right[0] >= 0 ? [{ y: 0, x0: placed.right[0], x1: placed.right[1] }] : [];
+								const leftArrow: MinimalSpan | null = !placed.leftTruncated && placed.left[0] >= 0 && placed.left[1] >= placed.left[0]
+									? { y: 0, x0: Math.max(placed.left[0], placed.left[1] - 1), x1: placed.left[1] }
+									: null;
+								const rightArrow: MinimalSpan | null = !placed.rightTruncated && placed.right[0] >= 0 && placed.right[1] >= placed.right[0]
+									? { y: 0, x0: Math.max(placed.right[0], placed.right[1] - 1), x1: placed.right[1] }
+									: null;
+								minimalRanges = { left: leftSpans, right: rightSpans, leftArrow, rightArrow };
+								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, rightSep, width).slice(1);
 								return [placed.row, ...rest];
 							}
 							minimalRanges = null;
 							return layoutFooterGrid(left1, right1, leftRows, rightRows, sep, ` ${dim("·")} `, width);
 						},
 						handleMouse(event: TuiMouseEvent) {
-							// Clicks only reach here in fullscreen mode; the keyboard shortcut covers
-							// regular mode. Return handled on press so pi records the target — without
-							// that it never dispatches the follow-up click.
-							if (event.button !== "left" || event.y !== 0) return undefined;
+							// Matches arnative-box (tools.ts / todos.ts):
+							// - Press on the ▲/▼ arrow toggles immediately and swallows the follow-up
+							//   release/click so a 1-cell drift still works without double-toggling.
+							// - Press on head text returns undefined so pi handles text selection
+							//   (drag-select, double-click word, triple-click line).
+							// - Single-click without drag on either head (clickCount === 1) toggles
+							//   that side; double/triple clicks stay with pi's selection.
+							if (event.button !== "left") return undefined;
+							if (event.type === "press") swallowMinimalClick = false;
+							if (swallowMinimalClick && (event.type === "release" || event.type === "click")) {
+								if (event.type === "click") swallowMinimalClick = false;
+								return { handled: true, render: false };
+							}
+							const hitSpan = (s: MinimalSpan | null) => !!s && event.y === s.y && event.x >= s.x0 && event.x <= s.x1;
+							const hitAny = (spans: readonly MinimalSpan[]) => spans.some((s) => hitSpan(s));
+							if (argonRanges) {
+								const toggleGit = () => {
+									const state = argonExpanded();
+									state.git = !state.git;
+									poke();
+									return { handled: true, render: true };
+								};
+								const toggleDetail = (side: "left" | "right") => {
+									const state = argonExpanded();
+									state.detail = state.detail === side ? null : side;
+									poke();
+									return { handled: true, render: true };
+								};
+								if (event.type === "press") {
+									if (!hitSpan(argonRanges.dots)) return undefined;
+									swallowMinimalClick = true;
+									return toggleGit();
+								}
+								if (event.type !== "click" || (event.clickCount ?? 1) !== 1) return undefined;
+								if (hitSpan(argonRanges.dots)) return toggleGit();
+								const hit = hitAny(argonRanges.left) ? "left" : hitAny(argonRanges.right) ? "right" : null;
+								if (!hit) return undefined;
+								return toggleDetail(hit);
+							}
 							const ranges = minimalRanges;
 							if (!ranges) return undefined;
-							const inside = (r: [number, number]) => event.x >= r[0] && event.x <= r[1];
-							const hit = inside(ranges.left) ? "left" : inside(ranges.right) ? "right" : null;
+							const toggle = (side: "left" | "right") => {
+								const state = minimalExpanded();
+								state[side] = !state[side];
+								poke();
+								return { handled: true, render: true };
+							};
+							if (event.type === "press") {
+								const arrowHit = hitSpan(ranges.leftArrow) ? "left" : hitSpan(ranges.rightArrow) ? "right" : null;
+								if (!arrowHit) return undefined;
+								swallowMinimalClick = true;
+								return toggle(arrowHit);
+							}
+							if (event.type !== "click" || (event.clickCount ?? 1) !== 1) return undefined;
+							const hit = hitAny(ranges.left) ? "left" : hitAny(ranges.right) ? "right" : null;
 							if (!hit) return undefined;
-							if (event.type === "press") return { handled: true, render: false };
-							if (event.type !== "click") return undefined;
-							const state = minimalExpanded();
-							state[hit] = !state[hit];
-							poke();
-							return { handled: true, render: true };
+							return toggle(hit);
 						},
 					};
 				});
@@ -1371,7 +1700,7 @@ export default function (pi: ExtensionAPI) {
 		} catch {
 			// fallback
 		}
-		void refreshGit(cwd).then(() => poke());
+		void refreshGit(cwd, { force: true }).then(() => poke());
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
@@ -1384,7 +1713,7 @@ export default function (pi: ExtensionAPI) {
 		rt.currentThinking = currentThinkingLevel;
 		rt.lastCwd = ctx.cwd;
 		startWorkingClock(ctx);
-		void refreshGit(ctx.cwd).then(() => poke());
+		void refreshGit(ctx.cwd, { force: true }).then(() => poke());
 	});
 
 	pi.on("tool_execution_start", async (event, ctx) => {

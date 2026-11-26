@@ -90,7 +90,7 @@ function footerFor(preset: string): Footer {
 	return footerFactory(tui, theme, footerData);
 }
 
-const mouse = (type: string, x: number) => ({
+const mouse = (type: string, x: number, extra: Record<string, unknown> = {}) => ({
 	type,
 	button: "left",
 	x,
@@ -102,6 +102,7 @@ const mouse = (type: string, x: number) => ({
 	shift: false,
 	alt: false,
 	ctrl: false,
+	...extra,
 });
 
 test("the minimal preset lists a collapsed head row for each side", () => {
@@ -165,16 +166,44 @@ test("the right arrow opens only the right side", () => {
 	assert.ok(lines[0]!.endsWith("▼"), "the opened head switches to ▼");
 });
 
-test("the click zones track the real rendered row at every width", () => {
-	for (const width of [40, 60, 80, 100, 120, 160, 200]) {
+test("pressing head text leaves selection to pi; single-click still toggles, double-click does not", () => {
+	const footer = footerFor("Arnative (Minimal)");
+	const head = footer.render(100)[0]!;
+	const textX = head.indexOf("pi-arnative");
+	const modelX = head.indexOf("Deepseek");
+	assert.ok(textX > 0 && modelX > 0, "head text columns found");
+
+	// Press on text must return undefined so TuiAltScreen can start drag/word/line selection.
+	assert.equal(footer.handleMouse!(mouse("press", textX)), undefined, "left head text press stays selectable");
+	assert.equal(footer.handleMouse!(mouse("press", modelX)), undefined, "right head text press stays selectable");
+	// Double-click on text must also stay with pi (word selection).
+	assert.equal(footer.handleMouse!(mouse("click", textX, { clickCount: 2 })), undefined, "double-click on left head does not toggle");
+	assert.equal(footer.handleMouse!(mouse("click", modelX, { clickCount: 2 })), undefined, "double-click on right head does not toggle");
+	assert.equal(footer.render(100).length, 1, "still collapsed after presses and double-clicks");
+
+	// Arrow press acts immediately and swallows the follow-up release/click (no double-toggle).
+	const leftArrowX = head.indexOf("▲");
+	assert.ok(footer.handleMouse!(mouse("press", leftArrowX)) !== undefined, "arrow press toggles immediately");
+	assert.ok(footer.render(100).some((l) => l.includes("MCP")), "left side opened on arrow press");
+	footer.handleMouse!(mouse("release", leftArrowX));
+	footer.handleMouse!(mouse("click", leftArrowX));
+	assert.ok(footer.render(100).some((l) => l.includes("MCP")), "follow-up release/click after arrow press is swallowed");
+});
+
+test("the click zones track the real rendered row at every wide width", () => {
+	for (const width of [80, 100, 120, 160, 200]) {
 		const footer = footerFor("Arnative (Minimal)");
 		const row = footer.render(width)[0]!;
 		const plain = row.replace(/\x1b\[[0-9;]*m/g, "");
 
-		// Press-only: `handled` marks a live zone without toggling anything.
+		// Single-click (clickCount 1) marks the live head zones; press on text stays undefined for selection.
 		const live: number[] = [];
 		for (let x = 0; x < width; x++) {
-			if (footer.handleMouse!(mouse("press", x)) !== undefined) live.push(x);
+			if (footer.handleMouse!(mouse("click", x)) !== undefined) {
+				live.push(x);
+				// Restore collapsed state so the next probe starts clean.
+				footer.handleMouse!(mouse("click", x));
+			}
 		}
 
 		// One run per head, and the right head is always flush to the terminal edge.
@@ -199,9 +228,12 @@ test("the click zones track the real rendered row at every width", () => {
 			}
 		}
 
-		// The model text is always inside a zone, whatever the width.
+		// The model text is always inside a click zone, while press on it stays undefined for selection.
 		const modelAt = plain.indexOf("Deepseek");
-		if (modelAt > 0) assert.ok(live.includes(modelAt), `width ${width}: the model text is clickable`);
+		if (modelAt > 0) {
+			assert.ok(live.includes(modelAt), `width ${width}: the model text is clickable`);
+			assert.equal(footer.handleMouse!(mouse("press", modelAt)), undefined, `width ${width}: pressing model text leaves selection to pi`);
+		}
 	}
 });
 
@@ -221,6 +253,28 @@ test("a click on the far-right head row still toggles the right side", () => {
 	assert.ok(footer.handleMouse!(mouse("press", 99))?.handled === true, "the last cell belongs to the model head");
 	footer.handleMouse!(mouse("click", 99));
 	assert.ok(footer.render(100).some((l) => l.includes("↑1.2k")), "the right side opened");
+});
+
+test("narrow mobile viewport stacks left layout then right layout with auto-wrap and multi-row clicks", () => {
+	const footer = footerFor("Arnative (Minimal)");
+	const collapsed = footer.render(40);
+	assert.ok(collapsed.length >= 2, "narrow viewport stacks left head above right head");
+	assert.ok(collapsed[0]!.includes("pi-arnative"), "row 0 starts with the left head");
+	const rightHeadIdx = collapsed.findIndex((l) => l.includes("Deepseek"));
+	assert.ok(rightHeadIdx > 0, "right head follows below the left head");
+
+	// Single-click on the left head expands left statuses right below it.
+	assert.ok(footer.handleMouse!(mouse("click", 2, { y: 0 }))?.handled === true, "clicking left head toggles left");
+	const leftOpen = footer.render(40);
+	const mcpIdx = leftOpen.findIndex((l) => l.includes("MCP"));
+	const shiftedRightIdx = leftOpen.findIndex((l) => l.includes("Deepseek"));
+	assert.ok(mcpIdx > 0 && mcpIdx < shiftedRightIdx, "left statuses appear between left head and right head");
+
+	// Single-click on the shifted right head expands right metrics below it.
+	assert.ok(footer.handleMouse!(mouse("click", 2, { y: shiftedRightIdx }))?.handled === true, "clicking right head toggles right");
+	const bothOpen = footer.render(40);
+	const metricsIdx = bothOpen.findIndex((l) => l.includes("↑1.2k"));
+	assert.ok(metricsIdx > shiftedRightIdx, "right metrics appear below the right head");
 });
 
 test("the full preset is unchanged: no arrows, statuses always visible", () => {

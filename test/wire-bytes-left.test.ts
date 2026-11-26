@@ -79,7 +79,7 @@ test("a model without a byte wall never renders the wire cell", async () => {
 	assert.ok(!line.includes("MB/"), "no wire cell for a plain model");
 });
 
-test("the wire cell keeps the dim pipe separator", async () => {
+test("the wire cell keeps the dim dot separator", async () => {
 	const line = await renderLeftRow({ id: "remote/auto/glm-5.3", provider: "magpie" });
-	assert.match(line, /\u25cf ON \(Jev\) \| \udb80\udd93/, "status and wire cell split by the row separator");
+	assert.match(line, /\u25cf ON \(Jev\) · \udb80\udd93/, "status and wire cell split by the row separator");
 });
