@@ -285,7 +285,7 @@ test("lib/features/arnative.ts self-check", async () => {
 	assert(footerLines.some((l) => l.includes(screenTitle("Footers"))), "footers picker title");
 	assert(footerLines.some((l) => l.includes("❯ Pi (system)")), "footers picker cursors the active preset");
 	assert(footerLines.some((l) => l.includes("Arnative (Minimal)")), "footers picker lists the minimal preset");
-	assert(footerLines.some((l) => l.includes("Argon")), "footers picker lists the Argon preset");
+	assert(footerLines.some((l) => l.includes("Zen")), "footers picker lists the Zen preset");
 	assert(footerLines.filter((l) => l.includes("Arnative (")).length === 2, "both arnative footer presets are selectable");
 	assert(/\[c\] Cost (on|off)/.test(footersPickerText().legend), "footers legend advertises the cost switch and its live state");
 

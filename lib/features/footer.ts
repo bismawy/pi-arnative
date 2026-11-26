@@ -2,9 +2,10 @@
  * Arnative footer (fixed 3-row grid). Row 1: cwd | active time | branch — model + thinking;
  * rows 2-3: extension status | tok/s · cache · token, each side wrapped in its half of the
  * width. The clock counts active time, not wall-clock age — see {@link ActiveClock}.
- * Preset (`/arnative footers`), live: "Arnative (Full)" (default), "Arnative (Minimal)",
- * "Argon" or "Pi (system)".
+ * Preset (`/arnative footers`), live: "Pi (system)", "Pi (color)", "Arnative (Full)" (default),
+ * "Arnative (Minimal)", or "Zen".
  */
+import { isAbsolute, relative, resolve, sep as pathSep } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
@@ -14,7 +15,7 @@ import { capitalize, modelDisplayParts } from "../format.ts";
 import { SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../shortcuts.ts";
 import { markPatched, originalOf } from "../patch.ts";
 import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../usage-store.ts";
-import { FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, choiceSetting, flagSetting } from "../preset-store.ts";
+import { FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, choiceSetting, flagSetting, loadSetting } from "../preset-store.ts";
 import { formatCost } from "./usage.ts";
 import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
 import { budgetLevelNow } from "./budget.ts";
@@ -120,11 +121,11 @@ export {
 // 3-row grid footer; "Pi (system)" = pi's built-in footer (the boxed editor stays arnative
 // in both — pi's `setEditorComponent()` would close the picker mid-preview).
 // Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
-export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)", "Argon"] as const;
+export const FOOTER_PRESETS = ["Pi (system)", "Pi (color)", "Arnative (Full)", "Arnative (Minimal)", "Zen"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
 /** Presets that this extension's registrar draws (everything but pi's built-in footer). */
-const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)", "Argon"];
+const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Pi (color)", "Arnative (Full)", "Arnative (Minimal)", "Zen"];
 /** Collapse state of the minimal footer: one flag per side, so a click on the left
  *  head does not open the right metrics. Session-scoped, not persisted. */
 export function minimalExpanded(): { left: boolean; right: boolean } {
@@ -132,12 +133,12 @@ export function minimalExpanded(): { left: boolean; right: boolean } {
 	rt.minimalFooterExpanded ??= { left: false, right: false };
 	return rt.minimalFooterExpanded;
 }
-/** Collapse state of the Argon footer: `git` toggles inline git expansion after `···`,
+/** Collapse state of the Zen footer: `git` toggles inline git expansion after `···`,
  *  and `detail` opens one centered second row at a time (`left` statuses or `right` metrics). */
-export function argonExpanded(): { git: boolean; detail: "left" | "right" | null } {
+export function zenExpanded(): { git: boolean; detail: "left" | "right" | null } {
 	const rt = getRuntime();
-	rt.argonFooterExpanded ??= { git: false, detail: null };
-	return rt.argonFooterExpanded;
+	rt.zenFooterExpanded ??= { git: false, detail: null };
+	return rt.zenFooterExpanded;
 }
 const footerPreset = choiceSetting(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET);
 const FOOTER_PRESET_KEY = footerPreset.slot;
@@ -152,7 +153,11 @@ export function setFooterCost(on: boolean): void {
 	poke();
 }
 
-export const activeFooterPreset = (): FooterPreset => footerPreset.get();
+export const activeFooterPreset = (): FooterPreset => {
+	const raw = (globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] ?? loadSetting(FOOTER_PRESET_CONFIG_KEY);
+	if (raw === "Argon" || raw === "Arnative (Zen)") return "Zen";
+	return footerPreset.get();
+};
 
 /**
  * Hand the footer slot to the active preset: arnative's grid, or pi's built-in footer.
@@ -246,7 +251,7 @@ let minimalRanges: {
 	leftArrow: MinimalSpan | null;
 	rightArrow: MinimalSpan | null;
 } | null = null;
-let argonRanges: {
+let zenRanges: {
 	left: MinimalSpan[];
 	right: MinimalSpan[];
 	dots: MinimalSpan | null;
@@ -459,11 +464,11 @@ function centerLine(text: string, width: number): { line: string; pad: number; t
 }
 
 /**
- * Centered head row(s) for the Argon footer, plus exact 0-based inclusive hit zones for
+ * Centered head row(s) for the Zen footer, plus exact 0-based inclusive hit zones for
  * `left` (cwd + clock), `right` (model), and `dots` (`···` git toggle). Measured directly
  * from the placed strings so click zones never drift across widths or narrow wraps.
  */
-export function placeArgonHead(
+export function placeZenHead(
 	left: string,
 	right: string,
 	sep: string,
@@ -558,6 +563,231 @@ function formatModelName(
 	const capThinking = thinkingLevel && thinkingLevel !== "off" ? capitalize(thinkingLevel) : "";
 	const thinkStr = capThinking ? `${acc("\uee9c")} ${soft(capThinking)} ${dim("·")} ` : "";
 	return `${thinkStr}${primary(name)}${provStr}`;
+}
+
+/** Format `cwd` the same way Pi's built-in footer does (replace home prefix with `~`). */
+export function formatPiCwd(cwd: string, home: string | undefined = process.env.HOME || process.env.USERPROFILE): string {
+	if (!home) return cwd;
+	const resolvedCwd = resolve(cwd);
+	const resolvedHome = resolve(home);
+	const rel = relative(resolvedHome, resolvedCwd);
+	const inside = rel === "" || (rel !== ".." && !rel.startsWith(`..${pathSep}`) && !isAbsolute(rel));
+	if (!inside) return cwd;
+	return rel === "" ? "~" : `~${pathSep}${rel}`;
+}
+
+export interface PiColorStats {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	cost: number;
+	latestCacheHitRate: number | undefined;
+}
+
+export interface PiColorPainters {
+	acc: (t: string) => string;
+	dim: (t: string) => string;
+	primary: (t: string) => string;
+	secondarySoft: (t: string) => string;
+	warning: (t: string) => string;
+	error: (t: string) => string;
+}
+
+/** Format token counts identically to Pi's built-in FooterComponent. */
+export function formatPiTokens(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+	return `${Math.round(count / 1000000)}M`;
+}
+
+export interface PiColorFooterInput {
+	cwd: string;
+	home?: string;
+	branch: string | null;
+	sessionName?: string;
+	stats: PiColorStats;
+	usingSubscription?: boolean;
+	budgetBand?: "ok" | "warn" | "over";
+	contextPercent: number | null;
+	contextWindow: number;
+	autoCompactEnabled?: boolean;
+	experimental?: boolean;
+	model?: { id: string; provider?: string; reasoning?: boolean };
+	thinkingLevel?: string;
+	availableProviderCount: number;
+	extensionStatuses: ReadonlyMap<string, string>;
+	width: number;
+	painters: PiColorPainters;
+}
+
+let piStatsCache: {
+	manager: unknown;
+	sessionId: string | undefined;
+	entryCount: number;
+	leafId: string | null | undefined;
+	stats: PiColorStats;
+} | null = null;
+
+function collectPiSessionStats(sessionManager: {
+	getEntries(): readonly unknown[];
+	getLeafId?: () => string | null;
+	getSessionId?: () => string;
+}): PiColorStats {
+	const entries = sessionManager.getEntries();
+	const entryCount = entries.length;
+	const leafId = sessionManager.getLeafId?.();
+	const sessionId = sessionManager.getSessionId?.();
+	if (
+		piStatsCache &&
+		piStatsCache.manager === sessionManager &&
+		piStatsCache.sessionId === sessionId &&
+		piStatsCache.entryCount === entryCount &&
+		piStatsCache.leafId === leafId
+	) {
+		return piStatsCache.stats;
+	}
+	const stats: PiColorStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, latestCacheHitRate: undefined };
+	const addUsage = (u: MessageUsage | undefined) => {
+		if (!u) return;
+		stats.input += u.input || 0;
+		stats.output += u.output || 0;
+		stats.cacheRead += u.cacheRead || 0;
+		stats.cacheWrite += u.cacheWrite || 0;
+		stats.cost += u.cost?.total || 0;
+	};
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object" || !("type" in entry)) continue;
+		const e = entry as {
+			type?: string;
+			usage?: MessageUsage;
+			message?: { role?: string; usage?: MessageUsage };
+		};
+		if (e.type === "usage") {
+			addUsage(e.usage);
+		} else if (e.type === "message" && e.message?.role === "assistant") {
+			addUsage(e.message.usage);
+			const u = e.message.usage;
+			if (u) {
+				const prompt = (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
+				stats.latestCacheHitRate = prompt > 0 ? ((u.cacheRead || 0) / prompt) * 100 : undefined;
+			}
+		} else if (e.type === "message" && e.message?.role === "toolResult" && e.message.usage) {
+			addUsage(e.message.usage);
+		} else if ((e.type === "branch_summary" || e.type === "compaction") && e.usage) {
+			addUsage(e.usage);
+		}
+	}
+	piStatsCache = { manager: sessionManager, sessionId, entryCount, leafId, stats };
+	return stats;
+}
+
+function sanitizePiStatus(text: string): string {
+	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+}
+
+/**
+ * Pi's built-in footer layout (row 1: pwd/branch/session, row 2: token stats + model/thinking,
+ * row 3: extension statuses) colored with Arnative's two-toned accent + secondarySoft palette.
+ */
+export function renderPiColorFooter(input: PiColorFooterInput): string[] {
+	const { acc, dim, primary, secondarySoft, warning, error } = input.painters;
+	const width = Math.max(1, input.width);
+
+	// Row 1: pwd (branch) • sessionName
+	let pwdLine = dim(formatPiCwd(input.cwd, input.home));
+	if (input.branch) {
+		pwdLine += ` ${acc(`(${input.branch})`)}`;
+	}
+	if (input.sessionName) {
+		pwdLine += `${dim(" \u2022 ")}${secondarySoft(input.sessionName)}`;
+	}
+	pwdLine = truncateToWidth(pwdLine, width, dim("..."));
+
+	// Row 2 left: ↑in ↓out Rread Wwrite CHrate% $cost pct%/win (auto)
+	const { stats } = input;
+	const statsParts: string[] = [];
+	if (stats.input) statsParts.push(`${acc("\u2191")}${secondarySoft(formatPiTokens(stats.input))}`);
+	if (stats.output) statsParts.push(`${acc("\u2193")}${secondarySoft(formatPiTokens(stats.output))}`);
+	if (stats.cacheRead) statsParts.push(`${acc("R")}${secondarySoft(formatPiTokens(stats.cacheRead))}`);
+	if (stats.cacheWrite) statsParts.push(`${acc("W")}${secondarySoft(formatPiTokens(stats.cacheWrite))}`);
+	if ((stats.cacheRead > 0 || stats.cacheWrite > 0) && stats.latestCacheHitRate !== undefined) {
+		const chPaint = stats.latestCacheHitRate < 40 ? error : stats.latestCacheHitRate < 70 ? warning : null;
+		statsParts.push(`${(chPaint ?? acc)("CH")}${(chPaint ?? secondarySoft)(`${stats.latestCacheHitRate.toFixed(1)}%`)}`);
+	}
+	if (stats.cost || input.usingSubscription) {
+		const costPaint = input.budgetBand === "over" ? error : input.budgetBand === "warn" ? warning : null;
+		const sub = input.usingSubscription ? dim(" (sub)") : "";
+		statsParts.push(`${(costPaint ?? acc)("$")}${(costPaint ?? secondarySoft)(stats.cost.toFixed(3))}${sub}`);
+	}
+
+	const autoIndicator = input.autoCompactEnabled ? " (auto)" : "";
+	const winStr = formatPiTokens(input.contextWindow);
+	const pctValue = input.contextPercent ?? 0;
+	const pctStr = input.contextPercent !== null ? `${pctValue.toFixed(1)}%` : "?";
+	if (pctValue > 90) {
+		statsParts.push(`${error(`${pctStr}/${winStr}`)}${dim(autoIndicator)}`);
+	} else if (pctValue > 70) {
+		statsParts.push(`${warning(`${pctStr}/${winStr}`)}${dim(autoIndicator)}`);
+	} else {
+		statsParts.push(`${secondarySoft(pctStr)}${dim(`/${winStr}${autoIndicator}`)}`);
+	}
+	if (input.experimental) {
+		statsParts.push(`${dim("\u2022")} ${warning("xp")}`);
+	}
+
+	let statsLeft = statsParts.join(" ");
+	let statsLeftWidth = visibleWidth(statsLeft);
+	if (statsLeftWidth > width) {
+		statsLeft = truncateToWidth(statsLeft, width, dim("..."));
+		statsLeftWidth = visibleWidth(statsLeft);
+	}
+
+	// Row 2 right: (provider) model.id • thinkingLevel
+	const minPadding = 2;
+	let rightWithoutProvider = input.model ? primary(input.model.id) : dim("no-model");
+	if (input.model?.reasoning) {
+		const level = input.thinkingLevel || "off";
+		rightWithoutProvider += level === "off"
+			? dim(" \u2022 thinking off")
+			: `${dim(" \u2022 ")}${acc(level)}`;
+	}
+	let rightSide = rightWithoutProvider;
+	if (input.availableProviderCount > 1 && input.model?.provider) {
+		const withProvider = `${dim(`(${input.model.provider}) `)}${rightWithoutProvider}`;
+		if (statsLeftWidth + minPadding + visibleWidth(withProvider) <= width) {
+			rightSide = withProvider;
+		}
+	}
+
+	const rightSideWidth = visibleWidth(rightSide);
+	let statsLine: string;
+	if (statsLeftWidth + minPadding + rightSideWidth <= width) {
+		statsLine = statsLeft + " ".repeat(width - statsLeftWidth - rightSideWidth) + rightSide;
+	} else {
+		const availableForRight = width - statsLeftWidth - minPadding;
+		if (availableForRight > 0) {
+			const truncatedRight = truncateToWidth(rightSide, availableForRight, "");
+			const truncatedRightWidth = visibleWidth(truncatedRight);
+			statsLine = statsLeft + " ".repeat(Math.max(0, width - statsLeftWidth - truncatedRightWidth)) + truncatedRight;
+		} else {
+			statsLine = statsLeft;
+		}
+	}
+
+	const lines = [pwdLine, statsLine];
+	if (input.extensionStatuses.size > 0) {
+		const sorted = Array.from(input.extensionStatuses.entries())
+			.sort(([a], [b]) => a.localeCompare(b))
+			.map(([, text]) => {
+				const clean = sanitizePiStatus(text);
+				return clean.includes("\x1b[") ? clean : secondarySoft(clean);
+			});
+		lines.push(truncateToWidth(sorted.join(" "), width, dim("...")));
+	}
+	return lines;
 }
 
 /**
@@ -1127,8 +1357,8 @@ export default function (pi: ExtensionAPI) {
 	// fullscreen mode, so pi's own rule ("always design a keyboard path") needs this.
 	// One key toggles both sides: expand all unless everything is already open.
 	const toggleMinimal = () => {
-		if (activeFooterPreset() === "Argon") {
-			const state = argonExpanded();
+		if (activeFooterPreset() === "Zen") {
+			const state = zenExpanded();
 			if (state.detail === null && !state.git) {
 				state.detail = "left";
 				state.git = true;
@@ -1191,6 +1421,7 @@ export default function (pi: ExtensionAPI) {
 			usageScanLen = -1;
 			usageScanManager = undefined;
 			usageScanLeaf = undefined;
+			piStatsCache = null;
 		} else {
 			currentModel = (rt.currentModel as typeof currentModel) ?? ctx.model;
 			currentThinkingLevel = (rt.currentThinking as typeof currentThinkingLevel) ?? ctx.thinkingLevel;
@@ -1267,6 +1498,95 @@ export default function (pi: ExtensionAPI) {
 							};
 						}
 							const { acc, dim, soft, colorOr, primary, secondarySoft, diffAdd, diffDel, sep } = themeCache!;
+							const preset = activeFooterPreset();
+
+							if (preset === "Pi (color)") {
+								minimalRanges = null;
+								zenRanges = null;
+								const statuses: ReadonlyMap<string, string> = (() => {
+									try {
+										return footerData.getExtensionStatuses();
+									} catch {
+										return new Map<string, string>();
+									}
+								})();
+								const branch = (() => {
+									try {
+										return footerData.getGitBranch();
+									} catch {
+										return null;
+									}
+								})();
+								const availableProviderCount = (() => {
+									try {
+										return footerData.getAvailableProviderCount();
+									} catch {
+										return 0;
+									}
+								})();
+								const sessionMgr = ctx.sessionManager as unknown as {
+									getEntries(): readonly unknown[];
+									getLeafId?: () => string | null;
+									getSessionId?: () => string;
+									getCwd?: () => string;
+									getSessionName?: () => string | undefined;
+								};
+								const stats = collectPiSessionStats(sessionMgr);
+								const contextUsage = (() => {
+									try {
+										return ctx.getContextUsage();
+									} catch {
+										return undefined;
+									}
+								})();
+								const model = (ctx.model ?? currentModel) as { id: string; provider?: string; reasoning?: boolean; contextWindow?: number } | undefined;
+								const liveThinkingLevel = (() => {
+									try {
+										return (pi as unknown as { getThinkingLevel?: () => string | undefined }).getThinkingLevel?.();
+									} catch {
+										return undefined;
+									}
+								})() ?? ctx.thinkingLevel ?? currentThinkingLevel;
+								const autoCompactEnabled = (() => {
+									try {
+										const s = (pi as unknown as { getSettings?: () => { compaction?: { enabled?: boolean } } }).getSettings?.();
+										return s?.compaction?.enabled !== false;
+									} catch {
+										return true;
+									}
+								})();
+								const usingSubscription = Boolean(
+									model && (
+										model.provider === "kimi-coding" ||
+										(ctx as unknown as { modelRegistry?: { isUsingOAuth?: (m: unknown) => boolean } }).modelRegistry?.isUsingOAuth?.(model)
+									),
+								);
+								return renderPiColorFooter({
+									cwd: sessionMgr.getCwd?.() ?? cwd,
+									branch,
+									sessionName: sessionMgr.getSessionName?.(),
+									stats,
+									usingSubscription,
+									budgetBand: budgetLevelNow(),
+									contextPercent: contextUsage?.percent ?? null,
+									contextWindow: contextUsage?.contextWindow ?? model?.contextWindow ?? 0,
+									autoCompactEnabled,
+									experimental: process.env.PI_EXPERIMENTAL === "1",
+									model,
+									thinkingLevel: liveThinkingLevel,
+									availableProviderCount,
+									extensionStatuses: statuses,
+									width,
+									painters: {
+										acc,
+										dim,
+										primary,
+										secondarySoft,
+										warning: colorOr("warning", acc),
+										error: colorOr("error", acc),
+									},
+								});
+							}
 
 							const durationStr = formatDuration(clock.total());
 							const diffStat = formatDiffStat(git, acc, diffAdd, diffDel);
@@ -1284,9 +1604,8 @@ export default function (pi: ExtensionAPI) {
 								const gitSeg = gitItems.map((p) => `${sep}${p}`).join("");
 								gitCache = { theme, git, cwd, cwdCell, gitItems, gitSeg };
 							}
-							const preset = activeFooterPreset();
 							const isMinimal = preset === "Arnative (Minimal)";
-							const isArgon = preset === "Argon";
+							const isZen = preset === "Zen";
 							const open = minimalExpanded();
 							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
 							let left1 = `${gitCache.cwdCell}${sep}${pDuration}${gitCache.gitSeg}`;
@@ -1366,24 +1685,24 @@ export default function (pi: ExtensionAPI) {
 							const cacheCell = opt ? `${(bandPaint ?? acc)("\udb80\udf5b")} ${(bandPaint ?? secondarySoft)(opt)}` : "";
 							const metricCells = [speedStr, cacheCell, usageStr].filter(Boolean);
 
-							if (isArgon) {
+							if (isZen) {
 								minimalRanges = null;
-								const argon = argonExpanded();
-								const argonLeft = `${gitCache.cwdCell}${sep}${clockCell}`;
-								const argonGitCells = [diffStat, ...gitCache.gitItems].filter(Boolean);
-								const hasGit = argonGitCells.length > 0;
-								const dots = hasGit ? (argon.git ? acc("···") : dim("···")) : "";
-								const gitText = hasGit && argon.git ? argonGitCells.join(sep) : "";
-								const placed = placeArgonHead(argonLeft, modelText, ` ${dim("|")} `, dots, gitText, width);
-								argonRanges = { left: placed.left, right: placed.right, dots: placed.dots };
-								const detailCells = argon.detail === "left" ? groups : argon.detail === "right" ? metricCells : [];
+								const zen = zenExpanded();
+								const zenLeft = `${gitCache.cwdCell}${sep}${clockCell}`;
+								const zenGitCells = [diffStat, ...gitCache.gitItems].filter(Boolean);
+								const hasGit = zenGitCells.length > 0;
+								const dots = hasGit ? (zen.git ? acc("···") : dim("···")) : "";
+								const gitText = hasGit && zen.git ? zenGitCells.join(sep) : "";
+								const placed = placeZenHead(zenLeft, modelText, ` ${dim("|")} `, dots, gitText, width);
+								zenRanges = { left: placed.left, right: placed.right, dots: placed.dots };
+								const detailCells = zen.detail === "left" ? groups : zen.detail === "right" ? metricCells : [];
 								const w = Math.max(1, width);
 								const detailLines = detailCells.length > 0
 									? wrapTextWithAnsi(detailCells.join(sep), w).map((l) => centerLine(l, w).line)
 									: [];
 								return [...placed.rows, ...detailLines];
 							}
-							argonRanges = null;
+							zenRanges = null;
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
 							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
 							// and reveals the same rows on click/keypress, one side at a time.
@@ -1455,27 +1774,27 @@ export default function (pi: ExtensionAPI) {
 							}
 							const hitSpan = (s: MinimalSpan | null) => !!s && event.y === s.y && event.x >= s.x0 && event.x <= s.x1;
 							const hitAny = (spans: readonly MinimalSpan[]) => spans.some((s) => hitSpan(s));
-							if (argonRanges) {
+							if (zenRanges) {
 								const toggleGit = () => {
-									const state = argonExpanded();
+									const state = zenExpanded();
 									state.git = !state.git;
 									poke();
 									return { handled: true, render: true };
 								};
 								const toggleDetail = (side: "left" | "right") => {
-									const state = argonExpanded();
+									const state = zenExpanded();
 									state.detail = state.detail === side ? null : side;
 									poke();
 									return { handled: true, render: true };
 								};
 								if (event.type === "press") {
-									if (!hitSpan(argonRanges.dots)) return undefined;
+									if (!hitSpan(zenRanges.dots)) return undefined;
 									swallowMinimalClick = true;
 									return toggleGit();
 								}
 								if (event.type !== "click" || (event.clickCount ?? 1) !== 1) return undefined;
-								if (hitSpan(argonRanges.dots)) return toggleGit();
-								const hit = hitAny(argonRanges.left) ? "left" : hitAny(argonRanges.right) ? "right" : null;
+								if (hitSpan(zenRanges.dots)) return toggleGit();
+								const hit = hitAny(zenRanges.left) ? "left" : hitAny(zenRanges.right) ? "right" : null;
 								if (!hit) return undefined;
 								return toggleDetail(hit);
 							}
@@ -1806,6 +2125,7 @@ export default function (pi: ExtensionAPI) {
 		const rt = getRuntime();
 		usageScanManager = undefined;
 		usageScanLeaf = undefined;
+		piStatsCache = null;
 		stopWorkingClock();
 		stopIdleProbe();
 		stopPromptIdle();

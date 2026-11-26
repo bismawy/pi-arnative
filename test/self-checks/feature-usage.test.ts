@@ -289,8 +289,8 @@ test("lib/features/usage.ts self-check", async () => {
 	const at = (needle: string) => lines.findIndex((l) => plain(l).includes(needle));
 	const firstRow = lines.findIndex((l) => plain(l).includes("▾") || plain(l).includes("▸"));
 	const detailAt = lines.findIndex((l) => plain(l).includes("cache ") && plain(l).includes("↑"));
-	assert(detailAt > firstRow, "the detail line sits below the table, not above it");
-	assert(at("Total") > detailAt, "the total sits below the detail line");
+	assert(at("Total") > firstRow, "the total sits below the table");
+	assert(detailAt > at("Total"), "the detail line sits below Total");
 	assert(at("Provider / Model") < firstRow, "the header sits above the first row");
 	// The chrome is the whole chrome: no inner `├─┤` rule (skill arnative-pi rule 7), the sections
 	// are separated by blank rows the way every /arnative menu separates them.
@@ -300,44 +300,38 @@ test("lib/features/usage.ts self-check", async () => {
 		"the description sits above the table",
 	);
 	assert(plain(lines[detailAt]!).includes("\uf4bc"), "the detail line carries its icon");
-	// No rule between the header and its first row (the header labels the rows below it),
-	// while the rules after the description and before Total stay.
+	// No inner horizontal rules anywhere inside the frame: blank rows separate the range bar,
+	// the table header, and the Total band, while the outer top/bottom frame edges remain.
 	const headerAt = lines.findIndex((l) => plain(l).includes("Provider / Model"));
 	assert(
-		!lines.slice(headerAt + 1, firstRow).some((l) => l.includes("├")),
-		"no rule sits between the header and the first row",
+		!lines.slice(1, -1).some((l) => /─{3,}/.test(plain(l))),
+		"no inner horizontal rules are drawn inside the usage box",
 	);
-	assert(/^─+$/.test(plain(lines[headerAt - 1]!).slice(1, -1).trim()), "a rule closes the window bar above the header");
+	assert(plain(lines[headerAt - 1]!).slice(1, -1).trim() === "", "a blank row separates the window bar from the header");
 	// The header is content: it sits flush with the title, and each column title ends on the
 	// same cell its own numbers end on.
 	const headerLine = plain(lines[headerAt]!);
 	// The Total row always carries a value in every column, so it is the stable ruler to
 	// measure the grid against (a provider row can show `-`).
 	const dataLine = plain(lines[at("Total")]!);
-	// Total sits on the header's grid, one table-width rule above it.
+	// Total sits on the header's grid, separated by a blank row above it.
 	const totalLine = plain(lines[at("Total")]!);
 	assert(
 		totalLine.indexOf("Total") === headerLine.indexOf("Provider / Model"),
 		`Total is on the header grid (header ${headerLine.indexOf("Provider / Model")}, total ${totalLine.indexOf("Total")})`,
 	);
 	const totalAt = at("Total");
-	const ruleLine = plain(lines[totalAt - 1]!);
-	assert(/─{10,}/.test(ruleLine), "a table rule separates the table from Total");
-	assert(!/[├┤]/.test(ruleLine), "the table rule is not a full-width frame junction");
-	const ruleStart = ruleLine.indexOf("─");
-	const ruleEnd = ruleLine.lastIndexOf("─") + 1;
-	assert(ruleStart === headerLine.indexOf("Provider / Model"), "the rule starts at the table's left edge");
-	assert(ruleEnd <= 100 - 3, `the rule stops at the table's right edge, got ${ruleEnd}`);
+	assert(plain(lines[totalAt - 1]!).slice(1, -1).trim() === "", "a blank row separates the table from Total");
+	assert(plain(lines[detailAt - 1]!).slice(1, -1).trim() === "", "a blank row separates Total from the detail line");
 	// Every column title ends on the same cell its numbers end on, so the header reads as the
 	// table's ruler instead of drifting a column or two to the left of its own data.
 	const right = (line: string, text: string) => line.indexOf(text) + text.length;
 	assert(headerLine.indexOf("Provider / Model") === dataLine.indexOf("Total"), "the header name column starts over the row names");
 	// Flush left with the box title: no screen row is indented into a gutter the header does
-	// not use, so the title, the table, the rule and Total share one left edge.
+	// not use, so the title, the table, and Total share one left edge.
 	const titleCol = plain(lines[1]!).indexOf("Usage - Arnative");
 	for (const [what, col] of [
 		["the header", headerLine.indexOf("Provider / Model")],
-		["the table rule", ruleStart],
 		["Total", dataLine.indexOf("Total")],
 	] as const) {
 		assert(col === titleCol, `${what} starts on the title's left edge (${col} vs ${titleCol})`);
