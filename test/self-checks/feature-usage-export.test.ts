@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetUsageCache, type UsageSummary } from "../../lib/usage-store.ts";
-import { EXPORT_ENV, promFilePath, renderProm, writePromFile, exportProm } from "../../lib/features/usage-export.ts";
+import { EXPORT_ENV, promFilePath, renderProm, writePromFile, exportProm } from "../../lib/features/usage.ts";
 
-test("lib/features/usage-export.ts self-check", async () => {
+test("lib/features/usage.ts export self-check", async () => {
 	const NL = String.fromCharCode(10);
 
 	// ---- the renderer: pure, no agent dir involved ----

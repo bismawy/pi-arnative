@@ -3,14 +3,16 @@
  * Data layer (session scan + cache + aggregation) lives in lib/usage-store.ts —
  * shared with the Model tab.
  */
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { renameSync } from "node:fs";
 import { join } from "node:path";
 import { matchesKey, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { renderScreen, screenTitle } from "../box.ts";
 import { capitalize } from "../format.ts";
 import { thinkingColorOf, softOf, softSecondaryOf } from "../ansi.ts";
+import { writeAtomicSync } from "../preset-store.ts";
 import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../shortcuts.ts";
-import { collectUsageSummary, formatTokens, hasPrice, loadPriceTable, resetUsageStats, restoreUsageStats, USAGE_RANGES, type UsageRange, type UsageSummary } from "../usage-store.ts";
+import { collectUsageSummary, formatTokens, hasPrice, loadPriceTable, markUsageDirty, resetUsageStats, restoreUsageStats, USAGE_RANGES, type UsageRange, type UsageSummary } from "../usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -673,12 +675,96 @@ export async function openUsage(ctx: ExtensionCommandContext): Promise<boolean> 
 	return back === true;
 }
 
+/** At most one Prometheus textfile write per minute, whatever the turn rate. */
+const EXPORT_THROTTLE_MS = 60_000;
+/** `PI_ARNATIVE_EXPORT=0` disables the export (a local file with no network, so it ships on). */
+export const EXPORT_ENV = "PI_ARNATIVE_EXPORT";
+
+/** The textfile a collector scrapes: `<agent dir>/arnative/usage.prom`. */
+export function promFilePath(): string {
+	return join(getAgentDir(), "arnative", "usage.prom");
+}
+
+const escapePromLabel = (v: string): string => v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+
+/** Render Prometheus exposition text for one summary (pure and deterministic). */
+export function renderProm(summary: UsageSummary, now: number): string {
+	const lines: string[] = [];
+	const sample = (name: string, labels: [string, string][], value: number): string =>
+		`${name}${labels.length > 0 ? `{${labels.map(([k, v]) => `${k}="${escapePromLabel(v)}"`).join(",")}}` : ""} ${value}`;
+	const gauge = (name: string, help: string, value: number): void => {
+		lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`, sample(name, [], value));
+	};
+
+	const t = summary.totals;
+	gauge("arnative_cost_billed_total", "Provider-billed cost in USD across all sessions (totalFromProvider; estimates never mixed in).", t.cost);
+	gauge("arnative_cost_estimated_total", "Catalog-estimated cost in USD from models.json rates; never billed.", t.estimatedCost);
+	gauge("arnative_cost_today", "Provider-billed cost in USD in the current UTC day (the day buckets).", t.today?.cost ?? 0);
+	gauge("arnative_cost_30d", "Provider-billed cost in USD over the last 30 UTC days (the day buckets).", t.last30d?.cost ?? 0);
+	lines.push("# HELP arnative_tokens_total Token usage by provider, model and kind.", "# TYPE arnative_tokens_total gauge");
+	for (const p of summary.providers) {
+		for (const m of p.models) {
+			for (const [kind, value] of [["input", m.input], ["output", m.output], ["cache_read", m.cacheRead], ["cache_write", m.cacheWrite]] as const) {
+				const labels: [string, string][] = [
+					["provider", p.name],
+					["model", m.name],
+					["kind", kind],
+				];
+				lines.push(sample("arnative_tokens_total", labels, value));
+			}
+		}
+	}
+	gauge("arnative_sessions_total", "Distinct Pi session files scanned.", t.sessions);
+	gauge("arnative_usage_last_change_timestamp_seconds", "Unix time this process last saw the usage data change (not the last scrape).", now / 1000);
+	return `${lines.join("\n")}\n`;
+}
+
+/** Write the exposition atomically with Windows lock fallback. */
+export function writePromFile(text: string, path: string, rename: (from: string, to: string) => void = renameSync): void {
+	writeAtomicSync(path, text, rename);
+}
+
+let lastExportMs = 0;
+let lastExportText = "";
+let lastSummaryJson = "";
+let lastScanAt = 0;
+
+/** One throttled, diff-skipped, non-throwing Prometheus textfile export attempt. */
+export function exportProm(now: number, path: string = promFilePath()): boolean {
+	try {
+		if (process.env[EXPORT_ENV] === "0") return false;
+		if (now - lastExportMs < EXPORT_THROTTLE_MS) return false;
+		lastExportMs = now;
+		const summary = collectUsageSummary(true);
+		const key = JSON.stringify(summary);
+		if (key !== lastSummaryJson) {
+			lastSummaryJson = key;
+			lastScanAt = now;
+		}
+		const text = renderProm(summary, lastScanAt);
+		if (text === lastExportText) return false;
+		writePromFile(text, path);
+		lastExportText = text;
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerCommand("usage", {
 		description: "Arnative token & model usage dashboard",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			await openUsage(ctx);
 		},
+	});
+	pi.on("turn_end", () => {
+		markUsageDirty();
+		exportProm(Date.now());
+	});
+	pi.on("session_shutdown", () => {
+		lastExportMs = 0;
+		exportProm(Date.now());
 	});
 }
 

@@ -25,7 +25,7 @@ import { screenTitle } from "../box.ts";
 import { announce } from "../status-widget.ts";
 import { ListPicker, rowText, type ListPickerText, type ListRow } from "../list-picker.ts";
 import { BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, flagSetting, loadNumber, saveChoice } from "../preset-store.ts";
-import { collectUsageSummary } from "../usage-store.ts";
+import { collectUsageSummary, markUsageDirty } from "../usage-store.ts";
 import { formatCost } from "./usage.ts";
 
 // ---------------------------------------------------------------- settings
@@ -378,6 +378,7 @@ let overNotified = false;
 export default function registerBudget(pi: ExtensionAPI): void {
 	pi.on("session_start", () => {
 		overNotified = false;
+		markUsageDirty();
 	});
 
 	pi.on("input", async (event, ctx) => {
@@ -386,7 +387,7 @@ export default function registerBudget(pi: ExtensionAPI): void {
 			if (event.source === "extension") return { action: "continue" };
 			const caps = { day: activeBudgetDay(), month: activeBudgetMonth() };
 			if (caps.day === undefined && caps.month === undefined) return { action: "continue" };
-			const spend = spendNow(true);
+			const spend = spendNow(false);
 			// Unknown spend (no day buckets): never block.
 			if (spend === null) return { action: "continue" };
 			const enforce = activeBudgetEnforce();

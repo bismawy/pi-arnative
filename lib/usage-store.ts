@@ -608,6 +608,14 @@ function readTail(filePath: string, fromByte: number): Buffer | null {
 let cachedSummary: UsageSummary | null = null;
 let cachedRange: UsageRange | null = null;
 let lastScanMs = 0;
+let usageGen = 0;
+let lastScanGen = -1;
+
+/** Mark the cached usage summary stale after a turn or session switch so the next
+ *  non-forced read (`budget`, footer) scans once without forcing redundant rescans. */
+export function markUsageDirty(): void {
+	usageGen++;
+}
 
 /** Drop every in-memory memo so the next scan reads the cache file and the session files
  *  again. The self-check needs this: `forceScan` skips the 5s summary cache but still
@@ -620,6 +628,7 @@ export function resetUsageCache(): void {
 	cachedSummary = null;
 	cachedRange = null;
 	lastScanMs = 0;
+	lastScanGen = -1;
 }
 
 // =============================================================================
@@ -842,7 +851,8 @@ function effectiveProviders(rollup: FileRollup, baseline: FileRollup | undefined
 
 export function collectUsageSummary(forceScan = false, range: UsageRange = "all"): UsageSummary {
 	const now = Date.now();
-	if (!forceScan && cachedSummary && cachedRange === range && now - lastScanMs < 5000) {
+	const scanGen = usageGen;
+	if (!forceScan && cachedSummary && cachedRange === range && lastScanGen === scanGen && now - lastScanMs < 5000) {
 		return cachedSummary;
 	}
 
@@ -1064,6 +1074,7 @@ export function collectUsageSummary(forceScan = false, range: UsageRange = "all"
 	cachedSummary = { providers, projects, totals };
 	cachedRange = range;
 	lastScanMs = now;
+	lastScanGen = scanGen;
 	return cachedSummary;
 }
 

@@ -21,11 +21,6 @@ export interface ActiveClockSnapshot {
 	lastSeen: number;
 }
 
-export interface ChatTimestampState {
-	map: Map<string, number>;
-	theme: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
-}
-
 export interface ThinkingLabelState {
 	ui: { requestRender(): void } | null;
 	active: Set<object>;
@@ -45,7 +40,6 @@ export interface RuntimeState {
 	activeClock: ActiveClockSnapshot | null;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	clockTimer: ReturnType<typeof setInterval> | null;
-	workTimer: ReturnType<typeof setInterval> | null;
 	promptTypedAt: number;
 	promptIdleTimer: ReturnType<typeof setTimeout> | null;
 	minimalFooterExpanded: { left: boolean; right: boolean } | null;
@@ -54,10 +48,9 @@ export interface RuntimeState {
 	wrappedTuis: WeakSet<object>;
 	editor: unknown;
 	workingUi: unknown;
-	workingTheme: unknown;
 	resourceStore: Map<string, string[]> | null;
 	headerInstance: unknown;
-	chatTimestampState: ChatTimestampState | null;
+	userTimestamps: Map<string, number> | null;
 	thinkingLabelState: ThinkingLabelState | null;
 	renderCacheState: unknown;
 	autocompactState: unknown;
@@ -76,7 +69,6 @@ function createFreshRuntime(): RuntimeState {
 		activeClock: null,
 		idleTimer: null,
 		clockTimer: null,
-		workTimer: null,
 		promptTypedAt: 0,
 		promptIdleTimer: null,
 		minimalFooterExpanded: null,
@@ -85,10 +77,9 @@ function createFreshRuntime(): RuntimeState {
 		wrappedTuis: new WeakSet<object>(),
 		editor: null,
 		workingUi: null,
-		workingTheme: null,
 		resourceStore: null,
 		headerInstance: null,
-		chatTimestampState: null,
+		userTimestamps: null,
 		thinkingLabelState: null,
 		renderCacheState: null,
 		autocompactState: null,
