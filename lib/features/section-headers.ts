@@ -290,12 +290,17 @@ export function listingLocalPaths(expanded: string): string[] {
 	return paths;
 }
 
-/** Last segment of a path; an `index.ts` file names its folder instead. */
+/** Last segment of a path; an `index.ts` file names its folder instead (skipping generic `extensions/`). */
 function fileLabel(path: string): string {
-	const segments = path.split("/").filter(Boolean);
+	const segments = path.split("/").filter((s) => Boolean(s) && s !== ".");
 	const last = segments[segments.length - 1] ?? path;
 	if ((last === "index.ts" || last === "index.js") && segments.length > 1) {
-		return segments[segments.length - 2]!;
+		const parent = segments[segments.length - 2]!;
+		if (parent === "extensions" || parent === "src" || parent === "dist") {
+			const grand = segments.length > 2 ? segments[segments.length - 3]! : "";
+			return grand && grand !== ".." ? grand : `${parent}/${last}`;
+		}
+		return parent;
 	}
 	return last;
 }
@@ -306,13 +311,20 @@ export function extensionTabItems(expanded: string, agentDir: string, cwd: strin
 	const localRoots = packages.map((pkg) => pkg.localPath).filter((root): root is string => root !== null);
 	const items = packages.map((pkg) => pkg.label);
 	const seen = new Set(items);
+	const packageNames = new Set(
+		packages.map((pkg) => {
+			const base = splitVersion(pkg.label).name.toLowerCase();
+			const slash = base.lastIndexOf("/");
+			return slash >= 0 ? base.slice(slash + 1) : base;
+		}),
+	);
 	const locals: string[] = [];
 	for (const path of listingLocalPaths(expanded)) {
 		const comparable = comparablePath(path);
 		// Modules of a local-path package are rows of that package, not files of their own.
 		if (localRoots.some((root) => comparable === root || comparable.startsWith(`${root}/`))) continue;
 		const label = fileLabel(path.replace(/\\/g, "/"));
-		if (seen.has(label)) continue;
+		if (seen.has(label) || packageNames.has(label.toLowerCase())) continue;
 		seen.add(label);
 		locals.push(label);
 	}

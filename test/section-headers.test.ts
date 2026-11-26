@@ -465,4 +465,21 @@ test("sectionExpandedBodyOf reads Pi 1.6.1 build+state ExpandableText without mu
 	const expanded = sectionExpandedBodyOf(child);
 	assert.ok(expanded.includes("~/.pi/agent/extensions/local.ts"));
 	assert.equal(state.expanded, false, "state.expanded restored after reading expanded listing");
+
+	// An explicit `-e ./extensions/index.ts` (preview) or `<pkg>/extensions/index.ts` must not collapse to bare "extensions"
+	// and must deduplicate against an already-installed scoped npm package of the same name.
+	const emptyDir = mkdtempSync(join(tmpdir(), "arnative-hdr-lbl-"));
+	try {
+		assert.deepEqual(
+			extensionTabItems("[Extensions]\n    ./extensions/index.ts\n    D:/work/my-pkg/extensions/index.ts", emptyDir, emptyDir),
+			["extensions/index.ts", "my-pkg"],
+		);
+		writeFileSync(join(emptyDir, "settings.json"), JSON.stringify({ packages: ["npm:@bismawy/pi-arnative@0.16.1"] }));
+		assert.deepEqual(
+			extensionTabItems("[Extensions]\n    D:/workspace/Pi/pi-arnative/extensions/index.ts\n    ~/.pi/agent/extensions/magpie.ts", emptyDir, emptyDir),
+			["@bismawy/pi-arnative@0.16.1", "magpie.ts"],
+		);
+	} finally {
+		rmSync(emptyDir, { recursive: true, force: true });
+	}
 });
