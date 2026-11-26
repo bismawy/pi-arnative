@@ -13,6 +13,9 @@
 - **Rebalanced `/arnative` settings menu into four groups.** Grouped the 13 settings into `Appearance` (Themes, Headers, Footers, Chatbox), `Display` (Animations, Diffs, Render cache), `Models & Context` (Providers, Model heal, Auto-compact, Payload limit), and `Spend` (Usage, Budget) while keeping all `/arnative <subcommand>` shortcuts unchanged (`lib/features/arnative.ts`).
 - **Reduced footer git subprocesses and per-frame render work.** Merged `git status` and upstream ahead/behind into one `git status --porcelain=v2 --branch` call, cached `git describe --tags` per `(cwd, branch)`, throttled `tool_execution_end` refreshes to 500 ms with a trailing run, cached theme `fg` token support in `fgOr()`, memoized theme painters and cwd/git segments across frames, pre-measured cell widths once in `layoutFooterGrid()`, and reset `assistantStartMs` on every `message_start` role (`lib/git-status.ts`, `lib/ansi.ts`, `lib/features/footer.ts`).
 
+### Fixed
+- **Selectable text on the minimal footer head row.** Pressing on `cwd`, git, or model text in `Arnative (Minimal)` now leaves the press event to Pi so drag, double-click, and triple-click text selection work, while single-click without drag and pressing the `▲`/`▼` arrow still toggle each side (`lib/features/footer.ts`, `test/footer-minimal.test.ts`).
+
 ## [0.16.1] - 2026-11-21
 
 ### Fixed

@@ -226,9 +226,14 @@ let currentThinkingLevel: string | undefined = undefined;
 let currentModel: { id: string; name?: string; provider?: string } | undefined = undefined;
 let rerender: (() => void) | null = null;
 let lastPokeMs = 0;
-/** Column ranges of the minimal footer's disclosure markers, recorded per render
+/** Column ranges of the minimal footer's head cells and disclosure arrows, recorded per render
  *  (mouse coordinates are component-local, so they must come from the same frame). */
-let minimalRanges: { left: [number, number]; right: [number, number] } | null = null;
+let minimalRanges: {
+	left: [number, number];
+	right: [number, number];
+	leftArrow: [number, number];
+	rightArrow: [number, number];
+} | null = null;
 
 // One shared clock: a /reload re-imports this module, so a fresh instance would restart
 // a session that is already hours old. Exported so a test can drive the render path.
@@ -395,7 +400,13 @@ export function placeMinimalHead(
 	left: string,
 	right: string,
 	width: number,
-): { row: string; left: [number, number]; right: [number, number] } {
+): {
+	row: string;
+	left: [number, number];
+	right: [number, number];
+	leftTruncated: boolean;
+	rightTruncated: boolean;
+} {
 	const lw = visibleWidth(left);
 	const rw = visibleWidth(right);
 	if (lw + 1 + rw <= width) {
@@ -404,6 +415,8 @@ export function placeMinimalHead(
 			row: left + " ".repeat(rightStart - lw) + right,
 			left: lw > 0 ? [0, lw - 1] : [-1, -1],
 			right: rw > 0 ? [rightStart, width - 1] : [-1, -1],
+			leftTruncated: false,
+			rightTruncated: false,
 		};
 	}
 	// Too wide: the left head is cut, the right one keeps its edge column like pairRow.
@@ -417,6 +430,8 @@ export function placeMinimalHead(
 		row: lCut + " " + rCut,
 		left: lCutW > 0 ? [0, lCutW - 1] : [-1, -1],
 		right: rCutW > 0 ? [rightStart, rightStart + rCutW - 1] : [-1, -1],
+		leftTruncated: lCut !== left,
+		rightTruncated: rCut !== right,
 	};
 }
 
@@ -1071,6 +1086,8 @@ export default function (pi: ExtensionAPI) {
 					const unsub = footerData.onBranchChange(() => {
 						void refreshGit(cwd, { force: true }).then(() => tui.requestRender());
 					});
+					// Swallows the follow-up release/click after a press on the ▲/▼ arrow so it never toggles twice.
+					let swallowMinimalClick = false;
 					return {
 						dispose() {
 							rerender = null;
@@ -1217,7 +1234,13 @@ export default function (pi: ExtensionAPI) {
 							if (isMinimal) {
 								// Own head row: it reports the zones measured from what it actually placed.
 								const placed = placeMinimalHead(left1, right1, width);
-								minimalRanges = { left: placed.left, right: placed.right };
+								const leftArrow: [number, number] = !placed.leftTruncated && placed.left[1] >= placed.left[0]
+									? [Math.max(placed.left[0], placed.left[1] - 1), placed.left[1]]
+									: [-1, -1];
+								const rightArrow: [number, number] = !placed.rightTruncated && placed.right[1] >= placed.right[0]
+									? [Math.max(placed.right[0], placed.right[1] - 1), placed.right[1]]
+									: [-1, -1];
+								minimalRanges = { left: placed.left, right: placed.right, leftArrow, rightArrow };
 								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, ` ${dim("·")} `, width).slice(1);
 								return [placed.row, ...rest];
 							}
@@ -1225,21 +1248,39 @@ export default function (pi: ExtensionAPI) {
 							return layoutFooterGrid(left1, right1, leftRows, rightRows, sep, ` ${dim("·")} `, width);
 						},
 						handleMouse(event: TuiMouseEvent) {
-							// Clicks only reach here in fullscreen mode; the keyboard shortcut covers
-							// regular mode. Return handled on press so pi records the target — without
-							// that it never dispatches the follow-up click.
-							if (event.button !== "left" || event.y !== 0) return undefined;
+							// Matches arnative-box (tools.ts / todos.ts):
+							// - Press on the ▲/▼ arrow toggles immediately and swallows the follow-up
+							//   release/click so a 1-cell drift still works without double-toggling.
+							// - Press on head text returns undefined so pi handles text selection
+							//   (drag-select, double-click word, triple-click line).
+							// - Single-click without drag on either head (clickCount === 1) toggles
+							//   that side; double/triple clicks stay with pi's selection.
+							if (event.button !== "left") return undefined;
+							if (event.type === "press") swallowMinimalClick = false;
+							if (swallowMinimalClick && (event.type === "release" || event.type === "click")) {
+								if (event.type === "click") swallowMinimalClick = false;
+								return { handled: true, render: false };
+							}
+							if (event.y !== 0) return undefined;
 							const ranges = minimalRanges;
 							if (!ranges) return undefined;
 							const inside = (r: [number, number]) => event.x >= r[0] && event.x <= r[1];
+							const toggle = (side: "left" | "right") => {
+								const state = minimalExpanded();
+								state[side] = !state[side];
+								poke();
+								return { handled: true, render: true };
+							};
+							if (event.type === "press") {
+								const arrowHit = inside(ranges.leftArrow) ? "left" : inside(ranges.rightArrow) ? "right" : null;
+								if (!arrowHit) return undefined;
+								swallowMinimalClick = true;
+								return toggle(arrowHit);
+							}
+							if (event.type !== "click" || (event.clickCount ?? 1) !== 1) return undefined;
 							const hit = inside(ranges.left) ? "left" : inside(ranges.right) ? "right" : null;
 							if (!hit) return undefined;
-							if (event.type === "press") return { handled: true, render: false };
-							if (event.type !== "click") return undefined;
-							const state = minimalExpanded();
-							state[hit] = !state[hit];
-							poke();
-							return { handled: true, render: true };
+							return toggle(hit);
 						},
 					};
 				});
