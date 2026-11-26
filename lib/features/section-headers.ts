@@ -104,13 +104,25 @@ function softOnTier(paint: (s: string) => string, th: Themeish, fallbacks: strin
 	return out !== text ? out : fgFirst(th, fallbacks, text);
 }
 
+interface SectionChildLike {
+	getCollapsedText?: () => unknown;
+	getExpandedText?: () => unknown;
+	build?: () => unknown;
+	state?: { expanded?: boolean };
+	text?: unknown;
+	content?: unknown;
+	getText?: () => unknown;
+	setText?: (text: string) => void;
+	render?: (width: number) => string[];
+}
+
 /**
  * Collapsed body of a pi startup section ("[Skills]\n  a, b"). pi 0.99 dropped
  * ExpandableText's own getCollapsedText/getExpandedText fields for a `build` callback
  * plus a `state` object, so both shapes are read here and older pi keeps working.
  * Returns null when the child is not an expandable section.
  */
-export function sectionBodyOf(child: any): string | null {
+export function sectionBodyOf(child: SectionChildLike | null | undefined): string | null {
 	if (typeof child?.getCollapsedText === "function") return String(child.getCollapsedText());
 	if (typeof child?.build === "function" && child?.state && typeof child.state === "object") {
 		return String(child.build());
@@ -118,8 +130,26 @@ export function sectionBodyOf(child: any): string | null {
 	return null;
 }
 
+/**
+ * Expanded body of a pi startup section. Pi 0.99–1.6.1+ stores `expanded` on `child.state`
+ * and branches inside `child.build()` instead of exposing `getExpandedText()`.
+ */
+export function sectionExpandedBodyOf(child: SectionChildLike | null | undefined): string {
+	if (typeof child?.getExpandedText === "function") return String(child.getExpandedText());
+	if (typeof child?.build === "function" && child?.state && typeof child.state === "object") {
+		const prev = child.state.expanded;
+		child.state.expanded = true;
+		try {
+			return String(child.build());
+		} finally {
+			child.state.expanded = prev;
+		}
+	}
+	return "";
+}
+
 /** Text of a themed text line, whichever pi version built it (pi 0.99 defers it to `build`). */
-function themedTextOf(child: any): string {
+function themedTextOf(child: SectionChildLike | null | undefined): string {
 	if (typeof child?.build === "function") return String(child.build());
 	const direct = child?.text ?? child?.content;
 	if (typeof direct === "string" && direct !== "") return direct;
@@ -204,6 +234,9 @@ function comparablePath(path: string): string {
 	return expanded.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+/** Strip surrounding whitespace and embedded newlines/control chars from a package source. */
+const cleanPackageSource = (raw: string): string => raw.replace(/[\r\n\t\x00-\x1f\x7f]+/g, "").trim();
+
 /**
  * Packages configured in settings, in `pi list` order: user scope first, then project.
  * Read straight from the two settings files; the header runs on every render, so it
@@ -216,7 +249,7 @@ export function installedPackages(agentDir: string, cwd: string): InstalledPacka
 				packages?: Array<string | { source?: unknown }>;
 			};
 			return (settings.packages ?? [])
-				.map((pkg) => (typeof pkg === "string" ? pkg : typeof pkg.source === "string" ? pkg.source : ""))
+				.map((pkg) => cleanPackageSource(typeof pkg === "string" ? pkg : typeof pkg.source === "string" ? pkg.source : ""))
 				.filter((source) => source !== "");
 		} catch {
 			return []; // no settings file (or unreadable JSON): the tab shows no package, not an error
@@ -226,15 +259,22 @@ export function installedPackages(agentDir: string, cwd: string): InstalledPacka
 		{ sources: sourcesOf(join(agentDir, "settings.json")), baseDir: agentDir },
 		{ sources: sourcesOf(join(cwd, CONFIG_DIR_NAME, "settings.json")), baseDir: join(cwd, CONFIG_DIR_NAME) },
 	];
-	return scopes.flatMap(({ sources, baseDir }) =>
-		sources.map((source) => {
+	const seen = new Set<string>();
+	const out: InstalledPackage[] = [];
+	for (const { sources, baseDir } of scopes) {
+		for (const source of sources) {
 			const packaged = /^(npm|git):/.test(source);
 			// Relative local sources resolve against their own scope dir, the way pi installs them.
 			const absolute = /^([A-Za-z]:)?[\\/]/.test(source) || source.startsWith("~") ? source : join(baseDir, source);
 			const label = source.startsWith("npm:") ? npmRow(source, agentDir) : source;
-			return { label, localPath: packaged ? null : comparablePath(absolute) };
-		}),
-	);
+			const localPath = packaged ? null : comparablePath(absolute);
+			const key = localPath ?? label.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push({ label, localPath });
+		}
+	}
+	return out;
 }
 
 /** Loose extension files from pi's expanded `[Extensions]` listing (never package modules). */
@@ -314,7 +354,12 @@ const SHORTCUTS: string[] = [
 ];
 
 export function wrapCommaItems(items: string[], maxWidth: number): string[] {
-	return wrapTokens(items, maxWidth, ", ", ",");
+	return wrapTokens(
+		items.map((item) => item.replace(/[\r\n]+/g, " ").trim()).filter(Boolean),
+		maxWidth,
+		", ",
+		",",
+	);
 }
 
 function wrapTokens(items: string[], maxWidth: number, sep = "  ", trailing = ""): string[] {
@@ -493,15 +538,12 @@ export class ArnativeHeader implements Component {
 		// Drop bracketed details from the tail of the name ("... Free (1M) [OpenCode] (Freeflow)"
 		// -> "Space Bunny Free"); the details still show in the Model tab data line.
 		let modelLabel = `Model [${fullModelName.replace(/(\s*\([^()]*\)|\s*\[[^[\]]*\])+$/, "").trim()}]`;
-		// Responsive on medium screens: drop the provider when columns < 112
-		if (width < 112 && modelLabel.includes(" (")) {
-			modelLabel = `Model [${fullModelName.slice(0, fullModelName.indexOf(" (")).trim()}]`;
-		}
 		// Below 88 columns: shorten the model name
 		if (width < 88 && modelLabel.length > 18) {
 			modelLabel = `Model [${modelLabel.slice(7, 18).trim()}…]`;
 		}
 
+		const extCount = tabStore.get("Extensions")?.length ?? 0;
 		return [
 			{ key: "Directory", name: "Directory", icon: SECTION_ICONS.Directory, count: 0, label: dirLabel },
 			{ key: "Model", name: "Model", icon: SECTION_ICONS.Model, count: 0, label: modelLabel },
@@ -523,8 +565,8 @@ export class ArnativeHeader implements Component {
 				key: "Extensions",
 				name: "Extensions",
 				icon: SECTION_ICONS.Extensions,
-				count: tabStore.get("Extensions")?.length ?? 0,
-				label: countsKnown ? `Extensions [${tabStore.get("Extensions")?.length ?? 0}]` : "Extensions [—]",
+				count: extCount,
+				label: countsKnown || extCount > 0 ? `Extensions [${extCount}]` : "Extensions [—]",
 			},
 			{
 				key: "Shortcut",
@@ -775,7 +817,10 @@ if (UserMessageComponent?.prototype) {
 		addChild?: (child: unknown) => unknown;
 	};
 	if (typeof containerProto?.addChild === "function") {
-		patchOnce(containerProto, "addChild", (origAddChild) => function (this: any, child: any): unknown {
+		patchOnce(containerProto, "addChild", (origAddChild) => function (
+			this: Record<string, unknown>,
+			child: SectionChildLike | null | undefined,
+		): unknown {
 			// "Pi (system)" preset = pi's own header, so leave pi's startup list untouched.
 			if (activeHeaderPreset() === "Pi (system)") return origAddChild.call(this, child);
 			try {
@@ -783,18 +828,18 @@ if (UserMessageComponent?.prototype) {
 				const sectionName = body === null ? null : sectionNameOf(body);
 				const isSection =
 					body !== null &&
-					typeof child.setText === "function" &&
-					typeof child.render === "function" &&
+					typeof child?.setText === "function" &&
+					typeof child?.render === "function" &&
 					(sectionName === null ? false : SECTION_ICONS[sectionName] !== undefined);
 
-				if (isSection && sectionName && body !== null) {
+				if (isSection && sectionName && body !== null && child) {
 					// Mark this container as the loadedResourcesContainer
-					(this as Record<string, unknown>)._isLoadedResourcesContainer = true;
+					this._isLoadedResourcesContainer = true;
 
 					countsKnown = true;
 					if (sectionName === "Extensions") {
 						// The expanded listing carries the loose files; the packages come from settings.
-						const expanded = typeof child.getExpandedText === "function" ? String(child.getExpandedText()) : "";
+						const expanded = sectionExpandedBodyOf(child);
 						tabStore.set("Extensions", extensionTabItems(expanded, getAgentDir(), getCwd() || process.cwd()));
 					} else {
 						const rawBody = body.split("\n").slice(1).join("\n");
@@ -809,10 +854,10 @@ if (UserMessageComponent?.prototype) {
 					if (hdr?.tui) {
 						hdr.tui.requestRender();
 					}
-				} else if ((this as Record<string, unknown>)._isLoadedResourcesContainer) {
+				} else if (this._isLoadedResourcesContainer) {
 					// pi core's "[Extension issues]" -> wrap in an arnative box.
 					const text = themedTextOf(child);
-					if (text.includes("[Extension issues]") && typeof child.render === "function") {
+					if (text.includes("[Extension issues]") && typeof child?.render === "function") {
 						const origRender = child.render.bind(child);
 						// Shortcut hint only when the shortcut registry is reachable; otherwise just the
 						// two-line compact block.
@@ -857,7 +902,9 @@ export default function (pi: ExtensionAPI) {
 			/* older pi without getSettings: keep pi's default (listing shown) */
 		}
 		resourcesListingShown(quiet === false);
-		for (const key of ["Context", "Skills", "Extensions"] as const) tabStore.set(key, []);
+		versionCache.clear();
+		for (const key of ["Context", "Skills"] as const) tabStore.set(key, []);
+		tabStore.set("Extensions", extensionTabItems("", getAgentDir(), ctx.cwd || getCwd(ctx) || process.cwd()));
 		// A context without a theme (project-trust prompt) must not drop the one we have.
 		const th = themeOf<Themeish>(ctx);
 		if (th) setActiveTheme(th);

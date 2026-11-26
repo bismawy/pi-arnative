@@ -29,6 +29,7 @@ import {
 	extensionTabItems,
 	resourcesListingShown,
 	sectionBodyOf,
+	sectionExpandedBodyOf,
 	sectionNameOf,
 	setHeaderPreset,
 	tabStore,
@@ -424,4 +425,44 @@ test("section-headers visual suite", () => {
 	const narrowIssues = extensionIssuesLines(null, 24, issuesRows, "[ctrl+o to expand]");
 	assert(narrowIssues.every((l) => visibleWidth(l) === 24), "every box line is exactly 24 columns");
 
+});
+
+test("installedPackages trims stray newlines, dedupes scopes, and wrapCommaItems stays single-line per row", () => {
+	const dir = mkdtempSync(join(tmpdir(), "arnative-hdr-trim-"));
+	try {
+		mkdirSync(join(dir, "npm", "node_modules", "@ff-labs", "pi-fff"), { recursive: true });
+		writeFileSync(join(dir, "npm", "node_modules", "@ff-labs", "pi-fff", "package.json"), JSON.stringify({ version: "0.11.0" }));
+		mkdirSync(join(dir, "proj", ".pi"), { recursive: true });
+		writeFileSync(
+			join(dir, "settings.json"),
+			JSON.stringify({ packages: ["npm:@ff-labs/pi-fff\n ", "npm:@bismawy/pi-arnative@0.16.1"] }),
+		);
+		writeFileSync(
+			join(dir, "proj", ".pi", "settings.json"),
+			JSON.stringify({ packages: ["npm:@ff-labs/pi-fff"] }),
+		);
+
+		const pkgs = installedPackages(dir, join(dir, "proj"));
+		assert.deepEqual(
+			pkgs.map((p) => p.label),
+			["@ff-labs/pi-fff@0.11.0", "@bismawy/pi-arnative@0.16.1"],
+			"stray newline trimmed, version resolved, and project duplicate deduped",
+		);
+		const wrapped = wrapCommaItems(["a\n ", "b", "c"], 80);
+		assert.equal(wrapped.length, 1);
+		assert.equal(wrapped[0], "a, b, c");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("sectionExpandedBodyOf reads Pi 1.6.1 build+state ExpandableText without mutating expanded state", () => {
+	const state = { expanded: false };
+	const child = {
+		state,
+		build: () => (state.expanded ? "[Extensions]\n    ~/.pi/agent/extensions/local.ts" : "[Extensions]\n  local.ts"),
+	};
+	const expanded = sectionExpandedBodyOf(child);
+	assert.ok(expanded.includes("~/.pi/agent/extensions/local.ts"));
+	assert.equal(state.expanded, false, "state.expanded restored after reading expanded listing");
 });
