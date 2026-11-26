@@ -58,7 +58,7 @@ import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEG
 import { openUsage } from "./usage.ts";
 import { SHORTCUT_OPEN_ARNATIVE } from "../shortcuts.ts";
 
-export type MenuGroup = "Appearance" | "Performance" | "Models" | "Spend";
+export type MenuGroup = "Appearance" | "Display" | "Models & Context" | "Spend";
 
 export interface MenuCategory {
 	label: MenuGroup;
@@ -66,9 +66,9 @@ export interface MenuCategory {
 }
 
 export const MENU_CATEGORIES: readonly MenuCategory[] = [
-	{ label: "Appearance", description: "themes, headers, footers, chatbox, animations, diffs" },
-	{ label: "Performance", description: "auto-compact, render cache, payload limit" },
-	{ label: "Models", description: "custom providers, model heal" },
+	{ label: "Appearance", description: "themes, headers, footers, chatbox" },
+	{ label: "Display", description: "animations, diffs, render cache" },
+	{ label: "Models & Context", description: "custom providers, model heal, auto-compact, payload limit" },
 	{ label: "Spend", description: "usage dashboard, budget caps" },
 ];
 
@@ -691,50 +691,50 @@ export const MENUS: ArnativeMenu[] = [
 		value: "animations",
 		label: "Animations",
 		description: "choose the working spinner",
-		group: "Appearance",
+		group: "Display",
 		open: openAnimations,
 	},
 	{
 		value: "diffs",
 		label: "Diffs",
 		description: "side-by-side Before/After or unified diff",
-		group: "Appearance",
+		group: "Display",
 		open: openDiffs,
-	},
-	{
-		value: "compact",
-		label: "Auto-compact",
-		description: "smart by window or a fixed token budget (off by default)",
-		group: "Performance",
-		open: openAutoCompact,
 	},
 	{
 		value: "render",
 		label: "Render cache",
 		description: "cache settled transcript rows across frames (on by default)",
-		group: "Performance",
+		group: "Display",
 		open: openRenderCache,
-	},
-	{
-		value: "payload",
-		label: "Payload limit",
-		description: "max HTTP request size for remote proxies (1 MB by default)",
-		group: "Performance",
-		open: openPayloadLimit,
 	},
 	{
 		value: "providers",
 		label: "Providers",
 		description: "custom endpoints: endpoint, key, name — the rest is automatic",
-		group: "Models",
+		group: "Models & Context",
 		open: openProviders,
 	},
 	{
 		value: "heal",
 		label: "Model heal",
 		description: "auto-fix models.json: compat flags, limits, thinking levels (on by default)",
-		group: "Models",
+		group: "Models & Context",
 		open: openModelHeal,
+	},
+	{
+		value: "compact",
+		label: "Auto-compact",
+		description: "smart by window or a fixed token budget (off by default)",
+		group: "Models & Context",
+		open: openAutoCompact,
+	},
+	{
+		value: "payload",
+		label: "Payload limit",
+		description: "max HTTP request size for remote proxies (1 MB by default)",
+		group: "Models & Context",
+		open: openPayloadLimit,
 	},
 	{
 		value: "usage",
