@@ -2,45 +2,30 @@
 // Launches pi with working-tree extensions via absolute paths and -ne (isolated from
 // global installs), stamping .git/arnative-preview on clean exit for pre-push verification.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const EXTENSIONS = [
-	"tools.ts",
-	"section-headers.ts",
-	"footer.ts",
-	"timestamps.ts",
-	"ui-render-tweaks.ts",
-	"render-cache.ts",
-	"usage.ts",
-	"usage-export.ts",
-	"budget.ts",
-	"animations.ts",
-	"autocompact.ts",
-	"model-heal.ts",
-	"todos.ts",
-	"arnative.ts",
-];
+const EXTENSIONS = ["index.ts"];
 
 // Must stay byte-identical to fingerprint() in the global pre-push hook:
 // the same paths in the same order, hashed the same way.
 function fingerprint(rev) {
 	const tree = execFileSync("git", ["ls-tree", "-r", rev, "--", "extensions", "lib", "themes", "package.json"], {
 		cwd: root,
-		encoding: "utf8",
 	});
-	return execFileSync("sha256sum", [], { input: tree, encoding: "utf8" }).slice(0, 64);
+	return createHash("sha256").update(tree).digest("hex");
 }
 
 const porcelain = () => execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim();
 
-// `pi` is an npm wrapper: a sh script on POSIX, a .cmd on Windows — and Node's spawnSync
-// cannot launch either on Windows (ENOENT for the extensionless script, EINVAL for the
-// .cmd without a shell). Resolve the real entry once: `where pi` gives the global npm
-// bin dir, and the package it installs lives one level over. Node itself runs it fine.
+// `pi` is an npm or installer wrapper (sh on POSIX, .cmd/.ps1 on Windows) — and Node's
+// spawnSync cannot launch extensionless scripts or .cmd directly on Windows without a shell.
+// Resolve the JS launcher next to `where pi` (`pi-launcher.js` for Pi's installer, or the
+// global npm `cli.js` entry). Node itself runs either fine.
 function resolvePi() {
 	const direct = spawnSync("pi", ["--version"], { encoding: "utf8" });
 	if (!direct.error) return { file: "pi", prefix: [] };
@@ -48,15 +33,22 @@ function resolvePi() {
 		throw new Error(`Cannot launch pi: ${direct.error.message}`);
 	}
 	const where = spawnSync("where", ["pi"], { encoding: "utf8" });
-	const firstLine = where.stdout.trim().split(/\r?\n/)[0];
-	if (where.status !== 0 || !firstLine) {
+	const lines = where.stdout.trim().split(/\r?\n/).filter(Boolean);
+	if (where.status !== 0 || lines.length === 0) {
 		throw new Error("Cannot launch pi: 'pi' not found on PATH (spawnSync failed and `where pi` found nothing)");
 	}
-	const cli = join(dirname(firstLine), "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
-	if (!existsSync(cli)) {
-		throw new Error(`Cannot launch pi: resolved the npm bin dir from 'where pi', but no entry script at ${cli}`);
+	const tried = [];
+	for (const hit of lines) {
+		const dir = dirname(hit);
+		for (const candidate of [
+			join(dir, "pi-launcher.js"),
+			join(dir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js"),
+		]) {
+			tried.push(candidate);
+			if (existsSync(candidate)) return { file: process.execPath, prefix: [candidate] };
+		}
 	}
-	return { file: process.execPath, prefix: [cli] };
+	throw new Error(`Cannot launch pi: checked ${tried.join(", ")} from 'where pi', none existed`);
 }
 
 // Looking at uncommitted work is allowed and useful. *Certifying* it is not: the stamp is

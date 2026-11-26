@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runTodo } from "../extensions/todos.ts";
+import { runTodo } from "../lib/features/todos.ts";
 import {
 	addTodo,
 	allDone,

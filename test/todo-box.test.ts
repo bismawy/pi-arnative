@@ -14,7 +14,7 @@ import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-age
 
 initTheme("arnative-cyberpunk");
 process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "arnative-todo-box-"));
-await import("../extensions/tools.ts");
+await import("../lib/features/tools.ts");
 
 let definition: any;
 const pi: any = {
@@ -23,7 +23,7 @@ const pi: any = {
 	registerShortcut: () => {},
 	registerCommand: () => {},
 };
-const { default: extension } = await import("../extensions/todos.ts");
+const { default: extension } = await import("../lib/features/todos.ts");
 await extension(pi);
 
 const ctx: any = {

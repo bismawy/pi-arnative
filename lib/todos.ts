@@ -9,7 +9,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { softOf, thinkingColorOf } from "./ansi.ts";
 import { renderBoxLines, renderBoxRows } from "./box.ts";
-import { assert, isMain } from "./check.ts";
 
 export type TodoStatus = "pending" | "in_progress" | "completed";
 export const LIST_STATUSES = ["pending", "in_progress", "completed"] as const;
@@ -34,8 +33,8 @@ export const LIST_ICON = "\uf03a";
 export const LIST_ROWS = 5;
 /** Bounds of the adaptive window: fewer than three rows says nothing, more than nine eats the
  *  chat area even on a tall terminal. */
-export const MIN_LIST_ROWS = 3;
-export const MAX_LIST_ROWS = 9;
+const MIN_LIST_ROWS = 3;
+const MAX_LIST_ROWS = 9;
 /** Lines the box spends on everything that is not a task: frame, heading, two counters. */
 const BOX_CHROME = 5;
 /** Lines kept for the editor, the footer and a usable chat area above the box. */
@@ -51,15 +50,15 @@ export function listRowsFor(terminalRows: number | undefined): number {
 	const fit = Math.floor(terminalRows) - BOX_CHROME - SCREEN_RESERVE;
 	return Math.min(MAX_LIST_ROWS, Math.max(MIN_LIST_ROWS, fit));
 }
-export const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
+const STATUS_GLYPH: Record<TodoStatus, string> = { pending: "◌", in_progress: "◉", completed: "✓" };
 /** Token for the task text itself. Queued recedes to dim and a done task reads as ordinary
  *  text; the task in progress takes the soft accent, which is derived rather than a token (see
  *  `softOf`), so it is painted separately. */
-export const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_progress: "text", completed: "text" };
+const STATUS_TEXT: Record<TodoStatus, string> = { pending: "dim", in_progress: "text", completed: "text" };
 /** Token per status. In progress borrows the footer's model-name token (`mdHeading`), so the
  *  running task is the brightest row in the box, the way the model is the brightest text in
  *  the footer. */
-export const STATUS_COLOR: Record<TodoStatus, string> = { pending: "dim", in_progress: "mdHeading", completed: "accent" };
+const STATUS_COLOR: Record<TodoStatus, string> = { pending: "dim", in_progress: "mdHeading", completed: "accent" };
 /** Tried when the theme has no such token; pi throws on an unknown color. */
 const STATUS_FALLBACK: Record<TodoStatus, string> = { pending: "dim", in_progress: "accent", completed: "accent" };
 export const HINT_EXPAND = "[show]";
@@ -91,7 +90,7 @@ function fgOr(theme: FgTheme, colors: string[], text: string): string {
 
 /** Every task from a stored file, or `null` when the file is not one. Tolerant on fields,
  *  strict on the shape: a hand-edited or half-written file must not break the widget. */
-export function normalizeState(raw: unknown): TaskState | null {
+export function normalizeState(raw: unknown): TodoState | null {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
 	const tasks = (raw as { tasks?: unknown }).tasks;
 	if (!Array.isArray(tasks)) return null;
@@ -111,7 +110,7 @@ export function normalizeState(raw: unknown): TaskState | null {
 
 /** One row's worth of text: control characters (an ANSI escape in a subject would break the
  *  frame) become spaces, runs collapse, and the tail is cut. */
-export function tidy(text: string): string {
+function tidy(text: string): string {
 	const clean = text
 		.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
 		.replace(/\s+/g, " ")
@@ -178,7 +177,7 @@ export const headingText = (state: TodoState): string => {
 };
 
 /** ` · Tulis widget`, or ` · All tasks finished` once nothing is left (empty when idle). */
-export function collapsedSuffix(state: TodoState): string {
+function collapsedSuffix(state: TodoState): string {
 	if (allDone(state)) return ` · ${COLLAPSED_DONE}`;
 	const active = activeTodo(state);
 	return active ? ` · ${active.subject}` : "";
@@ -306,7 +305,7 @@ export function todoLayout(
 
 /** The word the widget and the recap use for a status (`pending` reads as `queued`,
  *  the word the summary line counts). */
-export const statusText = (status: TodoStatus): string =>
+const statusText = (status: TodoStatus): string =>
 	status === "in_progress" ? "in progress" : status === "pending" ? "queued" : status;
 
 /** The word after `todo ·` in the tool box title: the status a task moved to, or the action when
@@ -347,130 +346,6 @@ export function recapSummary(state: TodoState): string {
 	return [`${total} tasks`, `${doing} in progress`, `${queued} queued`, `${done} done`].join(" · ");
 }
 
-// Self-check: `node lib/todos.ts`
-if (isMain(import.meta.url)) {
-	const th: FgTheme = { fg: (_color, text) => text };
-	// Writes the token down, so the self-check can name the colour a piece was painted with.
-	const marked: FgTheme = { fg: (color, text) => `[${color}]${text}` };
-
-	let state = emptyTodos();
-	assert(headingText(state) === "Todos (0/0)", "empty heading");
-	assert(collapsedText(state) === "Todos (0/0)", "empty collapsed row carries no task name");
-	assert(widgetRows(marked, state, false, 80)[0]!.startsWith(`[accent]${LIST_ICON} [accentSoft]Todos (0/0)`), "icon accent, count soft accent");
-
-	let added = addTodo(state, "Siapkan rencana");
-	state = added.state;
-	assert(added.id === 1 && state.nextId === 2, "first id is 1, next id advances");
-	for (const subject of ["Tulis widget", "Tulis layar /todos", "Uji fullscreen", "Rilis"]) state = addTodo(state, subject).state;
-	assert(countTodos(state).total === 5 && countTodos(state).queued === 5, "five queued tasks");
-
-	const patched = patchTodo(state, 2, { status: "in_progress", note: "Memproses bug ABC.txt" });
-	assert(patched !== null, "patch a known id");
-	state = patched!;
-	assert(activeTodo(state)?.subject === "Tulis widget", "the active task is the in-progress one");
-	assert(collapsedText(state) === "Todos (0/5) · Tulis widget", `collapsed names the active task, got ${collapsedText(state)}`);
-
-	state = patchTodo(state, 2, { status: "completed" })!;
-	assert(activeTodo(state) === undefined, "no active task after completing the only one");
-	// The extension folds the widget away once the list is done, yet the renderer still
-	// describes that state: it is a pure function of the list, not of who paints it.
-	const doneState = { ...state, tasks: state.tasks.map((task) => ({ ...task, status: "completed" as const })) };
-	assert(allDone(doneState) && collapsedText(doneState).endsWith(COLLAPSED_DONE), "a finished list names its end");
-	assert(headingText(state) === "Todos (1/5)", "heading counts completed over total");
-	assert(patchTodo(state, 99, { status: "completed" }) === null, "an unknown id is rejected");
-	assert(removeTodo(state, 99) === null, "removing an unknown id is rejected");
-	state = removeTodo(state, 5)!;
-	assert(countTodos(state).total === 4, "remove drops one task");
-	assert(clearTodos(state).tasks.length === 0, "clear empties the list");
-
-	// Five-row window: the active task is centred, and the hidden counts add up.
-	state = emptyTodos();
-	for (let i = 1; i <= 7; i++) state = addTodo(state, `Task ${i}`).state;
-	// Adaptive height: the window grows with the terminal, bounded at three and nine.
-	assert(listRowsFor(24) === 5 && listRowsFor(30) === 9 && listRowsFor(10) === 3, "listRowsFor bounds");
-	assert(listRowsFor(undefined) === LIST_ROWS, "unknown height falls back to the default");
-
-	assert(todoWindow(state).visible.length === 5, "five rows when more exist");
-	assert(todoWindow(state).above === 0 && todoWindow(state).below === 2, "nothing hidden above the first five");
-	state = patchTodo(state, 5, { status: "in_progress" })!;
-	const mid = todoWindow(state);
-	assert(mid.visible.map((t) => t.id).join(",") === "3,4,5,6,7", "the window follows the active task");
-	assert(mid.above === 2 && mid.below === 0, "two tasks hidden above");
-	assert(mid.above + mid.visible.length + mid.below === 7, "the window accounts for every task");
-	state = patchTodo(state, 7, { status: "in_progress" })!;
-	assert(todoWindow(state).above === 2, "the window stops at the end of the list instead of sliding past it");
-
-	// The box: collapsed 3 lines, expanded at most 10 (frame, heading, five rows, two counters).
-	state = emptyTodos();
-	for (let i = 1; i <= 20; i++) state = addTodo(state, `Task ${i}`).state;
-	state = patchTodo(state, 10, { status: "in_progress", note: "sedang menulis" })!;
-	const collapsedBox = renderTodoBox(th, state, false, 80);
-	assert(collapsedBox.length === 3, `collapsed box is frame+row+frame, got ${collapsedBox.length}`);
-	assert(collapsedBox[1]!.includes("Todos (0/20)"), "collapsed box carries the heading");
-	assert(collapsedBox[1]!.includes("Task 10"), "collapsed box names the active task");
-	assert(collapsedBox[1]!.includes(HINT_EXPAND), "collapsed box carries the expand hint");
-	// Narrow terminal: the task name gives way, the hint that opens the box does not.
-	const narrow = renderTodoBox(th, state, false, 40);
-	assert(narrow[1]!.includes(HINT_EXPAND), "the expand hint survives a narrow box");
-	assert(narrow.every((line) => line.length > 0), "a narrow box still renders every line");
-
-	const expandedBox = renderTodoBox(th, state, true, 40);
-	assert(expandedBox.length <= 10, `expanded box stays within the widget budget, got ${expandedBox.length}`);
-	assert(expandedBox.some((line) => line.includes("↑ 7 more")), "hidden tasks above are counted");
-	assert(expandedBox.some((line) => line.includes("↓ 8 more")), "hidden tasks below are counted");
-	assert(expandedBox.some((line) => line.includes("· sedang menulis")), "the in-progress note is rendered");
-	assert(!expandedBox.some((line) => line.includes("└─")), "an open branch stays ├─ while rows remain below");
-	// With nothing below the window the last row closes the branch.
-	const tail = renderTodoBox(th, patchTodo(patchTodo(state, 10, { status: "pending" })!, 20, { status: "in_progress" })!, true, 80);
-	assert(tail.some((line) => line.includes("└─")), "the last row closes the branch at the end of the list");
-	assert(
-		expandedBox.every((line) => line.startsWith("│") || line.startsWith("╭") || line.startsWith("╰")),
-		"every line belongs to the box",
-	);
-
-	// A note only belongs to the task being worked on.
-	state = patchTodo(state, 10, { status: "pending" })!;
-	assert(!renderTodoBox(th, state, true, 40).some((line) => line.includes("sedang menulis")), "a queued task hides its note");
-
-	// Hostile input: an escape sequence in a subject must not break the frame.
-	state = addTodo(emptyTodos(), "bad \u001b[31mred\u001b[0m subject").state;
-	const hostile = renderTodoBox(th, state, true, 40);
-	assert(!hostile.some((line) => line.includes("\u001b[31m")), "control characters are stripped from a subject");
-	assert(hostile.every((line) => line.length > 0), "a stripped subject still renders a row");
-
-	// Recap order and summary.
-	state = emptyTodos();
-	state = addTodo(state, "Antre A").state;
-	state = addTodo(state, "Jalan B").state;
-	state = patchTodo(state, 2, { status: "in_progress" })!;
-	state = addTodo(state, "Selesai C").state;
-	state = patchTodo(state, 3, { status: "completed" })!;
-	assert(recapRows(state).map((r) => r.label).join(" | ") === "◉ Jalan B | ◌ Antre A | ✓ Selesai C", "recap groups by status");
-	assert(recapSummary(state) === "3 tasks · 1 in progress · 1 queued · 1 done", `recap summary, got ${recapSummary(state)}`);
-
-	// A stored file: broken rows go, fields are tidied, nextId follows the highest id.
-	const loaded = normalizeState({
-		tasks: [
-			{ id: 2, subject: " Kedua ", status: "in_progress", note: "sedang jalan" },
-			{ id: 5, subject: "Kelima", status: "selesai" },
-			{ id: "x", subject: "rusak" },
-			{ id: 7, subject: "   " },
-			{ id: 9, subject: "Ketiga", status: "completed" },
-		],
-		nextId: 1,
-	});
-	assert(loaded !== null, "a valid record loads");
-	assert(normalizeState(null) === null && normalizeState({ tasks: "no" }) === null, "a broken record is rejected");
-	assert(loaded!.tasks.map((task) => task.id).join(",") === "2,5,9", "broken rows are dropped");
-	assert(loaded!.tasks[0]!.subject === "Kedua" && loaded!.tasks[0]!.note === "sedang jalan", "fields are tidied");
-	assert(loaded!.tasks[1]!.status === "pending", "an unknown status falls back to pending");
-	assert(loaded!.nextId === 10, "nextId follows the highest stored id");
-
-	// The tool box title: status when a task moved, action word otherwise.
-	assert(actionWord("update", "completed") === "completed", "a known status wins over the action word");
-	assert(actionWord("update", "selesai") === "updated", "an unknown status falls back to the action");
-	assert(actionWord("create") === "created" && actionWord("delete") === "removed", "create and delete read as past tense");
-	assert(actionWord("list") === "list" && actionWord("nonsense") === "", "list keeps its name, an unknown action says nothing");
-
-	console.log("todos.ts self-check OK");
-}
+export const __test = {
+	fg,
+};

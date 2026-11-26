@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BUDGET_CAPS, budgetState, capLabel, estimatedWindowTotal, nextCap } from "../extensions/budget.ts";
+import { BUDGET_CAPS, budgetState, capLabel, estimatedWindowTotal, nextCap } from "../lib/features/budget.ts";
 
 test("levels by percentage of the day cap: 0/79 ok, 80/99 warn, 100/120 over", () => {
 	for (const [spend, level] of [[0, "ok"], [79, "ok"], [80, "warn"], [99, "warn"], [100, "over"], [120, "over"]] as const) {

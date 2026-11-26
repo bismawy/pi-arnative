@@ -12,7 +12,7 @@
  * coupling between the two, and it is a published symbol, not an import.
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { choiceSetting, flagSetting } from "../lib/preset-store.ts";
+import { choiceSetting, flagSetting } from "../preset-store.ts";
 import {
 	DEFAULT_SPINNER_PRESET,
 	SPINNER_GRADIENT_KEY,
@@ -23,12 +23,10 @@ import {
 	previewFrames,
 	spinnerPainter,
 	type SpinnerPreset,
-} from "../lib/spinner.ts";
-import { assert, isMain } from "../lib/check.ts";
-import { ROW_DIVIDER } from "../lib/format.ts";
+} from "../spinner.ts";
+import { ROW_DIVIDER } from "../format.ts";
+import { getRuntime } from "../runtime.ts";
 
-/** The arnative editor instance, published by `footer.ts` so the live spinner is reachable. */
-export const EDITOR_KEY = Symbol.for("pi-arnative.editor");
 const spinnerPresetSetting = choiceSetting(SPINNER_PRESET_KEY, SPINNER_PRESETS, DEFAULT_SPINNER_PRESET);
 const spinnerGradientSetting = flagSetting(SPINNER_GRADIENT_KEY);
 const SPINNER_PRESET_CONFIG_KEY = spinnerPresetSetting.slot;
@@ -40,28 +38,24 @@ type WorkingUi = { setWorkingIndicator?: (options?: unknown) => void } | null | 
 /** The live theme, for the accent presets. A gradient preset ignores it. */
 type ThemeLike = { fg?(color: string, text: string): string } | null;
 
-// Active UI and theme are kept on globalThis so choices apply across reloads and multi-instance loads.
-const UI_KEY = Symbol.for("pi-arnative.workingUi");
-const THEME_KEY = Symbol.for("pi-arnative.workingTheme");
-
 /** Record the session's `ctx.ui`, so a later preset pick can install through it. */
 function workingUi(ui: WorkingUi): void {
-	(globalThis as Record<symbol, unknown>)[UI_KEY] = ui ?? undefined;
+	getRuntime().workingUi = ui ?? null;
 }
 
 /** The `ctx.ui` recorded at `session_start`, or null before one ran. */
 function activeWorkingUi(): WorkingUi {
-	return ((globalThis as Record<symbol, unknown>)[UI_KEY] as WorkingUi) ?? null;
+	return (getRuntime().workingUi as WorkingUi) ?? null;
 }
 
 /** Record the session's theme, so accent presets follow it instead of a stale colour. */
 function workingTheme(theme: ThemeLike): void {
-	(globalThis as Record<symbol, unknown>)[THEME_KEY] = theme ?? undefined;
+	getRuntime().workingTheme = theme ?? null;
 }
 
 /** The theme recorded at `session_start`; a gradient preset ignores it. */
 function activeWorkingTheme(): ThemeLike {
-	return ((globalThis as Record<symbol, unknown>)[THEME_KEY] as ThemeLike) ?? null;
+	return (getRuntime().workingTheme as ThemeLike) ?? null;
 }
 
 export const activeSpinnerPreset = (): SpinnerPreset => spinnerPresetSetting.get();
@@ -83,7 +77,7 @@ export function setSpinnerPreset(preset: SpinnerPreset): void {
 
 /** Updates custom painter on live workingStatusIndicator if available. */
 export function paintLiveIndicator(painter: (text: string) => string): void {
-	const editor = (globalThis as Record<symbol, any>)[EDITOR_KEY];
+	const editor = getRuntime().editor as { workingStatusIndicator?: { renderIndicatorVerbatim?: boolean; theme?: { fg: (color: string, text: string) => string } } } | null;
 	const indicator = editor?.workingStatusIndicator;
 	if (!indicator) return;
 	indicator.renderIndicatorVerbatim = false;
@@ -156,87 +150,6 @@ export default function registerAnimations(pi: ExtensionAPI): void {
 	});
 }
 
-// Self-check: `node extensions/animations.ts`. Async because the cross-instance assertion
-// imports a second copy of this module.
-if (isMain(import.meta.url)) {
-	await (async () => {
-	// The rows describe exactly the presets, and every row carries its own note.
-	const rows = animationRows();
-	assert(rows.length === SPINNER_PRESETS.length, "one row per preset");
-	assert(
-		rows.every((r) => r.note.length > 0),
-		"every row has a note",
-	);
-	assert(animationRowText("Diamond Glow").includes("\u2b25"), "the row text previews the frames");
-
-	// The picker's animated note shows exactly one live frame, padded to the widest one so the
-	// row does not shift. `animationRowNote` takes `now`, so the assertion does not race a clock.
-	assert(animationRowNote("Diamond Glow", 0).endsWith("\u2b25"), "the live note shows frame 0");
-	assert(animationRowNote("Diamond Glow", 200).endsWith("\u25c8"), "the live note advances with the clock");
-	assert(animationRowNote("Pacman", 0).endsWith("\u15e7 + \u2212 \u00d7"), "a wide frame is shown whole");
-	assert(
-		animationRowNote("Pacman", 0).length === animationRowNote("Pacman", 600).length,
-		"every frame pads to the same width, so the note never shifts",
-	);
-	assert(PREVIEW_TICK_MS <= 80, "the preview ticks at least as fast as the quickest preset");
-
-	// Installing a preset goes through pi's indicator API; `Pi (system)` passes nothing.
-	const calls: Array<Record<string, unknown> | undefined> = [];
-	const ui = { setWorkingIndicator: (options?: Record<string, unknown>) => calls.push(options) };
-	(globalThis as Record<symbol, unknown>)[SPINNER_PRESET_CONFIG_KEY] = "Diamond Glow";
-	applySpinnerPreset(ui, null);
-	assert(JSON.stringify(calls[0]?.frames) === JSON.stringify(SPINNER_PRESET_DEFS["Diamond Glow"].frames), "frames installed");
-	assert(calls[0]?.intervalMs === 200, "interval installed");
-	(globalThis as Record<symbol, unknown>)[SPINNER_PRESET_CONFIG_KEY] = "Pi (system)";
-	applySpinnerPreset(ui, null);
-	assert(calls.at(-1) === undefined, "Pi (system) passes no options -> pi restores its own spinner");
-
-	// A stored value that names no preset falls back instead of breaking the load.
-	(globalThis as Record<symbol, unknown>)[SPINNER_PRESET_CONFIG_KEY] = "Nope";
-	assert(activeSpinnerPreset() === DEFAULT_SPINNER_PRESET, "an unknown stored preset falls back to the default");
-	delete (globalThis as Record<symbol, unknown>)[SPINNER_PRESET_CONFIG_KEY];
-
-	// The painter seam: without a published editor there is nothing to paint, and that must
-	// be a no-op rather than a throw (the editor registers after the first session_start).
-	delete (globalThis as Record<symbol, unknown>)[EDITOR_KEY];
-	paintLiveIndicator((t) => t);
-
-	// Picking a preset must apply it NOW, not on the next session — and it must work when the
-	// picker calls a DIFFERENT module instance than the one that ran `session_start`. pi loads
-	// every manifest entry through its own loader while `arnative.ts` imports this module too,
-	// so there are two copies with separate module scope; only `globalThis` is shared. Keeping
-	// the surfaces on globalThis is what this pins, and a same-instance test would not catch it
-	// (the original bug passed such a test: the row moved, the spinner did not).
-	const pickCalls: Array<Record<string, unknown> | undefined> = [];
-	const pickUi = { setWorkingIndicator: (options?: Record<string, unknown>) => pickCalls.push(options) };
-	const handlers: Array<(e: unknown, c: unknown) => unknown> = [];
-	registerAnimations({ on: (_n: string, fn: (e: unknown, c: unknown) => unknown) => handlers.push(fn) } as never);
-	// Instance A runs session_start and records the ui on globalThis.
-	handlers[0]!({}, { ui: pickUi, theme: { fg: (_c: string, t: string) => t } });
-	pickCalls.length = 0;
-	// Instance B — a second copy of the module, like the one `arnative.ts` holds — does the pick.
-	const instanceB = await import(`./animations.ts?second=${Date.now()}`);
-	instanceB.setSpinnerPreset("Claudeon");
-	assert(pickCalls.length === 1, "a second module instance installs through the shared ui");
-	assert(pickCalls[0]?.frames?.[0] === "\u00b7", "the chosen preset's frames are installed, not the old ones");
-	assert(pickCalls[0]?.intervalMs === 120, "and its cadence (120ms)");
-
-	// Pi (system) still hands the slot back through the same path.
-	pickCalls.length = 0;
-	instanceB.setSpinnerPreset("Pi (system)");
-	assert(pickCalls[0] === undefined, "choosing Pi (system) restores pi's own spinner at once");
-
-	// With one, both the verbatim flag and the painter are set — this is what keeps the
-	// colour on a custom frame.
-	const indicator = { renderIndicatorVerbatim: true, spinnerColorFn: undefined as unknown, updateDisplay: () => {} };
-	let painted = 0;
-	const editor = { workingStatusIndicator: { ...indicator, updateDisplay: () => painted++ } };
-	(globalThis as Record<symbol, any>)[EDITOR_KEY] = editor;
-	paintLiveIndicator((t) => `<a>${t}`);
-	assert(editor.workingStatusIndicator.renderIndicatorVerbatim === false, "verbatim cleared, else pi skips the painter");
-	assert(painted === 1, "the live indicator repaints at once");
-	delete (globalThis as Record<symbol, any>)[EDITOR_KEY];
-
-	console.log("animations.ts self-check OK");
-	})();
-}
+export const __test = {
+	SPINNER_PRESET_CONFIG_KEY,
+};

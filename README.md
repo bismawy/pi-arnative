@@ -102,23 +102,31 @@ Settings from `/arnative` are saved in `~/.pi/agent/arnative/config.json`:
 
 | File | Role |
 | --- | --- |
-| `extensions/arnative.ts` | `/arnative` settings menu and live preview pickers |
-| `extensions/section-headers.ts` | Tabbed header and resource box |
-| `extensions/footer.ts` | 3-row status grid, Minimal footer, and boxed editor |
-| `extensions/tools.ts` | Rounded tool boxes, spinners, duration, and `[show]` / `[hide]` toggles |
-| `extensions/todos.ts` | `todo` tool, boxed widget above editor, and `/todos` screen |
-| `extensions/animations.ts` | Spinner preset picker and live preview |
-| `extensions/autocompact.ts` | Smart and fixed-budget context compaction plus silent byte-wall shedding |
-| `extensions/render-cache.ts` | Per-child and container transcript render cache for `chatContainer` |
-| `extensions/budget.ts` | UTC day and rolling 30-day spend caps and footer warnings |
-| `extensions/usage-export.ts` | Prometheus textfile metric export (`usage.prom`) |
-| `extensions/model-heal.ts` | Automatic `models.json` heal triggers and `/model-heal` |
-| `extensions/timestamps.ts` | Message timestamps and bubble backgrounds |
-| `extensions/ui-render-tweaks.ts` | Contrast tweaks, selection styling, and UI polish |
-| `extensions/usage.ts` | Token and cost dashboard (`/usage`) |
+| `extensions/index.ts` | Single Pi extension entry point composing all features |
+| `lib/runtime.ts` | Centralized reload-safe `RuntimeState` and single-listener lifecycle hub |
+| `lib/features/arnative.ts` | `/arnative` settings menu and live preview pickers |
+| `lib/features/section-headers.ts` | Tabbed header and resource box |
+| `lib/features/footer.ts` | 3-row status grid, Minimal footer, and boxed editor |
+| `lib/features/tools.ts` | Rounded tool boxes, spinners, duration, and `[show]` / `[hide]` toggles |
+| `lib/features/todos.ts` | `todo` tool, boxed widget above editor, and `/todos` screen |
+| `lib/features/animations.ts` | Spinner preset picker and live preview |
+| `lib/features/autocompact.ts` | Smart and fixed-budget context compaction plus silent byte-wall shedding |
+| `lib/features/render-cache.ts` | Per-child and container transcript render cache for `chatContainer` |
+| `lib/features/budget.ts` | UTC day and rolling 30-day spend caps and footer warnings |
+| `lib/features/usage-export.ts` | Prometheus textfile metric export (`usage.prom`) |
+| `lib/features/model-heal.ts` | Automatic `models.json` heal triggers and `/model-heal` |
+| `lib/features/timestamps.ts` | Message timestamps and bubble backgrounds |
+| `lib/features/ui-render-tweaks.ts` | Contrast tweaks, selection styling, and UI polish |
+| `lib/features/usage.ts` | Token and cost dashboard (`/usage`) |
 | `lib/todos.ts` | Task state, window layout, box rows, and session store |
 | `lib/spinner.ts` | Spinner preset catalog, frames, and gradient painters |
-| `lib/provider.ts` | Custom provider probe, model picker, and config writer |
+| `lib/active-clock.ts` | Active session clock, duration formatting, and input activity filter |
+| `lib/git-status.ts` | Git branch/status/diff-stat collector and path shortener |
+| `lib/chatbox.ts` | Editor frame, prompt glyph styling, scroll borders, and dialog placement |
+| `lib/edit-diff.ts` | Unified and side-by-side word-level edit diff renderer |
+| `lib/provider-store.ts` | Custom provider probe, metadata merge, and `models.json` / `auth.json` store |
+| `lib/provider.ts` | Interactive `/providers` wizard UI |
+| `lib/usage-pricing.ts` | `models.json` price table loader, cost estimation, and UTC range math |
 | `lib/model-heal.ts` | Compat flags, `/models` limit sync, and reasoning effort probe |
 | `lib/list-picker.ts` | Shared live-preview and multi-select picker component |
 

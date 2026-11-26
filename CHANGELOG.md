@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **Single extension entry point (`extensions/index.ts`).** Moved the 14 extension modules into `lib/features/` and registered them through one entry point so Pi loads shared `lib/` modules once per startup or `/reload` instead of up to 14 times (`extensions/index.ts`, `lib/features/*.ts`, `package.json`).
+- **Extracted inline self-checks out of runtime modules.** Moved all 27 inline `isMain` self-check suites (~5,680 lines, ~356 KB) and `lib/check.ts` out of the published `lib/` runtime payload into `test/self-checks/` and `test/helpers/check.ts`, running them in parallel under `node --test` (`lib/*.ts`, `lib/features/*.ts`, `test/self-checks/*.test.ts`, `package.json`).
+- **Centralized runtime context and event lifecycle (`lib/runtime.ts`).** Consolidated 26 scattered `globalThis` `Symbol.for` runtime slots into one typed `RuntimeState` bag, combined 43 separate `pi.on()` registrations into 19 single-listener event dispatchers (one per event type), and excluded dev-only `themes/gen-themes.mjs` from published package files and overlay (`lib/runtime.ts`, `extensions/index.ts`, `lib/features/*.ts`, `package.json`, `scripts/overlay.mjs`).
+- **Decomposed monolith modules and tightened types.** Split `lib/features/footer.ts`, `lib/features/tools.ts`, `lib/provider.ts`, and `lib/usage-store.ts` into focused modules (`lib/active-clock.ts`, `lib/git-status.ts`, `lib/chatbox.ts`, `lib/edit-diff.ts`, `lib/provider-store.ts`, `lib/usage-pricing.ts`) while re-exporting existing symbols, and replaced 49 code `any` annotations in `footer.ts` and `tools.ts` with explicit interfaces.
+- **Merged shared hold-repeat, atomic JSON write, and `models.json` reader helpers.** Shared `createHoldRepeat` (`lib/box.ts`) across tool and todo box scroll controls, shared `writeJsonAtomicSync` (`lib/preset-store.ts`) across config and state writers, and routed `lib/usage-pricing.ts` and model-heal through `modelsPath()` / `loadModelsConfig()` so usage pricing accepts `models.json` files with comments and trailing commas.
+- **Non-blocking `!cmd` secret resolution in model heal (`lib/model-heal.ts`).** Replaced synchronous `execSync` (up to 5 s UI stall) with async `exec` wired to the pass's `AbortSignal`, and linked `AbortSignal` into `fetchMeta()` so canceled `/model-heal` passes stop immediately.
+
 ## [0.16.1] - 2026-11-21
 
 ### Fixed

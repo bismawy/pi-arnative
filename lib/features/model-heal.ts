@@ -9,14 +9,12 @@
  * only, Off = nothing. While pi-auto-compat is installed this module defers to it and says so
  * once, so two healers never write models.json at the same time.
  */
-import { bindSetModel, reloadCurrentModel } from "../lib/provider.ts";
+import { bindSetModel, reloadCurrentModel } from "../provider.ts";
+import { modelsPath } from "../provider-store.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type FSWatcher, watch } from "node:fs";
-import { join } from "node:path";
-import { assert, isMain } from "../lib/check.ts";
-import { REJECTION_RE } from "../lib/compat.ts";
-import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../lib/model-heal.ts";
+import { REJECTION_RE } from "../compat.ts";
+import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../model-heal.ts";
 
 // Nerd Font md-shield-sync (U+F06DE), written as a code point so the source stays ASCII.
 const HEAL_ICON = String.fromCodePoint(0xf06de);
@@ -149,7 +147,7 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		stopWatcher();
 		try {
 			// A pass's own write fires this too; the re-run finds nothing to change.
-			watcher = watch(join(getAgentDir(), "models.json"), { persistent: false }, () => {
+			watcher = watch(modelsPath(), { persistent: false }, () => {
 				if (timer) clearTimeout(timer);
 				timer = setTimeout(() => {
 					timer = undefined;
@@ -296,25 +294,4 @@ function registerCommands(pi: ExtensionAPI, runNow: (args: string, ctx: Extensio
 	pi.registerCommand("model-heal", { description, handler: runNow });
 	// Migration alias: keeps the old habit working once pi-auto-compat is uninstalled.
 	if (!autoCompatInstalled()) pi.registerCommand("auto-compat", { description: description + " (alias of /model-heal)", handler: runNow });
-}
-
-if (isMain(import.meta.url)) {
-	assert(isRejectedParam({ role: "assistant", provider: "r", model: "m", errorMessage: "400 invalid reasoning_effort" }), "a rejected effort triggers a re-probe");
-	assert(!isRejectedParam({ role: "assistant", provider: "r", model: "m", errorMessage: "401 unauthorized" }), "an auth failure costs no probe");
-	assert(!isRejectedParam({ role: "user", provider: "r", model: "m", errorMessage: "bad request" }), "only assistant messages count");
-	assert(!isRejectedParam(undefined), "no message, no probe");
-	assert(isEffortRejection({ role: "assistant", provider: "r", model: "m", errorMessage: "400 invalid reasoning_effort: medium" }), "an effort rejection drops the level");
-	assert(!isEffortRejection({ role: "assistant", provider: "r", model: "m", errorMessage: "400 bad request: context too long" }), "a plain 400 keeps the map");
-	assert(healAllowed("Flags", "Full", false) && healAllowed("Full", "Full", false), "Full runs every pass");
-	assert(healAllowed("Flags", "Flags", false) && !healAllowed("Full", "Flags", false), "Flags runs only the offline pass");
-	assert(!healAllowed("Flags", "Off", false) && !healAllowed("Full", "Off", false), "Off runs nothing");
-	assert(!healAllowed("Flags", "Full", true) && !healAllowed("Flags", "Flags", true), "an installed pi-auto-compat owns the file");
-	assert(deferNotice("Full", true) && deferNotice("Flags", true), "the hand-over notice shows while heal is wanted");
-	assert(!deferNotice("Off", true) && !deferNotice("Full", false), "and stays quiet when Off or nothing to defer to");
-	const owned = depsFor({ modelRegistry: { getAll: () => [{ provider: "x", id: "a" }, null], getRegisteredProviderConfig: (p: string) => (p === "ext" ? { refreshModels: () => [] } : undefined) } });
-	assert(owned.models().length === 1, "non-object registry entries are dropped");
-	assert(owned.ownsModels("ext") && !owned.ownsModels("x"), "an extension list with refreshModels owns its models");
-	const throwing = depsFor({ modelRegistry: { getRegisteredProviderConfig: () => { throw new Error("stale"); } } });
-	assert(!throwing.ownsModels("x") && throwing.models().length === 0, "a stale registry reads as empty");
-	console.log("model-heal extension self-check OK");
 }

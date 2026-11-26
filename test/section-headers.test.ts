@@ -35,7 +35,7 @@ import {
 	wrapCommaItems,
 	wrapPath,
 	type TabKey,
-} from "../extensions/section-headers.ts";
+} from "../lib/features/section-headers.ts";
 import { setActiveTheme, stripAnsi } from "../lib/ansi.ts";
 import { capitalize, markedLabels } from "../lib/format.ts";
 import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache } from "../lib/preset-store.ts";

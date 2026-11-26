@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clock, costCell, RATE_MIN_ACTIVE_MS, RATE_MIN_WIDTH } from "../extensions/footer.ts";
+import { clock, costCell, RATE_MIN_ACTIVE_MS, RATE_MIN_WIDTH } from "../lib/features/footer.ts";
 
 const id = (t: string) => t;
 

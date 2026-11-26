@@ -8,13 +8,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { getRuntime } from "../lib/runtime.ts";
 
 const agentDir = mkdtempSync(join(tmpdir(), "arnative-todos-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 // The finished box waits 30s in real use; a test needs the wait, not the 30s.
 process.env.PI_ARNATIVE_TODO_HIDE_MS = "20";
 
-const { default: extension } = await import("../extensions/todos.ts");
+const { default: extension } = await import("../lib/features/todos.ts");
 
 const palette: string[] = [];
 const theme = {
@@ -167,7 +168,7 @@ test("the list survives a reload", async () => {
 	assert.equal(stored.nextId, 4, "the next id is stored");
 
 	// A reload re-imports the module: drop the module state, then start the session again.
-	delete (globalThis as Record<symbol, unknown>)[Symbol.for("pi-arnative.todos.widget")];
+	getRuntime().todosWidget = null;
 	widgets.clear();
 	await handlers.get("session_start")!(undefined, ctx);
 	assert.ok(widgets.has("arnative-todos"), "the widget comes back from the file");

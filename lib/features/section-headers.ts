@@ -32,21 +32,20 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
-import type { BoxTheme } from "../lib/box.ts";
-import { BRAND, renderBoxLines } from "../lib/box.ts";
-import { getActiveTheme, setActiveTheme, softOf, softSecondaryOf, stripAnsi, themeOf } from "../lib/ansi.ts";
-import { capitalize, expandKeyName, modelDisplayParts } from "../lib/format.ts";
-import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
-import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, choiceSetting } from "../lib/preset-store.ts";
-import { formatTokens, getModelAllTimeUsage } from "../lib/usage-store.ts";
-
-import { patchOnce } from "../lib/patch.ts";
+import { BRAND, renderBoxLines, type BoxTheme } from "../box.ts";
+import { getActiveTheme, setActiveTheme, softOf, softSecondaryOf, stripAnsi, themeOf } from "../ansi.ts";
+import { capitalize, expandKeyName, modelDisplayParts } from "../format.ts";
+import { SHORTCUT_NEW_SESSION, SHORTCUT_NEXT_TAB, SHORTCUT_RELOAD } from "../shortcuts.ts";
+import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, choiceSetting } from "../preset-store.ts";
+import { formatTokens, getModelAllTimeUsage } from "../usage-store.ts";
+import { patchOnce } from "../patch.ts";
+import { getRuntime } from "../runtime.ts";
 export type TabKey = "Model" | "Directory" | "Context" | "Skills" | "Extensions" | "Shortcut";
 
 // Tab order for the next-tab shortcut and for the menu line.
-export const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Shortcut"];
+const TAB_ORDER: TabKey[] = ["Directory", "Model", "Context", "Skills", "Extensions", "Shortcut"];
 
-export const SECTION_ICONS: Record<TabKey, string> = {
+const SECTION_ICONS: Record<TabKey, string> = {
 	Model: "\uf1b2",
 	Directory: "\uf07b",
 	Context: "\udb84\uddd7",
@@ -63,11 +62,8 @@ export const HEADER_BRAND = `Arnative${BRAND}`;
 
 export type Themeish = { fg?(color: string, text: string): string; bg?(color: string, text: string): string } | null;
 
-const MODEL_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentModel");
-const THINKING_SNAPSHOT_KEY = Symbol.for("pi-arnative.currentThinking");
-
 // First theme color that the theme really defines
-export function fgFirst(th: Themeish, names: string[], text: string): string {
+function fgFirst(th: Themeish, names: string[], text: string): string {
 	if (!th?.fg) return text;
 	for (const name of names) {
 		try {
@@ -89,7 +85,7 @@ export function fgFirst(th: Themeish, names: string[], text: string): string {
  * the same tint from the resolved accent; a theme that genuinely defines `accentSoft`
  * still wins first.
  */
-export function softFirst(th: Themeish, fallbacks: string[], text: string): string {
+function softFirst(th: Themeish, fallbacks: string[], text: string): string {
 	return softOnTier(softOf(th as never), th, fallbacks, text);
 }
 
@@ -98,7 +94,7 @@ export function softFirst(th: Themeish, fallbacks: string[], text: string): stri
  * counts). Same colour language as the footer: marks take `accent`, their text takes the
  * soft border-accent tier, so a header line and the footer under it agree.
  */
-export function softLabelFirst(th: Themeish, fallbacks: string[], text: string): string {
+function softLabelFirst(th: Themeish, fallbacks: string[], text: string): string {
 	return softOnTier(softSecondaryOf(th as never), th, fallbacks, text);
 }
 
@@ -123,7 +119,7 @@ export function sectionBodyOf(child: any): string | null {
 }
 
 /** Text of a themed text line, whichever pi version built it (pi 0.99 defers it to `build`). */
-export function themedTextOf(child: any): string {
+function themedTextOf(child: any): string {
 	if (typeof child?.build === "function") return String(child.build());
 	const direct = child?.text ?? child?.content;
 	if (typeof direct === "string" && direct !== "") return direct;
@@ -156,7 +152,7 @@ export function deviceUser(): string {
 	return u || "there";
 }
 
-export function readVersion(dir: string): string | null {
+function readVersion(dir: string): string | null {
 	try {
 		const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { version?: unknown };
 		return typeof pkg.version === "string" && pkg.version !== "" ? pkg.version : null;
@@ -287,7 +283,7 @@ export function extensionTabItems(expanded: string, agentDir: string, cwd: strin
 // Arnative build actually running: package.json one level above this extension file.
 // Reading the module's own package beats reading the npm-installed copy, which lags
 // behind whenever the local clone (or a hand-copied extensions/) is what pi loaded.
-const ARNATIVE_VERSION = readVersion(fileURLToPath(new URL("..", import.meta.url)));
+const ARNATIVE_VERSION = readVersion(fileURLToPath(new URL("../..", import.meta.url)));
 
 export function extractItemsFromBody(body: string): string[] {
 	const plain = stripAnsi(body).trim();
@@ -306,7 +302,7 @@ export function extractItemsFromBody(body: string): string[] {
 
 // Cheatsheet for the Shortcut tab. Mirrors README "Shortcuts" plus the bindings the
 // extensions themselves own (footer.ts). Kept as plain text so the data line can wrap it.
-export const SHORTCUTS: string[] = [
+const SHORTCUTS: string[] = [
 	"[Esc] Interrupt",
 	"[Ctrl+c/d] Exit",
 	"[/] Commands",
@@ -321,7 +317,7 @@ export function wrapCommaItems(items: string[], maxWidth: number): string[] {
 	return wrapTokens(items, maxWidth, ", ", ",");
 }
 
-export function wrapTokens(items: string[], maxWidth: number, sep = "  ", trailing = ""): string[] {
+function wrapTokens(items: string[], maxWidth: number, sep = "  ", trailing = ""): string[] {
 	const lines: string[] = [];
 	let cur = "";
 	for (const item of items) {
@@ -398,17 +394,13 @@ export function buildLogoLines(th: Themeish): string[] {
 
 
 // Singleton store for loaded resources
-const STORE_KEY = Symbol.for("pi-arnative.resourceStore");
-export const tabStore: Map<TabKey, string[]> =
-	(globalThis as Record<symbol, Map<TabKey, string[]>>)[STORE_KEY] ??
-	new Map<TabKey, string[]>([
-		["Model", []],
-		["Directory", []],
-		["Context", []],
-		["Skills", []],
-		["Extensions", []],
-	]);
-(globalThis as Record<symbol, Map<TabKey, string[]>>)[STORE_KEY] = tabStore;
+export const tabStore: Map<TabKey, string[]> = (getRuntime().resourceStore ??= new Map<TabKey, string[]>([
+	["Model", []],
+	["Directory", []],
+	["Context", []],
+	["Skills", []],
+	["Extensions", []],
+])) as Map<TabKey, string[]>;
 
 // Header preset chosen through `/arnative headers`. "Arnative (Full)" = this extension's
 // header; "Pi (system)" = pi's built-in header. The picker lives in arnative.ts, so the
@@ -422,7 +414,7 @@ const headerPreset = choiceSetting(HEADER_PRESET_CONFIG_KEY, HEADER_PRESETS, DEF
 export const activeHeaderPreset = (): HeaderPreset => headerPreset.get();
 
 /** Hand the header slot to the active preset: arnative's box, or pi's built-in ("Pi (system)"). */
-export function applyHeaderPreset(ctx: ExtensionContext): void {
+function applyHeaderPreset(ctx: ExtensionContext): void {
 	if (activeHeaderPreset() === "Pi (system)") {
 		ctx.ui?.setHeader?.(undefined);
 	} else {
@@ -446,15 +438,12 @@ export function resourcesListingShown(current?: boolean): boolean {
 	return countsKnown;
 }
 
-// The installed header instance. globalThis-backed because `/reload` re-imports the
-// extension modules and arnative.ts imports this file, so two copies can coexist.
-const HEADER_INSTANCE_KEY = Symbol.for("pi-arnative.headerInstance");
+// The installed header instance on RuntimeState so `/reload` keeps it reachable.
 function headerInstance(): ArnativeHeader | null {
-	return (globalThis as Record<symbol, ArnativeHeader | undefined>)[HEADER_INSTANCE_KEY] ?? null;
+	return (getRuntime().headerInstance as ArnativeHeader | null) ?? null;
 }
 function setHeaderInstance(instance: ArnativeHeader | null): void {
-	if (instance) (globalThis as Record<symbol, ArnativeHeader>)[HEADER_INSTANCE_KEY] = instance;
-	else delete (globalThis as Record<symbol, ArnativeHeader | undefined>)[HEADER_INSTANCE_KEY];
+	getRuntime().headerInstance = instance;
 }
 
 // Model name formatted exactly like in the footer: Gemini 3.8 Flash (Antigravity), Deepseek V4.1 Flash (Yarz), etc.
@@ -465,9 +454,8 @@ export function formatModelDisplayName(model?: { id?: string; name?: string; pro
 
 // Full working directory for the Directory tab. ctx.cwd is authoritative; the
 // snapshot survives header re-creation when ctx is missing.
-const CWD_SNAPSHOT_KEY = Symbol.for("pi-arnative.lastCwd");
-export function getCwd(ctx?: { cwd?: string }): string {
-	return ctx?.cwd || (globalThis as Record<symbol, any>)[CWD_SNAPSHOT_KEY] || "";
+function getCwd(ctx?: { cwd?: string }): string {
+	return ctx?.cwd || getRuntime().lastCwd || "";
 }
 
 export class ArnativeHeader implements Component {
@@ -497,7 +485,7 @@ export class ArnativeHeader implements Component {
 	setExpanded(_expanded: boolean): void {}
 
 	getTabsData(width: number): Array<{ key: TabKey; name: string; icon: string; count: number; label: string }> {
-		const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
+		const modelObj = (this.ctx?.model ?? getRuntime().currentModel) as { id?: string; name?: string; provider?: string } | undefined;
 		// Tab row stays compact: the Directory tab shows just its name, the full path
 		// lives in the content line below.
 		const dirLabel = "Directory";
@@ -689,9 +677,9 @@ export class ArnativeHeader implements Component {
 		// 3. Active tab data (left-aligned, neatly wrapped, soft)
 		let activeItems: string[] = [];
 		if (this.activeTab === "Model") {
-			const modelObj = this.ctx?.model ?? (globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY];
+			const modelObj = (this.ctx?.model ?? getRuntime().currentModel) as { id?: string; name?: string; provider?: string } | undefined;
 			const fullName = formatModelDisplayName(modelObj);
-			const thLvl = this.ctx?.thinkingLevel ?? (globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY];
+			const thLvl = (this.ctx?.thinkingLevel ?? getRuntime().currentThinking) as string | undefined;
 			const thinkLevel = thLvl && thLvl !== "off" ? capitalize(thLvl) : "Off";
 			const sep = fgFirst(th, ["dim"], " · ");
 			// Model name in soft, its "(Provider)" tail dim.
@@ -878,9 +866,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
-		(globalThis as Record<symbol, any>)[MODEL_SNAPSHOT_KEY] = ctx.model;
-		(globalThis as Record<symbol, any>)[THINKING_SNAPSHOT_KEY] = ctx.thinkingLevel;
-		if (ctx.cwd) (globalThis as Record<symbol, any>)[CWD_SNAPSHOT_KEY] = ctx.cwd;
+		const rt = getRuntime();
+		rt.currentModel = ctx.model;
+		rt.currentThinking = ctx.thinkingLevel;
+		if (ctx.cwd) rt.lastCwd = ctx.cwd;
 	});
 
 	pi.on("turn_end", async () => {

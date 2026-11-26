@@ -15,8 +15,8 @@ import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** The directories pi loads at runtime: `pi.extensions` globs `./extensions/*.ts`,
- *  `pi.themes` globs `./themes/*.json`, and every extension imports `../lib/*.ts`. */
+/** The directories pi loads at runtime: `pi.extensions` loads `./extensions/index.ts`,
+ *  `pi.themes` globs `./themes/*.json`, and features live under `./lib/`. */
 const RUNTIME_DIRS = ["extensions", "lib", "themes"];
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -57,7 +57,7 @@ const same = [];
 for (const name of RUNTIME_DIRS) {
 	const from = join(root, name);
 	const to = join(installed, name);
-	const sources = walk(from);
+	const sources = walk(from).filter((rel) => name !== "themes" || rel.endsWith(".json"));
 	const wanted = new Set(sources);
 	for (const rel of sources) {
 		const target = join(to, rel);

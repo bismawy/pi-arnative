@@ -65,7 +65,7 @@ export default async function* reporter(source) {
 }
 
 if (process.argv.includes("--self-check")) {
-	const { assert } = await import("../lib/check.ts");
+	const { assert } = await import("../test/helpers/check.ts");
 	assert(row("works", 12.34, false) === "✓ works (12.3ms)", `row: ${row("works", 12.34, false)}`);
 	assert(row("breaks", undefined, true) === "✗ breaks", "row: no duration when absent");
 	assert(info("pass 5") === "🛈 pass 5", "info row");

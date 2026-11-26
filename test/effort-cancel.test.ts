@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { probeEffort } from "../lib/compat.ts";
-import { healEffort } from "../lib/model-heal.ts";
+import { healEffort, healMeta } from "../lib/model-heal.ts";
 
 const model = { provider: "fixture", id: "m", api: "openai-completions", baseUrl: "https://fixture.invalid/v1", reasoning: true };
 const options = { baseUrl: model.baseUrl };
@@ -116,6 +116,84 @@ test("heal budget exhaustion is reported without caching the model as failed", a
 		const state = JSON.parse(readFileSync(join(dir, "arnative", "model-heal.json"), "utf8"));
 		assert.equal(state.efforts["fixture\0m"], undefined);
 	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("!cmd apiKey resolves asynchronously without blocking the event loop", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "arnative-secret-async-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	mkdirSync(join(dir, "arnative"));
+	const cmd = `!${JSON.stringify(process.execPath)} -e "setTimeout(() => process.stdout.write('secret-token'), 180)"`;
+	writeFileSync(
+		join(dir, "models.json"),
+		JSON.stringify({ providers: { fixture: { api: model.api, baseUrl: model.baseUrl, apiKey: cmd, models: [model] } } }),
+	);
+	let ticks = 0;
+	const ticker = setInterval(() => {
+		ticks++;
+	}, 20);
+	let seenAuth: string | undefined;
+	try {
+		await healMeta(
+			{
+				models: () => [model],
+				ownsModels: () => false,
+				fetchImpl: async (_url, init) => {
+					const h = init?.headers as Record<string, string> | undefined;
+					seenAuth = h?.authorization;
+					return new Response(JSON.stringify({ data: [] }));
+				},
+			},
+			true,
+		);
+		assert.equal(seenAuth, "Bearer secret-token");
+		assert.ok(ticks >= 3, `expected event loop to keep ticking while !cmd ran, got ${ticks} ticks`);
+	} finally {
+		clearInterval(ticker);
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("!cmd apiKey respects AbortSignal and aborts before command timeout", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "arnative-secret-abort-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	mkdirSync(join(dir, "arnative"));
+	const cmd = `!${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 10000)"`;
+	writeFileSync(
+		join(dir, "models.json"),
+		JSON.stringify({ providers: { fixture: { api: model.api, baseUrl: model.baseUrl, apiKey: cmd, models: [model] } } }),
+	);
+	const controller = new AbortController();
+	let calls = 0;
+	const start = Date.now();
+	const timer = setTimeout(() => controller.abort(new Error("cancelled")), 80);
+	try {
+		await assert.rejects(
+			healMeta(
+				{
+					models: () => [model],
+					ownsModels: () => false,
+					signal: controller.signal,
+					fetchImpl: async () => {
+						calls++;
+						return new Response(JSON.stringify({ data: [] }));
+					},
+				},
+				true,
+			),
+			(error) => error === controller.signal.reason,
+		);
+		assert.equal(calls, 0);
+		assert.ok(Date.now() - start < 2_500, "abort should not wait for the 5s command timeout");
+	} finally {
+		clearTimeout(timer);
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
 		rmSync(dir, { recursive: true, force: true });
