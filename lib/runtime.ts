@@ -43,7 +43,7 @@ export interface RuntimeState {
 	promptTypedAt: number;
 	promptIdleTimer: ReturnType<typeof setTimeout> | null;
 	minimalFooterExpanded: { left: boolean; right: boolean } | null;
-	argonFooterExpanded: { git: boolean; detail: "left" | "right" | null } | null;
+	zenFooterExpanded: { git: boolean; detail: "left" | "right" | null } | null;
 	outsideDialogHook: ((lines: string[], width: number, mode: unknown) => string[]) | null;
 	activityHook: ((data: string) => void) | null;
 	wrappedTuis: WeakSet<object>;
@@ -73,7 +73,7 @@ function createFreshRuntime(): RuntimeState {
 		promptTypedAt: 0,
 		promptIdleTimer: null,
 		minimalFooterExpanded: null,
-		argonFooterExpanded: null,
+		zenFooterExpanded: null,
 		outsideDialogHook: null,
 		activityHook: null,
 		wrappedTuis: new WeakSet<object>(),

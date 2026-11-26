@@ -3,9 +3,11 @@
 ## [Unreleased]
 
 ### Added
-- **Arnative (Argon) centered footer preset.** Added a centered footer layout showing `cwd · clock` and the model label on one row with an inline `···` git toggle, exclusive left/right click toggles for the centered detail row, and keyboard cycling (`lib/features/footer.ts`, `lib/runtime.ts`, `test/footer-argon.test.ts`).
+- **Zen centered footer preset.** Added a centered footer layout showing `cwd · clock` and the model label on one row with an inline `···` git toggle, exclusive left/right click toggles for the centered detail row, and keyboard cycling (`lib/features/footer.ts`, `lib/runtime.ts`, `test/footer-zen.test.ts`).
+- **Pi (color) footer preset.** Added a colored variant of Pi's stock two-line footer with live session tokens, context usage, accent-colored git branch, and active model (`lib/features/footer.ts`, `test/footer-pi-color.test.ts`).
 
 ### Changed
+- **Cleaner `/usage` modal layout.** Removed inner horizontal rules in favor of blank-row spacing and moved the selected row detail line below the `Total` row (`lib/features/usage.ts`, `test/self-checks/feature-usage.test.ts`).
 - **Responsive stacked footer on narrow terminals, dot separators, and compact model route labels.** `Arnative (Minimal)` and `Arnative (Full)` stack left and right layouts vertically with auto-wrap and row-aware click zones when both head cells do not fit on one line; left-side footer items use `·` instead of `|`; `modelDisplayParts()` strips verbose proxy metadata (`· ...`) and moves the remote backend segment into the provider suffix such as `Gemini 4 Neon (Magpie/agy-cli)` (`lib/features/footer.ts`, `lib/format.ts`, `test/footer-minimal.test.ts`, `test/format.test.ts`).
 - **Single extension entry point (`extensions/index.ts`).** Moved the 14 extension modules into `lib/features/` and registered them through one entry point so Pi loads shared `lib/` modules once per startup or `/reload` instead of up to 14 times (`extensions/index.ts`, `lib/features/*.ts`, `package.json`).
 - **Extracted inline self-checks out of runtime modules.** Moved all 27 inline `isMain` self-check suites (~5,680 lines, ~356 KB) and `lib/check.ts` out of the published `lib/` runtime payload into `test/self-checks/` and `test/helpers/check.ts`, running them in parallel under `node --test` (`lib/*.ts`, `lib/features/*.ts`, `test/self-checks/*.test.ts`, `package.json`).

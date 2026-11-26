@@ -1,5 +1,5 @@
 /**
- * Behavioral suite for the Argon footer preset in lib/features/footer.ts.
+ * Behavioral suite for the Zen footer preset in lib/features/footer.ts.
  *
  * Drives the real extension through a fake `pi` so centered rendering, inline git
  * expansion via `···`, exclusive second-row details, text selection preservation,
@@ -82,9 +82,9 @@ const SAMPLE_GIT = {
 register(pi);
 await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
-function argonFooter(gitValue: typeof SAMPLE_GIT | null = SAMPLE_GIT): Footer {
-	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = "Argon";
-	getRuntime().argonFooterExpanded = null;
+function zenFooter(gitValue: typeof SAMPLE_GIT | null = SAMPLE_GIT): Footer {
+	(globalThis as Record<symbol, unknown>)[FOOTER_PRESET_KEY] = "Zen";
+	getRuntime().zenFooterExpanded = null;
 	footerTest.git = gitValue;
 	assert.ok(footerFactory, "session_start registered a footer factory");
 	return footerFactory(tui, theme, footerData);
@@ -112,8 +112,8 @@ const colOf = (line: string, needle: string): number => {
 	return visibleWidth(line.slice(0, idx));
 };
 
-test("Argon default renders a single centered row with cwd, clock, model, and dots", () => {
-	const footer = argonFooter(SAMPLE_GIT);
+test("Zen default renders a single centered row with cwd, clock, model, and dots", () => {
+	const footer = zenFooter(SAMPLE_GIT);
 	const lines = footer.render(140);
 	assert.equal(lines.length, 1, "starts as a single row");
 	const row = lines[0]!;
@@ -123,20 +123,20 @@ test("Argon default renders a single centered row with cwd, clock, model, and do
 	assert.ok(row.includes(" | "), "left and right heads are separated by |");
 	assert.ok(row.includes("Gemini 4 Neon"), "model is shown");
 	assert.ok(row.trimEnd().endsWith("···"), "dots affordance is shown when git data exists");
-	assert.ok(!row.includes("▲") && !row.includes("▼"), "Argon omits Minimal arrows");
+	assert.ok(!row.includes("▲") && !row.includes("▼"), "Zen omits Minimal arrows");
 	assert.ok(!row.includes("+97") && !row.includes("perf/footer-git-and-render"), "git stays hidden until ··· is clicked");
 	assert.ok(!row.includes("MCP:"), "statuses stay hidden until left head is clicked");
 });
 
-test("Argon omits ··· when there is no git data", () => {
-	const footer = argonFooter(null);
+test("Zen omits ··· when there is no git data", () => {
+	const footer = zenFooter(null);
 	const lines = footer.render(140);
 	assert.equal(lines.length, 1);
 	assert.ok(!lines[0]!.includes("···"), "no dots without git data");
 });
 
 test("clicking ··· expands and collapses git data inline without double-toggling", () => {
-	const footer = argonFooter(SAMPLE_GIT);
+	const footer = zenFooter(SAMPLE_GIT);
 	const row0 = footer.render(140)[0]!;
 	const dotsX = colOf(row0, "···");
 
@@ -166,7 +166,7 @@ test("clicking ··· expands and collapses git data inline without double-toggl
 });
 
 test("clicking left and right head segments swaps the centered second row exclusively", () => {
-	const footer = argonFooter(SAMPLE_GIT);
+	const footer = zenFooter(SAMPLE_GIT);
 	const row0 = footer.render(140)[0]!;
 	const leftX = colOf(row0, "pi-arnative");
 	const rightX = colOf(row0, "Gemini 4 Neon");
@@ -201,17 +201,17 @@ test("clicking left and right head segments swaps the centered second row exclus
 });
 
 test("blank margin and middle separator stay inert on click", () => {
-	const footer = argonFooter(SAMPLE_GIT);
+	const footer = zenFooter(SAMPLE_GIT);
 	const row0 = footer.render(140)[0]!;
 	const pipeX = colOf(row0, "|");
 	assert.equal(footer.handleMouse?.(mouse("click", 0, 0, { clickCount: 1 })), undefined, "left margin is inert");
 	assert.equal(footer.handleMouse?.(mouse("click", pipeX, 0, { clickCount: 1 })), undefined, "middle | divider is inert");
 	assert.equal(footer.handleMouse?.(mouse("click", 139, 0, { clickCount: 1 })), undefined, "right margin is inert");
-	assert.equal(footer.render(140).length, 1, "inert clicks leave Argon collapsed");
+	assert.equal(footer.render(140).length, 1, "inert clicks leave Zen collapsed");
 });
 
-test("keyboard shortcut cycles Argon through left+git, right+git, and collapsed", () => {
-	const footer = argonFooter(SAMPLE_GIT);
+test("keyboard shortcut cycles Zen through left+git, right+git, and collapsed", () => {
+	const footer = zenFooter(SAMPLE_GIT);
 	const toggle = [...shortcuts.values()][0];
 	assert.ok(toggle, "toggle footer shortcut is registered");
 

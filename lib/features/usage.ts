@@ -469,6 +469,7 @@ export class UsageModalComponent implements Component {
 		// rows exist beyond the viewport.
 		const bar: string[] = [];
 		let barCol = 0;
+		const barRow = CHROME_ROWS + body.length;
 		for (const r of USAGE_RANGES) {
 			if (bar.length > 0) {
 				bar.push(dim(" · "));
@@ -476,19 +477,17 @@ export class UsageModalComponent implements Component {
 			}
 			const label = RANGE_LABELS[r];
 			const text = r === this.range ? acc(bold(label)) : th.fg("muted", label);
-			this.tabHitboxes.push({ line: CHROME_ROWS + 2, start: barCol + 2, end: barCol + label.length + 1, range: r });
+			this.tabHitboxes.push({ line: barRow, start: barCol + 2, end: barCol + label.length + 1, range: r });
 			bar.push(text);
 			barCol += label.length;
 		}
 		const counter = `${Math.min(rows.length, USAGE_VIEWPORT)}/${rows.length}`;
-		const rule = th.fg("borderMuted", "\u2500".repeat(Math.max(0, contentW)));
 		const barLine = bar.join("");
 		const counterFits = contentW - barCol - counter.length - 1 >= 0;
-		// The bar is a control between two rules, so the eye reads it as a switch over the table
-		// below it, not as a line of the table itself.
-		body.push(rule);
+		// Blank rows separate the range bar from the description above (via renderScreen) and the
+		// table header below — no inner horizontal rules.
 		body.push(counterFits ? barLine + " ".repeat(contentW - barCol - counter.length) + dim(counter) : barLine);
-		body.push(rule);
+		body.push("");
 		body.push(headerText);
 
 		// Row 2 onward: the table, windowed so the box keeps one height however long the list
@@ -554,14 +553,8 @@ export class UsageModalComponent implements Component {
 		const hiddenBelow = rows.length - (startIdx + visibleRows.length);
 		if (hiddenBelow > 0) body.push(dim(`↓ ${hiddenBelow} more`));
 
-		// The selected row's detail sits under the table, where the eye lands after scanning it.
+		// Blank row separates the table rows from the Total band (no inner rules).
 		body.push("");
-		body.push(this.selectedDetail(rows[this.selectedIndex], acc, soft));
-		if (this.notice) body.push(th.fg("muted", this.notice));
-
-		// Table-width separator above the Total band (skill arnative-pi §6 rule 7).
-		const tableW = colW.name + sessionW + messagesW + colW.tokens + colW.cost;
-		body.push(th.fg("borderMuted", "─".repeat(Math.max(0, tableW))));
 
 		if (this.view === "prices") {
 			// No Total band for rates: a count of what the table prices, and of the used models
@@ -584,6 +577,11 @@ export class UsageModalComponent implements Component {
 			// Same left edge as the header: one table, three bands, one column grid.
 			body.push(totalName + totalSess + totalMsgs + totalToks + totalCost);
 		}
+
+		// The selected row's detail sits below Total, separated by a blank row.
+		body.push("");
+		body.push(this.selectedDetail(rows[this.selectedIndex], acc, soft));
+		if (this.notice) body.push(th.fg("muted", this.notice));
 
 		const viewName = VIEW_LABELS[this.view];
 		return renderScreen(
