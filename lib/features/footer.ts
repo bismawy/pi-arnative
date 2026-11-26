@@ -2,12 +2,12 @@
  * Arnative footer (fixed 3-row grid). Row 1: cwd | active time | branch — model + thinking;
  * rows 2-3: extension status | tok/s · cache · token, each side wrapped in its half of the
  * width. The clock counts active time, not wall-clock age — see {@link ActiveClock}.
- * Preset (`/arnative footers`), live: "Arnative (Full)" (default), "Arnative (Minimal)"
- * or "Pi (system)".
+ * Preset (`/arnative footers`), live: "Arnative (Full)" (default), "Arnative (Minimal)",
+ * "Argon" or "Pi (system)".
  */
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { fgOr, setActiveTheme, softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
 import { inSpans, textSpans, type TextSpan } from "../box.ts";
 import { capitalize, modelDisplayParts } from "../format.ts";
@@ -120,17 +120,24 @@ export {
 // 3-row grid footer; "Pi (system)" = pi's built-in footer (the boxed editor stays arnative
 // in both — pi's `setEditorComponent()` would close the picker mid-preview).
 // Listed built-in-first: the `(Full)` suffix is rendered dim, so the plain row reads cleaner on top.
-export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)"] as const;
+export const FOOTER_PRESETS = ["Pi (system)", "Arnative (Full)", "Arnative (Minimal)", "Argon"] as const;
 export type FooterPreset = (typeof FOOTER_PRESETS)[number];
 export const DEFAULT_FOOTER_PRESET: FooterPreset = "Arnative (Full)";
 /** Presets that this extension's registrar draws (everything but pi's built-in footer). */
-const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)"];
+const ARNATIVE_PRESETS: readonly FooterPreset[] = ["Arnative (Full)", "Arnative (Minimal)", "Argon"];
 /** Collapse state of the minimal footer: one flag per side, so a click on the left
  *  head does not open the right metrics. Session-scoped, not persisted. */
 export function minimalExpanded(): { left: boolean; right: boolean } {
 	const rt = getRuntime();
 	rt.minimalFooterExpanded ??= { left: false, right: false };
 	return rt.minimalFooterExpanded;
+}
+/** Collapse state of the Argon footer: `git` toggles inline git expansion after `···`,
+ *  and `detail` opens one centered second row at a time (`left` statuses or `right` metrics). */
+export function argonExpanded(): { git: boolean; detail: "left" | "right" | null } {
+	const rt = getRuntime();
+	rt.argonFooterExpanded ??= { git: false, detail: null };
+	return rt.argonFooterExpanded;
 }
 const footerPreset = choiceSetting(FOOTER_PRESET_CONFIG_KEY, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET);
 const FOOTER_PRESET_KEY = footerPreset.slot;
@@ -218,7 +225,7 @@ let themeCache: {
 	sep: string;
 } | null = null;
 /** The cwd cell and git segment, rebuilt only when theme, cwd, or collected git info changes. */
-let gitCache: { theme: unknown; git: GitInfo; cwd: string; cwdCell: string; gitSeg: string } | null = null;
+let gitCache: { theme: unknown; git: GitInfo; cwd: string; cwdCell: string; gitItems: string[]; gitSeg: string } | null = null;
 
 let gitRefreshInFlight = false;
 let git: GitInfo = null;
@@ -228,11 +235,21 @@ let rerender: (() => void) | null = null;
 let lastPokeMs = 0;
 /** Column ranges of the minimal footer's head cells and disclosure arrows, recorded per render
  *  (mouse coordinates are component-local, so they must come from the same frame). */
+interface MinimalSpan {
+	y: number;
+	x0: number;
+	x1: number;
+}
 let minimalRanges: {
-	left: [number, number];
-	right: [number, number];
-	leftArrow: [number, number];
-	rightArrow: [number, number];
+	left: MinimalSpan[];
+	right: MinimalSpan[];
+	leftArrow: MinimalSpan | null;
+	rightArrow: MinimalSpan | null;
+} | null = null;
+let argonRanges: {
+	left: MinimalSpan[];
+	right: MinimalSpan[];
+	dots: MinimalSpan | null;
 } | null = null;
 
 // One shared clock: a /reload re-imports this module, so a fresh instance would restart
@@ -435,6 +452,98 @@ export function placeMinimalHead(
 	};
 }
 
+function centerLine(text: string, width: number): { line: string; pad: number; textW: number } {
+	const textW = visibleWidth(text);
+	const pad = Math.max(0, Math.floor((width - textW) / 2));
+	return { line: pad > 0 ? " ".repeat(pad) + text : text, pad, textW };
+}
+
+/**
+ * Centered head row(s) for the Argon footer, plus exact 0-based inclusive hit zones for
+ * `left` (cwd + clock), `right` (model), and `dots` (`···` git toggle). Measured directly
+ * from the placed strings so click zones never drift across widths or narrow wraps.
+ */
+export function placeArgonHead(
+	left: string,
+	right: string,
+	sep: string,
+	dots: string,
+	gitText: string,
+	width: number,
+): {
+	rows: string[];
+	left: MinimalSpan[];
+	right: MinimalSpan[];
+	dots: MinimalSpan | null;
+} {
+	const w = Math.max(1, width);
+	const leftW = visibleWidth(left);
+	const sepW = visibleWidth(sep);
+	const rightW = visibleWidth(right);
+	const dotsW = dots ? visibleWidth(dots) : 0;
+	const gitW = gitText ? visibleWidth(gitText) : 0;
+	const base = `${left}${sep}${right}${dotsW > 0 ? ` ${dots}` : ""}`;
+	const baseW = leftW + sepW + rightW + (dotsW > 0 ? 1 + dotsW : 0);
+	const fullW = baseW + (gitW > 0 ? 1 + gitW : 0);
+
+	if (fullW <= w) {
+		const rowText = gitW > 0 ? `${base} ${gitText}` : base;
+		const pad = Math.max(0, Math.floor((w - fullW) / 2));
+		const rightStart = pad + leftW + sepW;
+		const dotsStart = rightStart + rightW + 1;
+		return {
+			rows: [pad > 0 ? " ".repeat(pad) + rowText : rowText],
+			left: leftW > 0 ? [{ y: 0, x0: pad, x1: pad + leftW - 1 }] : [],
+			right: rightW > 0 ? [{ y: 0, x0: rightStart, x1: rightStart + rightW - 1 }] : [],
+			dots: dotsW > 0 ? { y: 0, x0: dotsStart, x1: dotsStart + dotsW - 1 } : null,
+		};
+	}
+
+	if (baseW <= w && gitW > 0) {
+		const pad = Math.max(0, Math.floor((w - baseW) / 2));
+		const rightStart = pad + leftW + sepW;
+		const dotsStart = rightStart + rightW + 1;
+		const gitRows = wrapTextWithAnsi(gitText, w).map((l) => centerLine(l, w).line);
+		return {
+			rows: [pad > 0 ? " ".repeat(pad) + base : base, ...gitRows],
+			left: leftW > 0 ? [{ y: 0, x0: pad, x1: pad + leftW - 1 }] : [],
+			right: rightW > 0 ? [{ y: 0, x0: rightStart, x1: rightStart + rightW - 1 }] : [],
+			dots: dotsW > 0 ? { y: 0, x0: dotsStart, x1: dotsStart + dotsW - 1 } : null,
+		};
+	}
+
+	// Narrow viewport: wrap each head centered so nothing clips and zones stay exact.
+	const rows: string[] = [];
+	const leftSpans: MinimalSpan[] = [];
+	for (const seg of wrapTextWithAnsi(left, w)) {
+		const { line, pad, textW } = centerLine(seg, w);
+		if (textW > 0) leftSpans.push({ y: rows.length, x0: pad, x1: pad + textW - 1 });
+		rows.push(line);
+	}
+	const rightSpans: MinimalSpan[] = [];
+	let dotsSpan: MinimalSpan | null = null;
+	const rightWrapped = wrapTextWithAnsi(dotsW > 0 ? `${right} ${dots}` : right, w);
+	for (let i = 0; i < rightWrapped.length; i++) {
+		const { line, pad, textW } = centerLine(rightWrapped[i]!, w);
+		const y = rows.length;
+		const isLast = i === rightWrapped.length - 1;
+		if (isLast && dotsW > 0 && textW >= dotsW) {
+			const dotsStart = pad + textW - dotsW;
+			dotsSpan = { y, x0: dotsStart, x1: pad + textW - 1 };
+			// Exclude the trailing ` ···` from the right-text zone so clicks on `···` stay distinct.
+			const rightEnd = dotsStart - 2;
+			if (rightEnd >= pad) rightSpans.push({ y, x0: pad, x1: rightEnd });
+		} else if (textW > 0) {
+			rightSpans.push({ y, x0: pad, x1: pad + textW - 1 });
+		}
+		rows.push(line);
+	}
+	if (gitW > 0) {
+		for (const seg of wrapTextWithAnsi(gitText, w)) rows.push(centerLine(seg, w).line);
+	}
+	return { rows, left: leftSpans, right: rightSpans, dots: dotsSpan };
+}
+
 function formatModelName(
 	model: { id: string; name?: string; provider?: string } | undefined,
 	thinkingLevel: string | undefined,
@@ -469,6 +578,18 @@ export function layoutFooterGrid(
 	width: number,
 	vw: (s: string) => number = visibleWidth,
 ): string[] {
+	const headLeftW = headLeft ? vw(headLeft) : 0;
+	const headRightW = headRight ? vw(headRight) : 0;
+	// Narrow / mobile viewport: when the two head cells cannot share one row,
+	// stack left layout (head + statuses, auto-wrapped) above right layout (head + metrics, auto-wrapped).
+	if (headLeft && headRight && headLeftW + 1 + headRightW > width) {
+		const w = Math.max(1, width);
+		const out: string[] = [...wrapTextWithAnsi(headLeft, w)];
+		if (left.length > 0) out.push(...wrapTextWithAnsi(left.join(leftSep), w));
+		out.push(...wrapTextWithAnsi(headRight, w));
+		if (right.length > 0) out.push(...wrapTextWithAnsi(right.join(rightSep), w));
+		return out;
+	}
 	const half = Math.max(1, Math.floor(width / 2) - 1);
 	// Every cell's width is measured once up front: visibleWidth parses ANSI and
 	// clusters graphemes, and wrap()/pairRow() used to re-measure the same cell 3x.
@@ -502,7 +623,7 @@ export function layoutFooterGrid(
 	};
 	const leftRows = wrap(left, leftW, leftSep, sepWL);
 	const rightRows = wrap(right, rightW, rightSep, sepWR);
-	const out = [pairRow(headLeft, headRight, width, vw)];
+	const out = [pairRow(headLeft, headRight, width, vw, headLeftW, headRightW)];
 	for (let i = 0; i < Math.max(leftRows.length, rightRows.length); i++) {
 		const l = leftRows[i];
 		const r = rightRows[i];
@@ -1006,6 +1127,20 @@ export default function (pi: ExtensionAPI) {
 	// fullscreen mode, so pi's own rule ("always design a keyboard path") needs this.
 	// One key toggles both sides: expand all unless everything is already open.
 	const toggleMinimal = () => {
+		if (activeFooterPreset() === "Argon") {
+			const state = argonExpanded();
+			if (state.detail === null && !state.git) {
+				state.detail = "left";
+				state.git = true;
+			} else if (state.detail === "left") {
+				state.detail = "right";
+			} else {
+				state.detail = null;
+				state.git = false;
+			}
+			poke();
+			return;
+		}
 		const state = minimalExpanded();
 		const allOpen = state.left && state.right;
 		state.left = !allOpen;
@@ -1128,7 +1263,7 @@ export default function (pi: ExtensionAPI) {
 									secondarySoft: softLabel,
 									diffAdd: colorOr("toolDiffAdded", soft),
 									diffDel: colorOr("toolDiffRemoved", soft),
-									sep: dim(" | "),
+									sep: ` ${dim("·")} `,
 							};
 						}
 							const { acc, dim, soft, colorOr, primary, secondarySoft, diffAdd, diffDel, sep } = themeCache!;
@@ -1139,20 +1274,25 @@ export default function (pi: ExtensionAPI) {
 							idlePauseShown = paused;
 							const clockIcon = paused ? dim("\uf017") : acc("\uf017");
 							const clockText = paused ? dim(durationStr) : secondarySoft(durationStr);
-							const pDuration = `${clockIcon} ${clockText}${diffStat ? `${sep}${diffStat}` : ""}`;
+							const clockCell = `${clockIcon} ${clockText}`;
+							const pDuration = `${clockCell}${diffStat ? `${sep}${diffStat}` : ""}`;
 							// The git segment (branch, sync, tag, dirty count) is rebuilt only when theme,
 							// git info, or cwd changes (refreshGit replaces the git object).
 							if (gitCache?.theme !== theme || gitCache?.git !== git || gitCache?.cwd !== cwd) {
 								const cwdCell = `${acc("\uf07b")} ${dim(shortenCwd(cwd))}`;
-								const gitSeg = git ? gitParts(git, acc, secondarySoft).map((p) => `${sep}${p}`).join("") : "";
-								gitCache = { theme, git, cwd, cwdCell, gitSeg };
+								const gitItems = git ? gitParts(git, acc, secondarySoft) : [];
+								const gitSeg = gitItems.map((p) => `${sep}${p}`).join("");
+								gitCache = { theme, git, cwd, cwdCell, gitItems, gitSeg };
 							}
-							const isMinimal = activeFooterPreset() === "Arnative (Minimal)";
+							const preset = activeFooterPreset();
+							const isMinimal = preset === "Arnative (Minimal)";
+							const isArgon = preset === "Argon";
 							const open = minimalExpanded();
 							const arrow = (expanded: boolean) => dim(expanded ? " ▼" : " ▲");
 							let left1 = `${gitCache.cwdCell}${sep}${pDuration}${gitCache.gitSeg}`;
 							if (isMinimal) left1 += arrow(open.left);
-							const right1 = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim) + (isMinimal ? arrow(open.right) : "");
+							const modelText = formatModelName(currentModel, currentThinkingLevel, acc, secondarySoft, primary, dim);
+							const right1 = modelText + (isMinimal ? arrow(open.right) : "");
 
 							const statuses: ReadonlyMap<string, string> = (() => {
 								try {
@@ -1226,22 +1366,74 @@ export default function (pi: ExtensionAPI) {
 							const cacheCell = opt ? `${(bandPaint ?? acc)("\udb80\udf5b")} ${(bandPaint ?? secondarySoft)(opt)}` : "";
 							const metricCells = [speedStr, cacheCell, usageStr].filter(Boolean);
 
+							if (isArgon) {
+								minimalRanges = null;
+								const argon = argonExpanded();
+								const argonLeft = `${gitCache.cwdCell}${sep}${clockCell}`;
+								const argonGitCells = [diffStat, ...gitCache.gitItems].filter(Boolean);
+								const hasGit = argonGitCells.length > 0;
+								const dots = hasGit ? (argon.git ? acc("···") : dim("···")) : "";
+								const gitText = hasGit && argon.git ? argonGitCells.join(sep) : "";
+								const placed = placeArgonHead(argonLeft, modelText, ` ${dim("|")} `, dots, gitText, width);
+								argonRanges = { left: placed.left, right: placed.right, dots: placed.dots };
+								const detailCells = argon.detail === "left" ? groups : argon.detail === "right" ? metricCells : [];
+								const w = Math.max(1, width);
+								const detailLines = detailCells.length > 0
+									? wrapTextWithAnsi(detailCells.join(sep), w).map((l) => centerLine(l, w).line)
+									: [];
+								return [...placed.rows, ...detailLines];
+							}
+							argonRanges = null;
 							// Fixed 3-row grid: head (cwd/model), then statuses and metrics each
 							// wrapped inside their half of the width. Arnative (Minimal) starts collapsed
 							// and reveals the same rows on click/keypress, one side at a time.
 							const leftRows = isMinimal && !open.left ? [] : groups;
 							const rightRows = isMinimal && !open.right ? [] : metricCells;
 							if (isMinimal) {
-								// Own head row: it reports the zones measured from what it actually placed.
+								const rightSep = ` ${dim("·")} `;
+								if (visibleWidth(left1) + 1 + visibleWidth(right1) > width) {
+									// Narrow / mobile viewport: stack left layout (head + expanded statuses)
+									// then right layout (head + expanded metrics), each auto-wrapped to full width.
+									const w = Math.max(1, width);
+									const leftHeadLines = wrapTextWithAnsi(left1, w);
+									const leftDetailLines = leftRows.length > 0 ? wrapTextWithAnsi(leftRows.join(sep), w) : [];
+									const rightHeadY = leftHeadLines.length + leftDetailLines.length;
+									const rightHeadLines = wrapTextWithAnsi(right1, w);
+									const rightDetailLines = rightRows.length > 0 ? wrapTextWithAnsi(rightRows.join(rightSep), w) : [];
+									const spansOf = (lines: string[], startY: number): MinimalSpan[] => {
+										const spans: MinimalSpan[] = [];
+										for (let i = 0; i < lines.length; i++) {
+											const lw = visibleWidth(lines[i]!);
+											if (lw > 0) spans.push({ y: startY + i, x0: 0, x1: lw - 1 });
+										}
+										return spans;
+									};
+									const arrowOf = (spans: MinimalSpan[]): MinimalSpan | null => {
+										const last = spans[spans.length - 1];
+										return last ? { y: last.y, x0: Math.max(last.x0, last.x1 - 1), x1: last.x1 } : null;
+									};
+									const leftSpans = spansOf(leftHeadLines, 0);
+									const rightSpans = spansOf(rightHeadLines, rightHeadY);
+									minimalRanges = {
+										left: leftSpans,
+										right: rightSpans,
+										leftArrow: arrowOf(leftSpans),
+										rightArrow: arrowOf(rightSpans),
+									};
+									return [...leftHeadLines, ...leftDetailLines, ...rightHeadLines, ...rightDetailLines];
+								}
+								// Wide viewport: single head row with measured click zones.
 								const placed = placeMinimalHead(left1, right1, width);
-								const leftArrow: [number, number] = !placed.leftTruncated && placed.left[1] >= placed.left[0]
-									? [Math.max(placed.left[0], placed.left[1] - 1), placed.left[1]]
-									: [-1, -1];
-								const rightArrow: [number, number] = !placed.rightTruncated && placed.right[1] >= placed.right[0]
-									? [Math.max(placed.right[0], placed.right[1] - 1), placed.right[1]]
-									: [-1, -1];
-								minimalRanges = { left: placed.left, right: placed.right, leftArrow, rightArrow };
-								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, ` ${dim("·")} `, width).slice(1);
+								const leftSpans: MinimalSpan[] = placed.left[0] >= 0 ? [{ y: 0, x0: placed.left[0], x1: placed.left[1] }] : [];
+								const rightSpans: MinimalSpan[] = placed.right[0] >= 0 ? [{ y: 0, x0: placed.right[0], x1: placed.right[1] }] : [];
+								const leftArrow: MinimalSpan | null = !placed.leftTruncated && placed.left[0] >= 0 && placed.left[1] >= placed.left[0]
+									? { y: 0, x0: Math.max(placed.left[0], placed.left[1] - 1), x1: placed.left[1] }
+									: null;
+								const rightArrow: MinimalSpan | null = !placed.rightTruncated && placed.right[0] >= 0 && placed.right[1] >= placed.right[0]
+									? { y: 0, x0: Math.max(placed.right[0], placed.right[1] - 1), x1: placed.right[1] }
+									: null;
+								minimalRanges = { left: leftSpans, right: rightSpans, leftArrow, rightArrow };
+								const rest = layoutFooterGrid("", "", leftRows, rightRows, sep, rightSep, width).slice(1);
 								return [placed.row, ...rest];
 							}
 							minimalRanges = null;
@@ -1261,10 +1453,34 @@ export default function (pi: ExtensionAPI) {
 								if (event.type === "click") swallowMinimalClick = false;
 								return { handled: true, render: false };
 							}
-							if (event.y !== 0) return undefined;
+							const hitSpan = (s: MinimalSpan | null) => !!s && event.y === s.y && event.x >= s.x0 && event.x <= s.x1;
+							const hitAny = (spans: readonly MinimalSpan[]) => spans.some((s) => hitSpan(s));
+							if (argonRanges) {
+								const toggleGit = () => {
+									const state = argonExpanded();
+									state.git = !state.git;
+									poke();
+									return { handled: true, render: true };
+								};
+								const toggleDetail = (side: "left" | "right") => {
+									const state = argonExpanded();
+									state.detail = state.detail === side ? null : side;
+									poke();
+									return { handled: true, render: true };
+								};
+								if (event.type === "press") {
+									if (!hitSpan(argonRanges.dots)) return undefined;
+									swallowMinimalClick = true;
+									return toggleGit();
+								}
+								if (event.type !== "click" || (event.clickCount ?? 1) !== 1) return undefined;
+								if (hitSpan(argonRanges.dots)) return toggleGit();
+								const hit = hitAny(argonRanges.left) ? "left" : hitAny(argonRanges.right) ? "right" : null;
+								if (!hit) return undefined;
+								return toggleDetail(hit);
+							}
 							const ranges = minimalRanges;
 							if (!ranges) return undefined;
-							const inside = (r: [number, number]) => event.x >= r[0] && event.x <= r[1];
 							const toggle = (side: "left" | "right") => {
 								const state = minimalExpanded();
 								state[side] = !state[side];
@@ -1272,13 +1488,13 @@ export default function (pi: ExtensionAPI) {
 								return { handled: true, render: true };
 							};
 							if (event.type === "press") {
-								const arrowHit = inside(ranges.leftArrow) ? "left" : inside(ranges.rightArrow) ? "right" : null;
+								const arrowHit = hitSpan(ranges.leftArrow) ? "left" : hitSpan(ranges.rightArrow) ? "right" : null;
 								if (!arrowHit) return undefined;
 								swallowMinimalClick = true;
 								return toggle(arrowHit);
 							}
 							if (event.type !== "click" || (event.clickCount ?? 1) !== 1) return undefined;
-							const hit = inside(ranges.left) ? "left" : inside(ranges.right) ? "right" : null;
+							const hit = hitAny(ranges.left) ? "left" : hitAny(ranges.right) ? "right" : null;
 							if (!hit) return undefined;
 							return toggle(hit);
 						},

@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- **Arnative (Argon) centered footer preset.** Added a centered footer layout showing `cwd · clock` and the model label on one row with an inline `···` git toggle, exclusive left/right click toggles for the centered detail row, and keyboard cycling (`lib/features/footer.ts`, `lib/runtime.ts`, `test/footer-argon.test.ts`).
+
 ### Changed
+- **Responsive stacked footer on narrow terminals, dot separators, and compact model route labels.** `Arnative (Minimal)` and `Arnative (Full)` stack left and right layouts vertically with auto-wrap and row-aware click zones when both head cells do not fit on one line; left-side footer items use `·` instead of `|`; `modelDisplayParts()` strips verbose proxy metadata (`· ...`) and moves the remote backend segment into the provider suffix such as `Gemini 4 Neon (Magpie/agy-cli)` (`lib/features/footer.ts`, `lib/format.ts`, `test/footer-minimal.test.ts`, `test/format.test.ts`).
 - **Single extension entry point (`extensions/index.ts`).** Moved the 14 extension modules into `lib/features/` and registered them through one entry point so Pi loads shared `lib/` modules once per startup or `/reload` instead of up to 14 times (`extensions/index.ts`, `lib/features/*.ts`, `package.json`).
 - **Extracted inline self-checks out of runtime modules.** Moved all 27 inline `isMain` self-check suites (~5,680 lines, ~356 KB) and `lib/check.ts` out of the published `lib/` runtime payload into `test/self-checks/` and `test/helpers/check.ts`, running them in parallel under `node --test` (`lib/*.ts`, `lib/features/*.ts`, `test/self-checks/*.test.ts`, `package.json`).
 - **Centralized runtime context and event lifecycle (`lib/runtime.ts`).** Consolidated 26 scattered `globalThis` `Symbol.for` runtime slots into one typed `RuntimeState` bag, combined 43 separate `pi.on()` registrations into 19 single-listener event dispatchers (one per event type), and excluded dev-only `themes/gen-themes.mjs` from published package files and overlay (`lib/runtime.ts`, `extensions/index.ts`, `lib/features/*.ts`, `package.json`, `scripts/overlay.mjs`).

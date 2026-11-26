@@ -11,7 +11,7 @@ import { markedLabels } from "../../lib/format.ts";
 import { IS_WINDOWS_LIKE, SHORTCUT_RELOAD } from "../../lib/shortcuts.ts";
 import { CHATBOX_DIALOG_KEY as CHATBOX_DIALOG_CONFIG_KEY, CHATBOX_PRESET_KEY as CHATBOX_PRESET_CONFIG_KEY, CHATBOX_PROMPT_KEY as CHATBOX_PROMPT_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache } from "../../lib/preset-store.ts";
 import { getRuntime } from "../../lib/runtime.ts";
-import { CHATBOX_PRESETS, DEFAULT_CHATBOX_PRESET, CHATBOX_PROMPTS, DEFAULT_CHATBOX_PROMPT, CHATBOX_DIALOGS, DEFAULT_CHATBOX_DIALOG, activeChatboxPreset, setChatboxPreset, activeChatboxPrompt, setChatboxPrompt, nextChatboxPrompt, activeChatboxDialog, setChatboxDialog, nextChatboxDialog, isPromptActive, stopPromptIdle, markPromptTyped, paintChatboxPrompt, renderChatboxScrollBorder, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET, minimalExpanded, activeFooterPreset, setFooterPreset, IDLE_PAUSE_MS, ActiveClock, seedActiveMs, clock, currentToolVerb, isJevEyeStatus, jevEyeStatusLine, ponytailStatusLine, gitParts, formatDiffStat, placeMinimalHead, shortenCwd, resolveSessionStartMs, sumNumstat, formatDuration, renderChatboxLines, boxEditorLines, applyChatboxDialog, overlayOutsideDialogOnWidgetLines, layoutFooterGrid, piCacheHit, CACHE_WINDOW_MSGS, cacheHitBand, RATE_MIN_ACTIVE_MS, RATE_MIN_WIDTH, costCell, getUsage, workingLabel, isPointerOrFocusInput, armIdleProbe, stopIdleProbe, getToolWorkingMessage, __test } from "../../lib/features/footer.ts";
+import { CHATBOX_PRESETS, DEFAULT_CHATBOX_PRESET, CHATBOX_PROMPTS, DEFAULT_CHATBOX_PROMPT, CHATBOX_DIALOGS, DEFAULT_CHATBOX_DIALOG, activeChatboxPreset, setChatboxPreset, activeChatboxPrompt, setChatboxPrompt, nextChatboxPrompt, activeChatboxDialog, setChatboxDialog, nextChatboxDialog, isPromptActive, stopPromptIdle, markPromptTyped, paintChatboxPrompt, renderChatboxScrollBorder, FOOTER_PRESETS, DEFAULT_FOOTER_PRESET, minimalExpanded, argonExpanded, activeFooterPreset, setFooterPreset, IDLE_PAUSE_MS, ActiveClock, seedActiveMs, clock, currentToolVerb, isJevEyeStatus, jevEyeStatusLine, ponytailStatusLine, gitParts, formatDiffStat, placeMinimalHead, placeArgonHead, shortenCwd, resolveSessionStartMs, sumNumstat, formatDuration, renderChatboxLines, boxEditorLines, applyChatboxDialog, overlayOutsideDialogOnWidgetLines, layoutFooterGrid, piCacheHit, CACHE_WINDOW_MSGS, cacheHitBand, RATE_MIN_ACTIVE_MS, RATE_MIN_WIDTH, costCell, getUsage, workingLabel, isPointerOrFocusInput, armIdleProbe, stopIdleProbe, getToolWorkingMessage, __test } from "../../lib/features/footer.ts";
 
 const { CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, CHATBOX_DIALOG_KEY, ARNATIVE_PRESETS, FOOTER_PRESET_KEY, WORK_LABEL, run, branchFromDisk, refreshGit, formatModelName, stopWorkingClock, IDLE_PROBE_EPSILON_MS, startWorkingClock } = __test;
 
@@ -325,10 +325,29 @@ test("lib/features/footer.ts self-check", async () => {
 	assert(sumNumstat("").added === 0 && sumNumstat("").removed === 0, "empty numstat is zero, not NaN")
 
 	// Footer presets: Arnative (Full) is the default; Pi (system) hands the footer slot back to pi (the editor stays arnative).
-	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 3, "Arnative (Full) is the default footer preset");
-	assert(FOOTER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full) | Arnative (Minimal)", "built-in preset is listed first, minimal last");
-	assert(markedLabels(FOOTER_PRESETS, "Pi (system)").join(" | ") === "● Pi (system) |   Arnative (Full) |   Arnative (Minimal)", "footer preset labels mark the active one");
-	assert(ARNATIVE_PRESETS.join(" | ") === "Arnative (Full) | Arnative (Minimal)", "the arnative-drawn presets exclude pi's built-in footer");
+	assert(DEFAULT_FOOTER_PRESET === "Arnative (Full)" && FOOTER_PRESETS.length === 4, "Arnative (Full) is the default footer preset");
+	assert(FOOTER_PRESETS.join(" | ") === "Pi (system) | Arnative (Full) | Arnative (Minimal) | Argon", "built-in preset is listed first, Argon last");
+	assert(markedLabels(FOOTER_PRESETS, "Pi (system)").join(" | ") === "● Pi (system) |   Arnative (Full) |   Arnative (Minimal) |   Argon", "footer preset labels mark the active one");
+	assert(ARNATIVE_PRESETS.join(" | ") === "Arnative (Full) | Arnative (Minimal) | Argon", "the arnative-drawn presets exclude pi's built-in footer");
+	// Argon disclosure: starts collapsed, tracks inline git and exclusive detail row.
+	getRuntime().argonFooterExpanded = null;
+	const argon0 = argonExpanded();
+	assert(argon0.git === false && argon0.detail === null, "Argon starts fully collapsed");
+	argon0.git = true;
+	argon0.detail = "left";
+	assert(argonExpanded().git === true && argonExpanded().detail === "left", "Argon state persists across reads");
+	getRuntime().argonFooterExpanded = null;
+	const aWide = placeArgonHead("cwd · 4m 0s", "Gemini", " | ", "···", "", 60);
+	assert(aWide.rows.length === 1, "Argon wide head fits on one row");
+	assert(aWide.left[0]!.x0 > 0, "Argon centers the head row");
+	assert(aWide.left[0]!.x1 + 4 === aWide.right[0]!.x0, "Argon leaves the separator outside left/right click zones");
+	assert(aWide.dots !== null && aWide.dots.x0 === aWide.right[0]!.x1 + 2, "Argon places the dots zone right after the model");
+	const aNoGit = placeArgonHead("cwd · 4m 0s", "Gemini", " | ", "", "", 60);
+	assert(aNoGit.dots === null && !aNoGit.rows[0]!.includes("···"), "Argon omits dots when there is no git data");
+	const aGitWrap = placeArgonHead("cwd · 4m 0s", "Gemini", " | ", "···", "+97 -24 · perf/footer · v0.16.1", 34);
+	assert(aGitWrap.rows.length >= 2 && aGitWrap.dots?.y === 0, "Argon wraps overflowing git text below row 0 without breaking head zones");
+	const aNarrow = placeArgonHead("cwd · 4m 0s", "Gemini 4 Neon", " | ", "···", "", 18);
+	assert(aNarrow.rows.length >= 2 && aNarrow.left.length > 0 && aNarrow.right.length > 0 && aNarrow.dots !== null, "Argon narrow wrap preserves all three click zones");
 	// Minimal disclosure: both sides start closed, then toggle independently.
 	getRuntime().minimalFooterExpanded = null;
 	const expand0 = minimalExpanded();

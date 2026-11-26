@@ -190,8 +190,8 @@ test("pressing head text leaves selection to pi; single-click still toggles, dou
 	assert.ok(footer.render(100).some((l) => l.includes("MCP")), "follow-up release/click after arrow press is swallowed");
 });
 
-test("the click zones track the real rendered row at every width", () => {
-	for (const width of [40, 60, 80, 100, 120, 160, 200]) {
+test("the click zones track the real rendered row at every wide width", () => {
+	for (const width of [80, 100, 120, 160, 200]) {
 		const footer = footerFor("Arnative (Minimal)");
 		const row = footer.render(width)[0]!;
 		const plain = row.replace(/\x1b\[[0-9;]*m/g, "");
@@ -253,6 +253,28 @@ test("a click on the far-right head row still toggles the right side", () => {
 	assert.ok(footer.handleMouse!(mouse("press", 99))?.handled === true, "the last cell belongs to the model head");
 	footer.handleMouse!(mouse("click", 99));
 	assert.ok(footer.render(100).some((l) => l.includes("↑1.2k")), "the right side opened");
+});
+
+test("narrow mobile viewport stacks left layout then right layout with auto-wrap and multi-row clicks", () => {
+	const footer = footerFor("Arnative (Minimal)");
+	const collapsed = footer.render(40);
+	assert.ok(collapsed.length >= 2, "narrow viewport stacks left head above right head");
+	assert.ok(collapsed[0]!.includes("pi-arnative"), "row 0 starts with the left head");
+	const rightHeadIdx = collapsed.findIndex((l) => l.includes("Deepseek"));
+	assert.ok(rightHeadIdx > 0, "right head follows below the left head");
+
+	// Single-click on the left head expands left statuses right below it.
+	assert.ok(footer.handleMouse!(mouse("click", 2, { y: 0 }))?.handled === true, "clicking left head toggles left");
+	const leftOpen = footer.render(40);
+	const mcpIdx = leftOpen.findIndex((l) => l.includes("MCP"));
+	const shiftedRightIdx = leftOpen.findIndex((l) => l.includes("Deepseek"));
+	assert.ok(mcpIdx > 0 && mcpIdx < shiftedRightIdx, "left statuses appear between left head and right head");
+
+	// Single-click on the shifted right head expands right metrics below it.
+	assert.ok(footer.handleMouse!(mouse("click", 2, { y: shiftedRightIdx }))?.handled === true, "clicking right head toggles right");
+	const bothOpen = footer.render(40);
+	const metricsIdx = bothOpen.findIndex((l) => l.includes("↑1.2k"));
+	assert.ok(metricsIdx > shiftedRightIdx, "right metrics appear below the right head");
 });
 
 test("the full preset is unchanged: no arrows, statuses always visible", () => {
