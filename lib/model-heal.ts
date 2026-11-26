@@ -14,7 +14,7 @@
  * edited is remembered as manual and left alone.
  */
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -289,17 +289,53 @@ function saveState(part: Partial<Omit<HealState, "schema">>): void {
 
 // ------------------------------------------------------------- channels
 
+const SECRET_CMD_TIMEOUT_MS = 5_000;
+
 /** A models.json apiKey: "$VAR" env, "!cmd" shell output, else the literal. */
-function resolveSecret(value: unknown): string | undefined {
+async function resolveSecret(value: unknown, signal?: AbortSignal): Promise<string | undefined> {
 	if (typeof value !== "string" || !value) return undefined;
 	if (value.startsWith("$")) return process.env[value.slice(1)]?.trim() || undefined;
 	if (value.startsWith("!")) {
-		try {
-			// A hanging or prompting command must not freeze pi: give up after 5 s.
-			return execSync(value.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 }).trim() || undefined;
-		} catch {
-			return undefined;
-		}
+		signal?.throwIfAborted();
+		const command = value.slice(1);
+		return await new Promise<string | undefined>((resolve, reject) => {
+			let settled = false;
+			const finish = (fn: () => void): void => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", onAbort);
+				fn();
+			};
+			const onAbort = (): void => {
+				try {
+					child.kill();
+				} catch {
+					// already exited
+				}
+				// Drop stdio refs so an aborted shell subchild cannot keep the event loop alive.
+				child.stdout?.destroy();
+				child.stderr?.destroy();
+				child.unref();
+				finish(() => reject(signal!.reason));
+			};
+			const child = exec(
+				command,
+				{ encoding: "utf8", timeout: SECRET_CMD_TIMEOUT_MS, maxBuffer: 64 * 1024, windowsHide: true },
+				(error, stdout) => {
+					if (signal?.aborted) {
+						finish(() => reject(signal.reason));
+						return;
+					}
+					if (error) {
+						finish(() => resolve(undefined));
+						return;
+					}
+					finish(() => resolve(stdout.trim() || undefined));
+				},
+			);
+			child.stdin?.end();
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
 	}
 	return value;
 }
@@ -309,7 +345,7 @@ interface Channel {
 	baseUrl: string;
 	api: string;
 	// Resolved on first use, so a !cmd key never runs for a channel the TTL skips.
-	key: () => string | undefined;
+	key: (signal?: AbortSignal) => Promise<string | undefined>;
 	headers: Record<string, string>;
 	compat: Compat;
 	ids: string[];
@@ -333,7 +369,12 @@ function channelsOf(cfg: Obj, deps: HealDeps): Channel[] {
 			provider,
 			baseUrl,
 			api: lower(entry.api ?? merged[0]?.api),
-			key: () => (key ??= { value: readAuthKey(provider) ?? resolveSecret(entry.apiKey) }).value,
+			key: async (signal?: AbortSignal) => {
+				if (key) return key.value;
+				const value = readAuthKey(provider) ?? (await resolveSecret(entry.apiKey, signal));
+				key = { value };
+				return value;
+			},
 			headers,
 			compat: { ...(isObj(entry.compat) ? entry.compat : {}), ...(merged[0]?.compat ?? {}) },
 			ids: [...new Set([...stated, ...merged.map((m) => m.id)])].sort(),
@@ -342,11 +383,12 @@ function channelsOf(cfg: Obj, deps: HealDeps): Channel[] {
 	return out;
 }
 
-async function fetchMeta(channel: Channel, fetchImpl: typeof fetch): Promise<Map<string, ModelMeta>> {
+async function fetchMeta(channel: Channel, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<Map<string, ModelMeta>> {
 	const headers: Record<string, string> = { accept: "application/json", "accept-encoding": "identity", ...channel.headers };
-	const key = channel.key();
+	const key = await channel.key(signal);
 	if (key) headers.authorization = `Bearer ${key}`;
-	const response = await fetchImpl(`${channel.baseUrl.replace(/\/+$/, "")}/models`, { headers, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
+	const reqSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(META_TIMEOUT_MS)]) : AbortSignal.timeout(META_TIMEOUT_MS);
+	const response = await fetchImpl(`${channel.baseUrl.replace(/\/+$/, "")}/models`, { headers, signal: reqSignal });
 	if (!response.ok) throw new Error(`HTTP ${response.status}`);
 	const text = await response.text();
 	if (text.length > META_MAX_BYTES) throw new Error("response too large");
@@ -401,7 +443,7 @@ export async function healMeta(deps: HealDeps, force: boolean): Promise<HealResu
 			const prev = state.providers[channel.provider];
 			if (!force && metaFresh(prev, channel, signature, now)) continue;
 			try {
-				const meta = await fetchMeta(channel, deps.fetchImpl ?? fetch);
+				const meta = await fetchMeta(channel, deps.fetchImpl ?? fetch, deps.signal);
 				deps.signal?.throwIfAborted();
 				fetched.set(channel.provider, { meta, signature });
 			} catch (error) {
@@ -532,7 +574,7 @@ export async function healEffort(deps: HealDeps, force: boolean, only?: RtModel[
 			try {
 				supported = await probeEffort(
 					{ ...model, compat: { ...channel.compat, ...(model.compat ?? {}) } },
-					{ baseUrl: channel.baseUrl, key: channel.key(), headers: channel.headers, fetchImpl: deps.fetchImpl, signal: deps.signal, deadline },
+					{ baseUrl: channel.baseUrl, key: await channel.key(deps.signal), headers: channel.headers, fetchImpl: deps.fetchImpl, signal: deps.signal, deadline },
 				);
 			} catch (error) {
 				deps.signal?.throwIfAborted();
