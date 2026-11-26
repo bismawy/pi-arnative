@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-26
+
 ### Added
 - **Zen centered footer preset.** Added a centered footer layout showing `cwd · clock` and the model label on one row with an inline `···` git toggle, exclusive left/right click toggles for the centered detail row, and keyboard cycling (`lib/features/footer.ts`, `lib/runtime.ts`, `test/footer-zen.test.ts`).
 - **Pi (color) footer preset.** Added a colored variant of Pi's stock two-line footer with live session tokens, context usage, accent-colored git branch, and active model (`lib/features/footer.ts`, `test/footer-pi-color.test.ts`).
