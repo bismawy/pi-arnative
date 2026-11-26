@@ -8,7 +8,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
+import { setActiveTheme, softOf, softSecondaryOf, stripAnsi } from "../ansi.ts";
 import { inSpans, textSpans, type TextSpan } from "../box.ts";
 import { capitalize, modelDisplayParts } from "../format.ts";
 import { SHORTCUT_RELOAD, SHORTCUT_TOGGLE_FOOTER } from "../shortcuts.ts";
@@ -18,8 +18,7 @@ import { FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_
 import { formatCost } from "./usage.ts";
 import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
 import { budgetLevelNow } from "./budget.ts";
-import { activeSpinnerGradient, activeSpinnerPreset } from "./animations.ts";
-import { spinnerPainter } from "../spinner.ts";
+import { activeSpinnerGradient, activeSpinnerPreset, applySpinnerPreset, setWorkingUi, spinnerPainter } from "../spinner.ts";
 import { getRuntime } from "../runtime.ts";
 import {
 	ActiveClock,
@@ -993,6 +992,8 @@ export default function (pi: ExtensionAPI) {
 		rt.currentThinking = currentThinkingLevel;
 		rt.lastGit = git;
 		activeThemeProxy = ((ctx as unknown as { ui?: { theme?: typeof activeThemeProxy } }).ui?.theme) ?? activeThemeProxy;
+		if (activeThemeProxy) setActiveTheme(activeThemeProxy);
+		setWorkingUi(ctx.ui);
 
 		const cwd = (event.reason === "reload" && rt.lastCwd) ? rt.lastCwd : ctx.cwd;
 		rt.lastCwd = cwd;
@@ -1350,6 +1351,7 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 			ctx.ui.setEditorComponent((tui, editorTheme, keybindings) => new ArnativeEditor(tui, editorTheme, keybindings));
+			applySpinnerPreset(ctx.ui, activeThemeProxy);
 			rt.outsideDialogHook = (lines: string[], width: number, modeRaw: unknown): string[] => {
 				if (activeChatboxDialog() !== "Outside") return lines;
 				const mode = modeRaw as OutsideDialogModeLike | null | undefined;

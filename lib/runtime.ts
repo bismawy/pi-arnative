@@ -21,11 +21,6 @@ export interface ActiveClockSnapshot {
 	lastSeen: number;
 }
 
-export interface ChatTimestampState {
-	map: Map<string, number>;
-	theme: { fg(color: string, text: string): string; bg?(color: string, text: string): string } | null;
-}
-
 export interface ThinkingLabelState {
 	ui: { requestRender(): void } | null;
 	active: Set<object>;
@@ -53,10 +48,9 @@ export interface RuntimeState {
 	wrappedTuis: WeakSet<object>;
 	editor: unknown;
 	workingUi: unknown;
-	workingTheme: unknown;
 	resourceStore: Map<string, string[]> | null;
 	headerInstance: unknown;
-	chatTimestampState: ChatTimestampState | null;
+	userTimestamps: Map<string, number> | null;
 	thinkingLabelState: ThinkingLabelState | null;
 	renderCacheState: unknown;
 	autocompactState: unknown;
@@ -83,10 +77,9 @@ function createFreshRuntime(): RuntimeState {
 		wrappedTuis: new WeakSet<object>(),
 		editor: null,
 		workingUi: null,
-		workingTheme: null,
 		resourceStore: null,
 		headerInstance: null,
-		chatTimestampState: null,
+		userTimestamps: null,
 		thinkingLabelState: null,
 		renderCacheState: null,
 		autocompactState: null,

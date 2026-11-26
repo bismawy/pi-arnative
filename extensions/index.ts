@@ -8,7 +8,6 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerLifecycleFeatures } from "../lib/runtime.ts";
-import registerAnimations from "../lib/features/animations.ts";
 import registerArnative from "../lib/features/arnative.ts";
 import registerAutoCompact from "../lib/features/autocompact.ts";
 import registerBudget from "../lib/features/budget.ts";
@@ -20,7 +19,6 @@ import registerTimestamps from "../lib/features/timestamps.ts";
 import registerTodos from "../lib/features/todos.ts";
 import registerTools from "../lib/features/tools.ts";
 import registerUiRenderTweaks from "../lib/features/ui-render-tweaks.ts";
-import registerUsageExport from "../lib/features/usage-export.ts";
 import registerUsage from "../lib/features/usage.ts";
 
 const FEATURES: readonly ((pi: ExtensionAPI) => void)[] = [
@@ -31,9 +29,7 @@ const FEATURES: readonly ((pi: ExtensionAPI) => void)[] = [
 	registerUiRenderTweaks,
 	registerRenderCache,
 	registerUsage,
-	registerUsageExport,
 	registerBudget,
-	registerAnimations,
 	registerAutoCompact,
 	registerModelHeal,
 	registerTodos,

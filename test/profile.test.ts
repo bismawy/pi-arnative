@@ -15,7 +15,7 @@ import { activeAutoCompact, savedPayloadLimit } from "../lib/features/autocompac
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth } from "../lib/features/budget.ts";
 import { activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset } from "../lib/features/footer.ts";
 import { activeHeaderPreset } from "../lib/features/section-headers.ts";
-import { activeSpinnerGradient, activeSpinnerPreset } from "../lib/features/animations.ts";
+import { activeSpinnerGradient, activeSpinnerPreset } from "../lib/spinner.ts";
 import { activeModelHeal } from "../lib/model-heal.ts";
 import { activeRenderCache } from "../lib/features/render-cache.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";

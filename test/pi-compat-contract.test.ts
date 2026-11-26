@@ -48,8 +48,7 @@ async function withFrozenOriginal(
 
 test("timestamps.ts never mutates frozen cached UserMessageComponent.render output and stays idempotent", async () => {
 	const bg = "\x1b[48;2;40;42;54m";
-	const tsState = getRuntime().chatTimestampState;
-	const prevTheme = tsState?.theme;
+	const prevTheme = getRuntime().activeTheme;
 	const fakeTheme = {
 		fg: (_c: string, t: string) => `\x1b[36m${t}\x1b[39m`,
 		bg: (_c: string, t: string) => `${bg}${t}\x1b[49m`,
@@ -67,7 +66,7 @@ test("timestamps.ts never mutates frozen cached UserMessageComponent.render outp
 		() => frozenShort,
 		"lib/features/timestamps.ts",
 		() => {
-			if (tsState) tsState.theme = fakeTheme;
+			getRuntime().activeTheme = fakeTheme;
 			const fakeComp = {
 				text: "hello",
 				timestamp: "2026-11-21T05:10:00.000Z",
@@ -86,7 +85,7 @@ test("timestamps.ts never mutates frozen cached UserMessageComponent.render outp
 			assert.equal(repairBubbleBg(repaired, bg), repaired, "repairBubbleBg is idempotent");
 		},
 	);
-	if (tsState) tsState.theme = prevTheme;
+	getRuntime().activeTheme = prevTheme;
 });
 
 test("timestamps.ts never mutates frozen cached AssistantMessageComponent.render output", async () => {

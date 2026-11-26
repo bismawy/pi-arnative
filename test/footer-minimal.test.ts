@@ -400,8 +400,7 @@ test("the spinner frame is coloured accent, the label keeps accentSoft", async (
 
 	// The extension's own seam, driven the way `/arnative` → Animations drives it: publish the
 	// editor, then let paintLiveIndicator install the preset's painter on the live Loader.
-	const { paintLiveIndicator } = await import("../lib/features/animations.ts");
-	const { spinnerPainter } = await import("../lib/spinner.ts");
+	const { paintLiveIndicator, spinnerPainter } = await import("../lib/spinner.ts");
 	getRuntime().editor = { workingStatusIndicator: loader };
 	paintLiveIndicator(spinnerPainter("Diamond Glow", { fg: (c: string, t: string) => `[${c}:${t}]` }));
 	getRuntime().editor = null;

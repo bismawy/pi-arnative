@@ -11,17 +11,20 @@ import { matchesKey, type AutocompleteItem } from "@earendil-works/pi-tui";
 import { screenTitle } from "../box.ts";
 import { announce } from "../status-widget.ts";
 import { markedLabels } from "../format.ts";
-import { SPINNER_GRADIENT_KEY, SPINNER_PRESET_KEY, SPINNER_PRESETS, type SpinnerPreset } from "../spinner.ts";
 import {
+	PREVIEW_TICK_MS,
+	SPINNER_GRADIENT_KEY,
+	SPINNER_PRESET_KEY,
+	SPINNER_PRESETS,
 	activeSpinnerGradient,
-	animationsPickerText,
 	activeSpinnerPreset,
 	animationRowNote,
 	animationRows,
-	PREVIEW_TICK_MS,
+	animationsPickerText,
 	setSpinnerGradient,
 	setSpinnerPreset,
-} from "./animations.ts";
+	type SpinnerPreset,
+} from "../spinner.ts";
 import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../preset-store.ts";
 import { EDIT_DIFF_CHOICES, activeEditDiff, setEditDiff, type EditDiffMode } from "./tools.ts";
 import { CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset } from "./footer.ts";

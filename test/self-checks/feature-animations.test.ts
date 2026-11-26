@@ -1,12 +1,25 @@
 import test from "node:test";
 import { assert } from "../helpers/check.ts";
-import { DEFAULT_SPINNER_PRESET, SPINNER_PRESETS, SPINNER_PRESET_DEFS } from "../../lib/spinner.ts";
+import {
+	DEFAULT_SPINNER_PRESET,
+	SPINNER_PRESETS,
+	SPINNER_PRESET_DEFS,
+	activeSpinnerPreset,
+	setSpinnerPreset,
+	setWorkingUi,
+	paintLiveIndicator,
+	applySpinnerPreset,
+	animationRows,
+	animationRowText,
+	PREVIEW_TICK_MS,
+	animationRowNote,
+	__test,
+} from "../../lib/spinner.ts";
 import { getRuntime } from "../../lib/runtime.ts";
-import registerAnimations, { activeSpinnerPreset, setSpinnerPreset, paintLiveIndicator, applySpinnerPreset, animationRows, animationRowText, PREVIEW_TICK_MS, animationRowNote, __test } from "../../lib/features/animations.ts";
 
 const { SPINNER_PRESET_CONFIG_KEY } = __test;
 
-test("lib/features/animations.ts self-check", async () => {
+test("lib/spinner.ts animations self-check", async () => {
 	await (async () => {
 	// The rows describe exactly the presets, and every row carries its own note.
 	const rows = animationRows();
@@ -57,13 +70,12 @@ test("lib/features/animations.ts self-check", async () => {
 	// (the original bug passed such a test: the row moved, the spinner did not).
 	const pickCalls: Array<Record<string, unknown> | undefined> = [];
 	const pickUi = { setWorkingIndicator: (options?: Record<string, unknown>) => pickCalls.push(options) };
-	const handlers: Array<(e: unknown, c: unknown) => unknown> = [];
-	registerAnimations({ on: (_n: string, fn: (e: unknown, c: unknown) => unknown) => handlers.push(fn) } as never);
-	// Instance A runs session_start and records the ui on globalThis.
-	handlers[0]!({}, { ui: pickUi, theme: { fg: (_c: string, t: string) => t } });
+	// Instance A records the ui on globalThis (as footer's session_start does).
+	setWorkingUi(pickUi);
+	applySpinnerPreset(pickUi, { fg: (_c: string, t: string) => t });
 	pickCalls.length = 0;
-	// Instance B — a second copy of the module, like the one `arnative.ts` holds — does the pick.
-	const instanceB = await import(`../../lib/features/animations.ts?second=${Date.now()}`);
+	// Instance B — a second copy of the module — does the pick.
+	const instanceB = await import(`../../lib/spinner.ts?second=${Date.now()}`);
 	instanceB.setSpinnerPreset("Claudeon");
 	assert(pickCalls.length === 1, "a second module instance installs through the shared ui");
 	assert(pickCalls[0]?.frames?.[0] === "\u00b7", "the chosen preset's frames are installed, not the old ones");

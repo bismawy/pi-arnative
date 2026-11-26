@@ -1,10 +1,10 @@
 import test from "node:test";
 import { assert } from "../helpers/check.ts";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import { ansiBgOpen } from "../../lib/ansi.ts";
+import { ansiBgOpen, getActiveTheme } from "../../lib/ansi.ts";
 import { repairBubbleBg, placeTimeAtRight, __test } from "../../lib/features/timestamps.ts";
 
-const { tsState, USER_TIMESTAMPS_MAP, userTextOf, prefillUserTimestamps } = __test;
+const { USER_TIMESTAMPS_MAP, userTextOf, prefillUserTimestamps } = __test;
 
 test("lib/features/timestamps.ts self-check", async () => {
 	const badge = "\x1b[36m17:09\x1b[39m";
@@ -76,5 +76,5 @@ test("lib/features/timestamps.ts self-check", async () => {
 	);
 	assert(USER_TIMESTAMPS_MAP.get("after reload") === 4242, "reloaded module prefills the shared map read by the patched render");
 	assert(!USER_TIMESTAMPS_MAP.has("old question"), "session_start clears the map first (bounded growth, current session only)");
-	assert(tsState.theme === theme, "reloaded module shares the theme read by the patched render");
+	assert(getActiveTheme() === theme, "reloaded module shares the active theme read by the patched render");
 });

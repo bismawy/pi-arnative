@@ -12,17 +12,13 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantMessageComponent, UserMessageComponent, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
-import { ansiBgOpen, stripAnsi, themeOf } from "../ansi.ts";
+import { ansiBgOpen, getActiveTheme, setActiveTheme, stripAnsi, themeOf } from "../ansi.ts";
 import { markPatched, originalOf } from "../patch.ts";
-import { getRuntime, type ChatTimestampState } from "../runtime.ts";
+import { getRuntime } from "../runtime.ts";
 
 // Shared across reloads via RuntimeState so prototype patches and newly registered
-// handlers read the same map and theme proxy.
-const tsState: ChatTimestampState = (getRuntime().chatTimestampState ??= {
-	map: new Map<string, number>(),
-	theme: null,
-});
-const USER_TIMESTAMPS_MAP = tsState.map;
+// handlers read the same map and shared active theme.
+const USER_TIMESTAMPS_MAP = (getRuntime().userTimestamps ??= new Map<string, number>());
 
 function userTextOf(message: { content?: unknown }): string {
 	const c = message.content;
@@ -190,10 +186,11 @@ if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.protot
 			const source = origRender.call(this, width);
 			if (source.length < 2) return source;
 
-			const bgOpen = ansiBgOpen(tsState.theme, "userMessageBg");
+			const activeTheme = getActiveTheme<ThemeProxy>();
+			const bgOpen = ansiBgOpen(activeTheme, "userMessageBg");
 			const ts = resolveUserTimestamp(this as { text?: string; timestamp?: string | number });
 			const timeStr = ts ? formatClock(ts) : "";
-			const badge = timeStr ? formatTimeBadge(timeStr, tsState.theme) : "";
+			const badge = timeStr ? formatTimeBadge(timeStr, activeTheme) : "";
 
 			const prev = userRenderCache.get(this);
 			if (prev && prev.source === source && prev.width === width && prev.bgOpen === bgOpen && prev.badge === badge) {
@@ -249,7 +246,7 @@ if (UserMessageComponent?.prototype?.render || AssistantMessageComponent?.protot
 			if (!hasText || source.length === 0) return source;
 
 			const timeStr = formatClock(lastMsg?.timestamp);
-			const badge = formatTimeBadge(timeStr, tsState.theme);
+			const badge = formatTimeBadge(timeStr, getActiveTheme<ThemeProxy>());
 			const prev = assistantRenderCache.get(this);
 			if (prev && prev.source === source && prev.width === width && prev.badge === badge) {
 				return prev.lines;
@@ -314,13 +311,13 @@ export default function (pi: ExtensionAPI) {
 	// manager already holds the restored history when session_start fires (all reasons:
 	// startup/resume/fork/new/reload).
 	pi.on("session_start", async (_event, ctx) => {
-		tsState.theme = themeOf<ThemeProxy>(ctx) ?? tsState.theme;
+		const th = themeOf<ThemeProxy>(ctx);
+		if (th) setActiveTheme(th);
 		prefillUserTimestamps(ctx.sessionManager.getBranch());
 	});
 }
 
 export const __test = {
-	tsState,
 	USER_TIMESTAMPS_MAP,
 	userTextOf,
 	prefillUserTimestamps,

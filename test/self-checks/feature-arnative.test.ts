@@ -4,7 +4,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { stripAnsi } from "../../lib/ansi.ts";
 import { screenTitle } from "../../lib/box.ts";
 import { markedLabels, ROW_DIVIDER } from "../../lib/format.ts";
-import { animationsPickerText, animationRows } from "../../lib/features/animations.ts";
+import { animationsPickerText, animationRows } from "../../lib/spinner.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPrompt } from "../../lib/features/footer.ts";
 import { HEADER_PRESETS } from "../../lib/features/section-headers.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText } from "../../lib/list-picker.ts";
