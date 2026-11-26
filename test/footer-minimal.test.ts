@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import register, { armIdleProbe, clock, formatDuration, repaintIdle, stopIdleProbe, wrapInputListener } from "../lib/features/footer.ts";
+import register, { armIdleProbe, clock, formatDuration, repaintIdle, stopIdleProbe, wrapInputListener, __test as footerTest } from "../lib/features/footer.ts";
 import { getRuntime } from "../lib/runtime.ts";
 
 const FOOTER_PRESET_KEY = Symbol.for("pi-arnative.footerPreset");
@@ -430,4 +430,39 @@ test("footer labels take the soft border-accent tier, icons keep accent", async 
 	assert.ok(icon.includes('"h":355'), "the accent tier keeps its own hue (pink)");
 	assert.ok(label.includes('"c":0.04865'), "the label chroma is the border accent softened by 0.35");
 	assert.ok(label.includes('"l":0.9'), "the soft tier sits at L 0.90");
+});
+
+test("working clock and footer clock share one 1s RuntimeState timer", () => {
+	footerTest.stopWorkingClock();
+	stopIdleProbe();
+	clock.lastSeen = Date.now();
+	armIdleProbe();
+	const sharedHandle = getRuntime().clockTimer;
+	assert.ok(sharedHandle != null, "idle probe starts the shared 1s clock timer");
+	footerTest.startWorkingClock({ ui: { setWorkingMessage: () => {} } });
+	assert.equal(getRuntime().clockTimer, sharedHandle, "startWorkingClock reuses the same 1s timer handle");
+	footerTest.stopWorkingClock();
+	assert.equal(getRuntime().clockTimer, sharedHandle, "stopping work keeps the footer clock ticking while active");
+	stopIdleProbe();
+	assert.equal(getRuntime().clockTimer, null, "stopping idle probe clears the shared timer");
+});
+
+test("stale RuntimeState timers from a previous reload are cleared by stopIdleProbe", async () => {
+	footerTest.stopWorkingClock();
+	stopIdleProbe();
+	let leakedClockCalls = 0;
+	let leakedIdleCalls = 0;
+	const rt = getRuntime();
+	rt.clockTimer = setInterval(() => {
+		leakedClockCalls++;
+	}, 15);
+	rt.idleTimer = setTimeout(() => {
+		leakedIdleCalls++;
+	}, 15);
+	stopIdleProbe();
+	assert.equal(rt.clockTimer, null);
+	assert.equal(rt.idleTimer, null);
+	await new Promise((r) => setTimeout(r, 50));
+	assert.equal(leakedClockCalls, 0, "stale clockTimer from prior reload must be cleared");
+	assert.equal(leakedIdleCalls, 0, "stale idleTimer from prior reload must be cleared");
 });

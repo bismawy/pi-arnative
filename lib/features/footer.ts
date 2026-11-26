@@ -790,32 +790,32 @@ function paintWorking(): void {
 }
 
 function stopWorkingClock(): void {
-	const rt = getRuntime();
-	if (rt.workTimer) clearInterval(rt.workTimer);
-	rt.workTimer = null;
 	workStartMs = null;
 	workUI = null;
 	activeToolVerbs.clear();
+	const rt = getRuntime();
+	if (rt.idleTimer === null || clock.idle()) stopClockTick();
 }
 
-let idleProbe: ReturnType<typeof setTimeout> | null = null;
 let idlePauseShown = false;
-let clockTick: ReturnType<typeof setInterval> | null = null;
 
-/** 1s repaint ticker while clock is active. Stops when idle. */
+/** Single 1s ticker shared by the active footer clock and the working-indicator elapsed label. */
 function startClockTick(): void {
-	if (clockTick !== null) return;
-	clockTick = setInterval(() => {
-		if (clock.idle()) return stopClockTick();
-		poke();
+	const rt = getRuntime();
+	if (rt.clockTimer !== null) return;
+	rt.clockTimer = setInterval(() => {
+		const working = workStartMs !== null;
+		const idle = clock.idle();
+		if (working) paintWorking();
+		if (!idle) poke();
+		if (!working && (getRuntime().idleTimer === null || idle)) stopClockTick();
 	}, 1000);
-	getRuntime().clockTimer = clockTick;
 }
 
 function stopClockTick(): void {
-	if (clockTick) clearInterval(clockTick);
-	clockTick = null;
-	getRuntime().clockTimer = null;
+	const rt = getRuntime();
+	if (rt.clockTimer) clearInterval(rt.clockTimer);
+	rt.clockTimer = null;
 }
 
 /** Repaint a frozen clock on the first activity, instead of waiting for the next tick. */
@@ -860,36 +860,35 @@ export function wrapInputListener(tui: unknown): () => void {
 const IDLE_PROBE_EPSILON_MS = 25;
 
 export function armIdleProbe(now: number = Date.now()): void {
-	startClockTick();
-	if (idleProbe) clearTimeout(idleProbe);
+	const rt = getRuntime();
+	if (rt.idleTimer) clearTimeout(rt.idleTimer);
 	const wait = Math.max(0, clock.pauseMs - (now - clock.lastSeen)) + IDLE_PROBE_EPSILON_MS;
-	idleProbe = setTimeout(() => {
-		idleProbe = null;
+	rt.idleTimer = setTimeout(() => {
 		getRuntime().idleTimer = null;
 		if (!clock.idle()) return; // activity raced the probe: it re-armed itself
 		idlePauseShown = true;
-		stopClockTick();
+		if (workStartMs === null) stopClockTick();
 		poke();
 	}, wait);
-	getRuntime().idleTimer = idleProbe;
+	startClockTick();
 	poke();
 }
 
 /** Stop the idle machinery: the one-shot probe and the moving clock tick. */
 export function stopIdleProbe(): void {
-	if (idleProbe) clearTimeout(idleProbe);
-	idleProbe = null;
-	stopClockTick();
-	getRuntime().idleTimer = null;
+	const rt = getRuntime();
+	if (rt.idleTimer) clearTimeout(rt.idleTimer);
+	rt.idleTimer = null;
+	if (workStartMs === null) stopClockTick();
 }
 
-/** Start (or restart) the 1s tick from a fresh turn. */
+/** Start (or restart) the 1s tick from a fresh turn, reusing the shared clock ticker. */
 function startWorkingClock(ctx: { ui?: WorkingUiSurface }): void {
 	stopWorkingClock();
 	workUI = ctx.ui ?? null;
 	workVerb = WORK_LABEL;
 	workStartMs = Date.now();
-	getRuntime().workTimer = setInterval(paintWorking, 1000);
+	startClockTick();
 }
 
 /** Swap the verb (tool change) without resetting the turn clock. */
@@ -959,10 +958,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
-		// A /reload re-imports this module while the old instance's interval (and its
-		// ctx.ui closures) may still be alive; clear it before starting a new one.
+		// A /reload re-imports this module while the old instance's timers (and its
+		// ctx.ui closures) may still be alive; clear every RuntimeState timer handle first.
 		const rt = getRuntime();
 		stopWorkingClock();
+		stopIdleProbe();
 		if (event.reason !== "reload") {
 			rt.activeClock = null;
 			clock = new ActiveClock(resolveSessionStartMs(event.reason, ctx.sessionManager.getHeader()?.timestamp, Date.now()));
@@ -974,8 +974,6 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				// unreadable log -> start from now
 			}
-			stopIdleProbe();
-			stopClockTick();
 			idlePauseShown = false;
 			currentModel = ctx.model;
 			currentThinkingLevel = ctx.thinkingLevel;

@@ -45,7 +45,6 @@ export interface RuntimeState {
 	activeClock: ActiveClockSnapshot | null;
 	idleTimer: ReturnType<typeof setTimeout> | null;
 	clockTimer: ReturnType<typeof setInterval> | null;
-	workTimer: ReturnType<typeof setInterval> | null;
 	promptTypedAt: number;
 	promptIdleTimer: ReturnType<typeof setTimeout> | null;
 	minimalFooterExpanded: { left: boolean; right: boolean } | null;
@@ -76,7 +75,6 @@ function createFreshRuntime(): RuntimeState {
 		activeClock: null,
 		idleTimer: null,
 		clockTimer: null,
-		workTimer: null,
 		promptTypedAt: 0,
 		promptIdleTimer: null,
 		minimalFooterExpanded: null,

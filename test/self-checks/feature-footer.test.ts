@@ -93,9 +93,9 @@ test("lib/features/footer.ts self-check", async () => {
 	assert(currentToolVerb(new Map([["a", "Reading"], ["b", "Writing"]])) === "Writing", "parallel tools: last started wins");
 	assert(currentToolVerb(new Map([["a", "Reading"]])) === "Reading", "after one ends, the remaining tool's label shows");
 	startWorkingClock({ ui: { setWorkingMessage: () => {} } });
-	assert(Boolean(getRuntime().workTimer), "clock starts: timer stored on RuntimeState");
+	assert(Boolean(getRuntime().clockTimer), "clock starts: shared 1s timer stored on RuntimeState");
 	stopWorkingClock();
-	assert(getRuntime().workTimer == null, "clock stops: reload guard clears the timer");
+	assert(getRuntime().clockTimer == null, "clock stops: reload guard clears the timer");
 	assert(boxed.slice(0, 4).every((l) => visibleWidth(l) === visibleWidth(D) + 5), "uniform box width (sides + prompt)");
 	assert(boxEditorLines(["\u2500\u2500\u2500\u2500"], 1, plain).length === 1, "too narrow: left unchanged");
 
