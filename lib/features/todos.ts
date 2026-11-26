@@ -10,9 +10,9 @@ import { readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
-import { writeAtomicSync } from "../preset-store.ts";
+import { writeJsonAtomicSync } from "../preset-store.ts";
 import { getRuntime } from "../runtime.ts";
-import { inSpans, screenTitle, type TextSpan, textSpans } from "../box.ts";
+import { createHoldRepeat, inSpans, screenTitle, type TextSpan, textSpans } from "../box.ts";
 import { ListPicker, type ListPickerText } from "../list-picker.ts";
 import { LEGEND_READ_ONLY, SHORTCUT_SCROLL_TODOS_DOWN, SHORTCUT_SCROLL_TODOS_UP, SHORTCUT_TOGGLE_TODOS } from "../shortcuts.ts";
 import {
@@ -40,11 +40,6 @@ import {
 
 /** pi widget key; the extension owns it, so a reload replaces its own box. */
 export const TODO_WIDGET_KEY = "arnative-todos";
-
-/** Delay before holding a `↑`/`↓ n more` row starts repeating, so a normal click scrolls once. */
-const HOLD_DELAY_MS = 250;
-/** Step interval while holding a `↑`/`↓ n more` counter row. */
-const HOLD_REPEAT_MS = 90;
 
 interface WidgetStore {
 	state: TaskState;
@@ -134,7 +129,7 @@ function loadState(ctx: ExtensionContext, reload = false): void {
 
 function saveState(ctx: ExtensionContext): void {
 	try {
-		writeAtomicSync(stateFile(ctx), `${JSON.stringify(store().state, null, 2)}\n`);
+		writeJsonAtomicSync(stateFile(ctx), store().state);
 	} catch {
 		// ignore: the list still renders from memory
 	}
@@ -311,18 +306,8 @@ function refresh(ctx: ExtensionContext, force = false): void {
 			/** Swallows the follow-up release/click after a press on the hint or a counter, because
 			 *  the re-render between press and click can remove `↑ 1 more` / `↓ 1 more` at that row. */
 			let swallowClick = false;
-			let holdDelay: ReturnType<typeof setTimeout> | undefined;
-			let holdRepeat: ReturnType<typeof setInterval> | undefined;
-			const stopHold = (): void => {
-				if (holdDelay) {
-					clearTimeout(holdDelay);
-					holdDelay = undefined;
-				}
-				if (holdRepeat) {
-					clearInterval(holdRepeat);
-					holdRepeat = undefined;
-				}
-			};
+			const hold = createHoldRepeat();
+			const stopHold = (): void => hold.stop();
 			const toggleExpanded = (): { handled: true; render: true } => {
 				s.expanded = !s.expanded;
 				s.top = null;
@@ -339,29 +324,14 @@ function refresh(ctx: ExtensionContext, force = false): void {
 				s.tui?.requestRender(true);
 			};
 			const startHold = (delta: -1 | 1): void => {
-				stopHold();
-				const step = (): void => {
-					if (!s.expanded) {
-						stopHold();
-						return;
-					}
+				hold.start(() => {
+					if (!s.expanded) return false;
 					const win = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
-					if ((delta < 0 && win.above <= 0) || (delta > 0 && win.below <= 0)) {
-						stopHold();
-						return;
-					}
+					if ((delta < 0 && win.above <= 0) || (delta > 0 && win.below <= 0)) return false;
 					scroll(delta);
-				};
-				holdDelay = setTimeout(() => {
-					holdDelay = undefined;
-					step();
-					if (s.expanded && holdRepeat === undefined) {
-						const win = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
-						if ((delta < 0 && win.above > 0) || (delta > 0 && win.below > 0)) {
-							holdRepeat = setInterval(step, HOLD_REPEAT_MS);
-						}
-					}
-				}, HOLD_DELAY_MS);
+					const next = todoWindow(s.state, listRowsFor(process.stdout.rows), s.top);
+					return (delta < 0 && next.above > 0) || (delta > 0 && next.below > 0);
+				});
 			};
 			return {
 				render: (width: number): string[] => {

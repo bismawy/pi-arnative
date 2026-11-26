@@ -1,9 +1,8 @@
 /**
  * Model price-table loader, cost estimator, token formatter, and UTC usage range math.
  */
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { statSync } from "node:fs";
+import { loadModelsConfig, modelsPath } from "./provider-store.ts";
 
 /** A time window the dashboard can show. `all` is the whole history. */
 export type UsageRange = "all" | "today" | "7d" | "30d";
@@ -29,8 +28,6 @@ export function rangeStart(range: UsageRange, now = Date.now()): number | undefi
 export type ModelPrices = Record<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }>;
 export type PriceTable = Record<string, ModelPrices>;
 
-const modelsFilePath = (): string => join(getAgentDir(), "models.json");
-
 type ModelsJsonCost = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
 
 let priceMemo: { key: string; table: PriceTable } | null = null;
@@ -45,7 +42,7 @@ export function resetPriceMemo(): void {
  * Memoized on the file's stat so an unchanged file is parsed once.
  */
 export function loadPriceTable(): PriceTable {
-	const path = modelsFilePath();
+	const path = modelsPath();
 	let key: string;
 	try {
 		const st = statSync(path);
@@ -56,10 +53,10 @@ export function loadPriceTable(): PriceTable {
 	if (priceMemo && priceMemo.key === key) return priceMemo.table;
 	const table: PriceTable = {};
 	try {
-		const raw = JSON.parse(readFileSync(path, "utf8")) as {
+		const raw = loadModelsConfig() as {
 			providers?: Record<string, { models?: { id?: string; cost?: ModelsJsonCost }[] }>;
-		};
-		for (const [provider, cfg] of Object.entries(raw.providers ?? {})) {
+		} | undefined;
+		for (const [provider, cfg] of Object.entries(raw?.providers ?? {})) {
 			const models: ModelPrices = {};
 			for (const m of cfg?.models ?? []) {
 				const c = m?.cost;

@@ -10,9 +10,9 @@
  * once, so two healers never write models.json at the same time.
  */
 import { bindSetModel, reloadCurrentModel } from "../provider.ts";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { modelsPath } from "../provider-store.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type FSWatcher, watch } from "node:fs";
-import { join } from "node:path";
 import { REJECTION_RE } from "../compat.ts";
 import { activeModelHeal, autoCompatInstalled, healEffort, healFlags, healMeta, markRejectedLevel, type HealDeps, type HealResult, type ModelHealChoice, type RtModel } from "../model-heal.ts";
 
@@ -147,7 +147,7 @@ export default function registerModelHeal(pi: ExtensionAPI): void {
 		stopWatcher();
 		try {
 			// A pass's own write fires this too; the re-run finds nothing to change.
-			watcher = watch(join(getAgentDir(), "models.json"), { persistent: false }, () => {
+			watcher = watch(modelsPath(), { persistent: false }, () => {
 				if (timer) clearTimeout(timer);
 				timer = setTimeout(() => {
 					timer = undefined;

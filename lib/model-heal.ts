@@ -30,8 +30,8 @@ import {
 	type CompatModel,
 	type ModelMeta,
 } from "./compat.ts";
-import { loadChoice, saveChoice, writeAtomicSync } from "./preset-store.ts";
-import { levelToWire, loadModelsConfig, looseJsonParse, readAuthKey, saveModelsConfig, wireToLevel } from "./provider.ts";
+import { loadChoice, saveChoice, writeJsonAtomicSync } from "./preset-store.ts";
+import { levelToWire, loadModelsConfig, looseJsonParse, modelsPath, readAuthKey, saveModelsConfig, wireToLevel } from "./provider-store.ts";
 
 // ------------------------------------------------------------- setting
 
@@ -121,7 +121,7 @@ function edit(mutate: (cfg: Obj) => string[]): HealResult {
 	const detail = mutate(cfg);
 	if (detail.length === 0) return none();
 	try {
-		const path = join(getAgentDir(), "models.json");
+		const path = modelsPath();
 		if (!backedUp && existsSync(path)) {
 			if (!existsSync(`${path}.bak-model-heal`)) copyFileSync(path, `${path}.bak-model-heal`);
 			backedUp = true;
@@ -281,7 +281,7 @@ function loadState(): HealState {
 function saveState(part: Partial<Omit<HealState, "schema">>): void {
 	try {
 		const state = { ...loadState(), ...part };
-		writeAtomicSync(statePath(), `${JSON.stringify(state, null, 2)}\n`);
+		writeJsonAtomicSync(statePath(), state);
 	} catch {
 		// best effort: a lost stamp only costs one extra request next run
 	}

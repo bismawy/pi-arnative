@@ -237,3 +237,26 @@ test("projects omit files with zero effective usage after reset or range filteri
 		assert.equal(afterReset.projects.length, 0, "no ghost project row with 0 messages remains after reset");
 	});
 });
+
+test("loadPriceTable reads models.json with comments and trailing commas via shared reader", () => {
+	withFixture((dir) => {
+		writeFileSync(
+			join(dir, "models.json"),
+			[
+				"// user-edited models.json",
+				"{",
+				'  "providers": {',
+				'    "alpha": {',
+				'      "models": [',
+				'        { "id": "m1", "cost": { "input": 1.5, "output": 6, }, },',
+				"      ],",
+				"    },",
+				"  },",
+				"}",
+			].join(NL),
+		);
+		resetUsageCache();
+		const table = loadPriceTable();
+		assert.deepEqual(table.alpha?.m1, { input: 1.5, output: 6, cacheRead: 0, cacheWrite: 0 });
+	});
+});

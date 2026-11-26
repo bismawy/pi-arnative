@@ -39,6 +39,54 @@ export function textSpans(lines: readonly string[], text: string): TextSpan[] {
 export const inSpans = (spans: readonly TextSpan[], row: number, x: number): boolean =>
 	spans.some((span) => span.row === row && x >= span.start && x <= span.end);
 
+/** Delay before holding a scroll affordance starts repeating, so a normal click scrolls once. */
+export const HOLD_DELAY_MS = 250;
+/** Repeat interval while holding a scroll affordance. */
+export const HOLD_REPEAT_MS = 90;
+
+export interface HoldRepeat {
+	start(step: () => boolean): void;
+	stop(): void;
+}
+
+/** Shared press-and-hold auto-repeat timer for scrollable TUI boxes. */
+export function createHoldRepeat(delayMs = HOLD_DELAY_MS, repeatMs = HOLD_REPEAT_MS): HoldRepeat {
+	let delay: ReturnType<typeof setTimeout> | undefined;
+	let repeat: ReturnType<typeof setInterval> | undefined;
+	let token = 0;
+
+	const stop = (): void => {
+		token++;
+		if (delay) {
+			clearTimeout(delay);
+			delay = undefined;
+		}
+		if (repeat) {
+			clearInterval(repeat);
+			repeat = undefined;
+		}
+	};
+
+	const start = (step: () => boolean): void => {
+		stop();
+		const run = token;
+		delay = setTimeout(() => {
+			delay = undefined;
+			if (run !== token) return;
+			if (!step()) {
+				stop();
+				return;
+			}
+			if (run !== token) return;
+			repeat = setInterval(() => {
+				if (run !== token || !step()) stop();
+			}, repeatMs);
+		}, delayMs);
+	};
+
+	return { start, stop };
+}
+
 export type BoxTheme = { fg(color: string, text: string): string; bg?(color: string, text: string): string; bold?(text: string): string };
 type Dim = (s: string) => string;
 

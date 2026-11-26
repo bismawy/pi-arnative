@@ -5,7 +5,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildCatalogIndex, findMetaForId, mergeMeta, parseModelMeta, suggestCompat, type CatalogIndex, type Compat, type ModelMeta } from "./compat.ts";
-import { writeAtomicSync } from "./preset-store.ts";
+import { writeJsonAtomicSync } from "./preset-store.ts";
 
 // ---------------------------------------------------------------- flavors
 
@@ -482,7 +482,7 @@ export function readJson(path: string): unknown {
 }
 
 export function writeJson(path: string, value: unknown): void {
-	writeAtomicSync(path, `${JSON.stringify(value, null, 2)}\n`);
+	writeJsonAtomicSync(path, value);
 }
 
 export function loadModelsConfig(): unknown {

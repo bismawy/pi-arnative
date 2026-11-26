@@ -143,6 +143,15 @@ export function writeAtomicSync(
 	}
 }
 
+/** Pretty-print JSON with a trailing newline and write it atomically. */
+export function writeJsonAtomicSync(
+	path: string,
+	value: unknown,
+	rename: (from: string, to: string) => void = renameSync,
+): void {
+	writeAtomicSync(path, `${JSON.stringify(value, null, 2)}\n`, rename);
+}
+
 /** Store a choice. Best effort: an unwritable agent dir must not break the TUI. */
 export function saveChoice(key: string, value: string, rename: (from: string, to: string) => void = renameSync): void {
 	readConfig();
@@ -155,7 +164,7 @@ export function saveChoice(key: string, value: string, rename: (from: string, to
 	if (record[key] === value) return;
 	memo = { ...record, [key]: value };
 	try {
-		writeAtomicSync(configPath(), `${JSON.stringify(ordered(memo), null, 2)}\n`, rename);
+		writeJsonAtomicSync(configPath(), ordered(memo), rename);
 	} catch {
 		process.emitWarning("Arnative settings were not saved; the choice applies only to this session.", { code: "ARNATIVE_PRESET_SAVE" });
 	}
