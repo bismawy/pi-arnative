@@ -12,7 +12,7 @@ import { capitalize } from "../format.ts";
 import { thinkingColorOf, softOf, softSecondaryOf } from "../ansi.ts";
 import { writeAtomicSync } from "../preset-store.ts";
 import { legendUsage, matchesBack, RESET_USAGE, UNDO_USAGE } from "../shortcuts.ts";
-import { collectUsageSummary, formatTokens, hasPrice, loadPriceTable, resetUsageStats, restoreUsageStats, USAGE_RANGES, type UsageRange, type UsageSummary } from "../usage-store.ts";
+import { collectUsageSummary, formatTokens, hasPrice, loadPriceTable, markUsageDirty, resetUsageStats, restoreUsageStats, USAGE_RANGES, type UsageRange, type UsageSummary } from "../usage-store.ts";
 
 export function formatCost(n: number): string {
 	if (!n || n <= 0) return "-";
@@ -759,6 +759,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 	pi.on("turn_end", () => {
+		markUsageDirty();
 		exportProm(Date.now());
 	});
 	pi.on("session_shutdown", () => {

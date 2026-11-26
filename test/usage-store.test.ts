@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { collectUsageSummary, loadPriceTable, resetUsageCache, resetUsageStats, type UsageSummary } from "../lib/usage-store.ts";
+import { collectUsageSummary, loadPriceTable, markUsageDirty, resetUsageCache, resetUsageStats, type UsageSummary } from "../lib/usage-store.ts";
 
 const NL = String.fromCharCode(10);
 
@@ -258,5 +258,45 @@ test("loadPriceTable reads models.json with comments and trailing commas via sha
 		resetUsageCache();
 		const table = loadPriceTable();
 		assert.deepEqual(table.alpha?.m1, { input: 1.5, output: 6, cacheRead: 0, cacheWrite: 0 });
+	});
+});
+
+test("markUsageDirty forces a single fresh non-forced scan and reuses the result afterward", () => {
+	withFixture((dir) => {
+		mkdirSync(join(dir, "sessions", "a"), { recursive: true });
+		const sessionFile = join(dir, "sessions", "a", "a.jsonl");
+		const entry = (cost: number) =>
+			JSON.stringify({
+				message: {
+					role: "assistant",
+					provider: "google",
+					model: "m1",
+					timestamp: Date.now(),
+					usage: { input: 10, output: 5, cost: { total: cost, totalFromProvider: true } },
+				},
+			});
+		writeFileSync(sessionFile, entry(1) + NL);
+		const first = collectUsageSummary(false);
+		assert.equal(first.totals.cost, 1);
+
+		// Appending without marking dirty keeps the 5s memo hit.
+		writeFileSync(sessionFile, entry(2) + NL, { flag: "a" });
+		assert.equal(collectUsageSummary(false), first);
+
+		// Marking dirty invalidates the memo even within the same millisecond.
+		markUsageDirty();
+		const refreshed = collectUsageSummary(false);
+		assert.notEqual(refreshed, first);
+		assert.equal(refreshed.totals.cost, 3);
+
+		// A subsequent non-forced read reuses the fresh scan instead of rescanning.
+		assert.equal(collectUsageSummary(false), refreshed);
+
+		// A forced scan (e.g. exportProm on turn_end) after markUsageDirty also satisfies the generation.
+		writeFileSync(sessionFile, entry(4) + NL, { flag: "a" });
+		markUsageDirty();
+		const forced = collectUsageSummary(true);
+		assert.equal(forced.totals.cost, 7);
+		assert.equal(collectUsageSummary(false), forced, "budget read right after turn_end export reuses the scan");
 	});
 });
