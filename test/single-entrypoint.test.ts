@@ -15,6 +15,7 @@ test("package.json exposes a single entry point and excludes dev generators from
 	assert.deepEqual(pkg.pi?.extensions, ["./extensions/index.ts"]);
 	assert.ok(pkg.files?.includes("themes/*.json"), "package.json files should ship only themes/*.json");
 	assert.ok(!pkg.files?.includes("themes"), "package.json files must not ship themes/gen-themes.mjs");
+	assert.ok(!pkg.files?.includes("CHANGELOG.md"), "package.json files must not ship CHANGELOG.md");
 
 	const entries = readdirSync(join(root, "extensions")).sort();
 	assert.deepEqual(

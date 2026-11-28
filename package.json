@@ -21,7 +21,6 @@
 		"extensions",
 		"lib",
 		"themes/*.json",
-		"CHANGELOG.md",
 		"LICENSE",
 		"README.md"
 	],
