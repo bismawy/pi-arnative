@@ -14,7 +14,7 @@ Refined aesthetics. Cohesive tools. Built for Pi.
 
 - **Themes:** 14 contrast-checked OKLCH themes (`arnative` and 13 variants).
 - **Header:** Tabbed box showing Directory, Model, Context, Skills, Extensions, and Shortcuts.
-- **Tool boxes:** Rounded borders with status, spinner, duration, and clickable `[show]` or `[hide]` toggles.
+- **Tool boxes:** Grouped by default into one clickable chronological phase accordion per turn (`/arnative` → `Tool layout`), with the final reply below it. `Classic` restores the per-tool rounded boxes with status, spinner, duration, and clickable `[show]` or `[hide]` toggles.
 - **Task list:** `todo` tool, `/todos` recap screen, and a boxed widget above the editor that hides 30s after all tasks finish.
 - **Footer:** 3-row status grid (`Arnative (Full)`) or a single collapsible row (`Arnative (Minimal)`) with git branch, diff stats, active duration, token speed, and optional session cost.
 - **Spinners and timestamps:** 18 animated spinner presets with an optional `[g]` gradient sweep, plus per-message timestamps and bubble backgrounds.
@@ -89,6 +89,7 @@ Settings from `/arnative` are saved in `~/.pi/agent/arnative/config.json`:
 - **Footer cost:** Off by default. Press `[c]` in the Footers picker to show session cost (`$0.42`, or `~$0.42` when estimated) in the metrics row.
 - **Chatbox:** `Arnative` (default rounded box with 12 prompt icons cycled via `[i]`, colored `primary` while typing and `dim` after 3s idle) or `Pi (system)`. Press `[D]` to position the working status dialog (`Left`, `Center`, `Right`, `Inside`, `Outside`).
 - **Animations:** 18 presets (`Arnative` default, `Pi (system)`, and variants). Press `[g]` in the picker to toggle the gradient sweep.
+- **Tool layout:** `Grouped` by default. Each turn collapses into one accordion of chronological phases (`Explored`, `Updated`, `Ran`, named from what the tools did) with auto-expanded running and failed phases and `↑`/`↓ N more` scrolling on tall turns. `Classic` renders every tool in its own box.
 - **Render cache:** `On` by default. Reuses rendered lines for settled transcript items in `chatContainer`. Streaming items, active animations, and custom renderers bypass the cache.
 - **Auto-compact:** `Off` by default (Pi core compaction handles context). `Smart` adapts to `Render cache` and `contextWindow` (triggers at 90% on `>= 192k` windows when `Render cache` is `On`, or conservative tiers when `Off`). Fixed budgets (`100k` to `400k`) trigger at an absolute token count, subject to Pi core `reserveTokens` and provider limits.
 - **Payload limit:** Configured in `/arnative` or `PI_ARNATIVE_BYTE_WALL_MB` (`Off`, `1 MB`, `4 MB`, `8 MB`, `16 MB`, `32 MB`, or `Custom` from 1 to 1024 MB). For `remote/*`, `remote-magpie/*`, and models that return HTTP 413, payloads near the ceiling are trimmed in memory before sending without changing session history.
