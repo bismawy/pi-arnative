@@ -39,6 +39,12 @@ import {
 	TOOL_BOX_SCROLL_OFFSET_KEY as SCROLL_OFFSET_KEY,
 	getRuntime,
 } from "../runtime.ts";
+import {
+	activeToolLayout,
+	isProgressBox,
+	onToolLayoutChange,
+	projectTranscriptChildren,
+} from "./progress-group.ts";
 
 /** Stored exactly as the picker shows them; `"On"` is the default. */
 export const RENDER_CACHE_CHOICES = ["On", "Off"] as const;
@@ -51,6 +57,7 @@ const INSTANCE_ORIG_KEY = Symbol.for("pi-arnative.renderCacheOriginals");
 
 interface ChildMeta {
 	version: number;
+	interactionVersion: number;
 	scrollOffset: number;
 	expanded: boolean;
 }
@@ -60,6 +67,7 @@ interface ChildCacheEntry {
 	rows: number;
 	epoch: number;
 	version: number;
+	interactionVersion: number;
 	scrollOffset: number;
 	expanded: boolean;
 	lines: string[];
@@ -92,7 +100,9 @@ const CACHEABLE_CHILD_PROTOTYPES = new Set<object>([
 ]);
 
 function isCacheableChild(child: unknown): boolean {
-	return !!child && typeof child === "object" && CACHEABLE_CHILD_PROTOTYPES.has(Object.getPrototypeOf(child));
+	if (!child || typeof child !== "object") return false;
+	if (isProgressBox(child)) return true;
+	return CACHEABLE_CHILD_PROTOTYPES.has(Object.getPrototypeOf(child));
 }
 
 interface RenderCacheState {
@@ -181,6 +191,7 @@ function terminalRows(): number {
 /** True when a transcript component is currently animating, streaming, or hold-scrolling. */
 export function isDynamicChild(child: unknown): boolean {
 	if (!child || typeof child !== "object") return false;
+	if (isProgressBox(child)) return child.isDynamic();
 	const c = child as Record<string | symbol, unknown>;
 	if (c.isStreaming === true) return true;
 	if (c.isPartial === true || c.argsPending === true) return true;
@@ -288,17 +299,78 @@ export interface ChatContainerLike {
 	handleMouse?: (event: unknown) => unknown;
 }
 
+/** 32-bit FNV-1a mix (odd multiplier = bijective mod 2^32, so early values never shift out). */
+function mixHash(hash: number, value: number): number {
+	return Math.imul(hash ^ (value | 0), 0x01000193) | 0;
+}
+
+function childMetaOf(child: unknown, state: RenderCacheState): ChildMeta {
+	if (!child || typeof child !== "object") {
+		return { version: 0, interactionVersion: 0, scrollOffset: 0, expanded: false };
+	}
+	if (isProgressBox(child)) {
+		const items = child.getItems();
+		let hash = mixHash(0x811c9dc5 | 0, items.length);
+		let expanded = false;
+		for (const item of items) {
+			if (item && typeof item === "object") {
+				attachChildHooks(item);
+				const itemVer = state.versions.get(item) ?? 0;
+				const itemExp = Boolean((item as { expanded?: boolean }).expanded);
+				if (itemExp) expanded = true;
+				hash = mixHash(hash, itemVer);
+				hash = mixHash(hash, itemExp ? 1 : 0);
+			}
+		}
+		return {
+			version: hash,
+			interactionVersion: child.getInteractionVersion(),
+			scrollOffset: child.getScrollSignature(),
+			expanded: expanded || items.length > 6,
+		};
+	}
+	const cObj = child as Record<string | symbol, unknown>;
+	return {
+		version: state.versions.get(cObj) ?? 0,
+		interactionVersion: 0,
+		scrollOffset: Number(cObj[SCROLL_OFFSET_KEY] ?? 0),
+		expanded: Boolean(cObj.expanded),
+	};
+}
+
+function renderProjectedDirect(container: ChatContainerLike, children: readonly unknown[], width: number): string[] {
+	const lines: string[] = [];
+	const mouseChildren: Array<{ component: unknown; height: number }> = [];
+	const snapshot: unknown[] = new Array(children.length);
+	const parts: Array<readonly string[]> = new Array(children.length);
+	for (let i = 0; i < children.length; i++) {
+		const child = children[i] as { render?: (w: number) => readonly string[] } | null | undefined;
+		snapshot[i] = child;
+		const childLines = child && typeof child.render === "function" ? child.render(width) : [];
+		parts[i] = childLines;
+		mouseChildren.push({ component: child, height: childLines.length });
+		for (let j = 0; j < childLines.length; j++) lines.push(childLines[j]!);
+	}
+	container.mouseLayout = { width, children: mouseChildren };
+	container.childLines = { width, children: snapshot, parts, lines };
+	return lines;
+}
+
 function renderCachedChatContainer(
 	container: ChatContainerLike,
 	width: number,
 	callNextRender: (self: any, args: unknown[]) => unknown,
 ): string[] {
+	const rawChildren = Array.isArray(container.children) ? container.children : [];
+	const grouped = activeToolLayout() === "Grouped";
+	const children = grouped ? projectTranscriptChildren(rawChildren) : rawChildren;
+
 	if (activeRenderCache() !== "On") {
-		return callNextRender(container, [width]) as string[];
+		if (!grouped) return callNextRender(container, [width]) as string[];
+		return renderProjectedDirect(container, children, width);
 	}
 
 	const state = getCacheState();
-	const children = Array.isArray(container.children) ? container.children : [];
 	const rows = terminalRows();
 	const containerVer = state.versions.get(container) ?? 0;
 
@@ -319,12 +391,13 @@ function renderCachedChatContainer(
 				allClean = false;
 				break;
 			}
-			const cObj = child && typeof child === "object" ? (child as Record<string | symbol, unknown>) : null;
+			const cur = childMetaOf(child, state);
 			const meta = cached.childMeta[i]!;
 			if (
-				meta.version !== (cObj ? (state.versions.get(cObj) ?? 0) : 0) ||
-				meta.scrollOffset !== (cObj ? Number(cObj[SCROLL_OFFSET_KEY] ?? 0) : 0) ||
-				meta.expanded !== Boolean(cObj?.expanded)
+				meta.version !== cur.version ||
+				meta.interactionVersion !== cur.interactionVersion ||
+				meta.scrollOffset !== cur.scrollOffset ||
+				meta.expanded !== cur.expanded
 			) {
 				allClean = false;
 				break;
@@ -351,17 +424,16 @@ function renderCachedChatContainer(
 		snapshot[i] = child;
 		if (!child || typeof child.render !== "function") {
 			parts[i] = [];
-			childMeta[i] = { version: 0, scrollOffset: 0, expanded: false };
+			childMeta[i] = { version: 0, interactionVersion: 0, scrollOffset: 0, expanded: false };
 			continue;
 		}
-		attachChildHooks(child);
+		if (!isProgressBox(child)) attachChildHooks(child);
 
 		const isObj = typeof child === "object";
-		const ver = isObj ? (state.versions.get(child) ?? 0) : 0;
-		const scrollOffset = isObj ? Number(child[SCROLL_OFFSET_KEY] ?? 0) : 0;
-		const expanded = Boolean(isObj && child.expanded);
+		const curMeta = childMetaOf(child, state);
+		const { version: ver, interactionVersion, scrollOffset, expanded } = curMeta;
 		if (expanded) hasExpanded = true;
-		childMeta[i] = { version: ver, scrollOffset, expanded };
+		childMeta[i] = curMeta;
 
 		let childLines: readonly string[];
 		if (!isCacheableChild(child) || isDynamicChild(child)) {
@@ -376,6 +448,7 @@ function renderCachedChatContainer(
 						(entry) =>
 							entry.epoch === state.epoch &&
 							entry.version === ver &&
+							entry.interactionVersion === interactionVersion &&
 							entry.scrollOffset === scrollOffset &&
 							entry.expanded === expanded &&
 							(!expanded || entry.rows === rows),
@@ -396,6 +469,7 @@ function renderCachedChatContainer(
 							rows,
 							epoch: state.epoch,
 							version: ver,
+							interactionVersion,
 							scrollOffset,
 							expanded,
 							lines: [...childLines],
@@ -403,6 +477,7 @@ function renderCachedChatContainer(
 						(entry) =>
 							entry.epoch === state.epoch &&
 							entry.version === ver &&
+							entry.interactionVersion === interactionVersion &&
 							entry.scrollOffset === scrollOffset &&
 							entry.expanded === expanded,
 					);
@@ -473,12 +548,18 @@ export function attachChatContainer(container: unknown): void {
 	}
 	if (typeof obj.handleMouse === "function") {
 		wrapInstanceMethod(obj, "handleMouse", (callNext) => function (this: any, ...args: unknown[]) {
+			const ev = args[0] as { width?: number } | undefined;
+			if (ev && typeof ev.width === "number" && this.childLines?.width !== ev.width && typeof this.render === "function") {
+				this.render(ev.width);
+			}
 			const res = callNext(this, args);
 			if (res !== undefined) bumpVersion(this);
 			return res;
 		});
 	}
 }
+
+onToolLayoutChange(clearRenderCache);
 
 // Install InteractiveMode hooks so `this.chatContainer` is attached on startup,
 // `/reload`, session switch, and any incoming chat/tool event.

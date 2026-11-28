@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **ADE grouped tool progress box (`Tool layout: Grouped`).** Groups each turn's tool calls and intermediate narration into one chronological phase accordion while keeping the final assistant reply below it. Clicking a phase row toggles its steps, clicking `[show]` opens the full tool output or diff inside the box, tall turns scroll inside the frame with `↑`/`↓ N more` border controls, and `/arnative` → `Display` → `Tool layout` switches live between `Grouped` and `Classic` (`lib/features/progress-group.ts`, `lib/features/render-cache.ts`, `lib/features/arnative.ts`, `lib/features/tools.ts`, `lib/preset-store.ts`, `test/progress-group.test.ts`).
+
 ### Changed
 - **Smaller published package tarball.** Excluded `CHANGELOG.md` from `package.json` `files` so the published package ships runtime files, `README.md`, and `LICENSE` while release history stays in the repository (`package.json`, `test/single-entrypoint.test.ts`).
 

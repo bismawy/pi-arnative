@@ -25,7 +25,7 @@ import {
 	setSpinnerPreset,
 	type SpinnerPreset,
 } from "../spinner.ts";
-import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, ensureChoices } from "../preset-store.ts";
+import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_KEY, FOOTER_COST_KEY, FOOTER_PRESET_KEY, HEADER_PRESET_KEY, BUDGET_DAY_KEY, BUDGET_ENFORCE_KEY, BUDGET_MONTH_KEY, PAYLOAD_LIMIT_KEY, RENDER_CACHE_KEY, TOOL_LAYOUT_KEY, ensureChoices } from "../preset-store.ts";
 import { EDIT_DIFF_CHOICES, activeEditDiff, setEditDiff, type EditDiffMode } from "./tools.ts";
 import { CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
@@ -54,6 +54,12 @@ import {
 	setRenderCache,
 	type RenderCacheChoice,
 } from "./render-cache.ts";
+import {
+	TOOL_LAYOUT_CHOICES,
+	activeToolLayout,
+	setToolLayout,
+	type ToolLayoutMode,
+} from "./progress-group.ts";
 import { INPUT_LEGEND, InputPicker, LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText, type ListRow } from "../list-picker.ts";
 import { openUsage } from "./usage.ts";
 import { SHORTCUT_OPEN_ARNATIVE } from "../shortcuts.ts";
@@ -67,7 +73,7 @@ export interface MenuCategory {
 
 export const MENU_CATEGORIES: readonly MenuCategory[] = [
 	{ label: "Appearance", description: "themes, headers, footers, chatbox" },
-	{ label: "Display", description: "animations, diffs, render cache" },
+	{ label: "Display", description: "animations, diffs, tool layout, render cache" },
 	{ label: "Models & Context", description: "custom providers, model heal, auto-compact, payload limit" },
 	{ label: "Spend", description: "usage dashboard, budget caps" },
 ];
@@ -512,6 +518,40 @@ const openDiffs = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	});
 };
 
+const TOOL_LAYOUT_PICKER_TEXT: ListPickerText = {
+	title: screenTitle("Tool layout"),
+	description: "Selection previews live — ADE grouped phase progress box or classic per-tool boxes.",
+	legend: LIST_LEGEND_LIVE,
+};
+
+const TOOL_LAYOUT_NOTES: Record<ToolLayoutMode, string> = {
+	Grouped: "one clickable chronological phase box per turn, conclusion below (default)",
+	Classic: "render each tool call in its own standalone box",
+};
+
+/** Rows for `/arnative` → Tool layout: Grouped / Classic. */
+export function toolLayoutRows(): ListRow[] {
+	return TOOL_LAYOUT_CHOICES.map((c) => ({
+		label: c,
+		note: TOOL_LAYOUT_NOTES[c],
+	}));
+}
+
+const openToolLayout = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
+	const opened = activeToolLayout();
+	return openLivePicker(ctx, {
+		choices: TOOL_LAYOUT_CHOICES,
+		rows: toolLayoutRows(),
+		opened,
+		text: TOOL_LAYOUT_PICKER_TEXT,
+		label: "Tool layout",
+		current: activeToolLayout,
+		apply: setToolLayout,
+		headlessLabels: TOOL_LAYOUT_CHOICES.map((c) => (c === opened ? `${c} ✓` : c)),
+		cancel: true,
+	});
+};
+
 const openRenderCache = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeRenderCache();
 	return openChoicePicker(ctx, {
@@ -700,6 +740,13 @@ export const MENUS: ArnativeMenu[] = [
 		description: "side-by-side Before/After or unified diff",
 		group: "Display",
 		open: openDiffs,
+	},
+	{
+		value: "tools",
+		label: "Tool layout",
+		description: "ADE grouped phase progress box or classic per-tool boxes",
+		group: "Display",
+		open: openToolLayout,
 	},
 	{
 		value: "render",
@@ -899,6 +946,7 @@ export function recordProfile(): void {
 		[SPINNER_PRESET_KEY]: activeSpinnerPreset(),
 		[SPINNER_GRADIENT_KEY]: activeSpinnerGradient() ? "on" : "off",
 		[EDIT_DIFF_KEY]: activeEditDiff(),
+		[TOOL_LAYOUT_KEY]: activeToolLayout(),
 		[AUTO_COMPACT_KEY]: activeAutoCompact(),
 		[PAYLOAD_LIMIT_KEY]: savedPayloadLimit(),
 		[MODEL_HEAL_KEY]: activeModelHeal(),

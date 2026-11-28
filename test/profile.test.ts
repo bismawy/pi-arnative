@@ -18,6 +18,7 @@ import { activeHeaderPreset } from "../lib/features/headers.ts";
 import { activeSpinnerGradient, activeSpinnerPreset } from "../lib/spinner.ts";
 import { activeModelHeal } from "../lib/model-heal.ts";
 import { activeRenderCache } from "../lib/features/render-cache.ts";
+import { activeToolLayout } from "../lib/features/progress-group.ts";
 import { resetPresetCache } from "../lib/preset-store.ts";
 
 /** Fresh fixture per case; the agent dir env var is restored either way. */
@@ -45,7 +46,7 @@ test("the file keeps one key order", () => {
 		recordProfile();
 		assert.deepEqual(
 			Object.keys(configOf(dir)),
-			["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "payloadLimit", "modelHeal", "renderCache", "editDiff"],
+			["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "payloadLimit", "modelHeal", "renderCache", "editDiff", "toolLayout"],
 			"header first, then the rest of the menu, the budget keys after chatboxDialog, layoutVersion before the newer keys",
 		);
 	});
@@ -69,6 +70,7 @@ test("the profile in use is recorded, defaults included", () => {
 		assert.equal(stored.payloadLimit, savedPayloadLimit(), "payload limit recorded");
 		assert.equal(stored.modelHeal, activeModelHeal(), "model heal recorded");
 		assert.equal(stored.renderCache, activeRenderCache(), "render cache recorded");
+		assert.equal(stored.toolLayout, activeToolLayout(), "tool layout recorded");
 		assert.equal(stored.budgetDay, activeBudgetDay() === undefined ? "" : String(activeBudgetDay()), "day cap recorded (" + JSON.stringify(stored.budgetDay) + ")");
 		assert.equal(stored.budgetMonth, activeBudgetMonth() === undefined ? "" : String(activeBudgetMonth()), "month cap recorded");
 		assert.equal(stored.budgetEnforce, activeBudgetEnforce() ? "on" : "off", "budget enforcement recorded, off by default");
