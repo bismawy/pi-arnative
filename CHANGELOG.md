@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Smaller published package tarball.** Excluded `CHANGELOG.md` from `package.json` `files` so the published package ships runtime files, `README.md`, and `LICENSE` while release history stays in the repository (`package.json`, `test/single-entrypoint.test.ts`).
+
 ### Fixed
 - **Todos box opens on upcoming or recent tasks when idle.** `todoWindow()` now anchors on the first pending task when nothing is in progress, or the end of the list once every task is done, instead of resetting to the first completed row (`lib/todos.ts`, `test/todos.test.ts`).
 
