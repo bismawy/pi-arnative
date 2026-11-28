@@ -806,7 +806,6 @@ export class TurnProgressBoxComponent {
 			width: number;
 			tool: ToolLike;
 		}> = [];
-		let firstErrorBodyRow = -1;
 
 		for (let i = 0; i < phases.length; i++) {
 			const phase = phases[i]!;
@@ -824,7 +823,6 @@ export class TurnProgressBoxComponent {
 			const leftMain = `${arrow} ${statusIcon} ${titleText}`;
 			const rightMain = [badge, durText].filter(Boolean).join("  ");
 			const phaseBodyRow = bodyLines.length;
-			if (phase.hasError && firstErrorBodyRow < 0) firstErrorBodyRow = phaseBodyRow;
 			bodyLines.push(boxRow(padBetween(leftMain, rightMain, inner), width, dim));
 			logicalPhases.push({ bodyRow: phaseBodyRow, phaseIndex: i });
 
@@ -897,11 +895,10 @@ export class TurnProgressBoxComponent {
 		} else if (this.state.scrollOffset != null) {
 			offset = Math.max(0, Math.min(this.state.scrollOffset, maxOffset));
 			this.state.scrollOffset = offset;
-		} else if (anyRunning) {
-			offset = maxOffset;
-		} else if (firstErrorBodyRow >= 0) {
-			offset = Math.min(maxOffset, firstErrorBodyRow);
 		} else {
+			// Auto mode always tails the newest row. Anchoring to an early error would fight
+			// the running-anchor: in every inter-tool gap nothing is running, so the viewport
+			// bounced error → bottom → error for the rest of the turn.
 			offset = maxOffset;
 		}
 

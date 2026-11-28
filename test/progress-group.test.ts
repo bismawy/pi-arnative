@@ -525,10 +525,11 @@ test("tall multi-phase turns cap viewport height with ↑/↓ N more borders and
 
 		// Height is bounded (leading spacer + top + <=12 body + bottom <= 15 lines).
 		assert.ok(lines.length <= 15, `viewport capped tall 20-phase box, got ${lines.length} lines`);
-		// Auto-anchors to the failed phase (#10), showing both ↑ and ↓ scroll borders.
-		assert.ok(plain.some((l) => l.includes("✗") && l.includes("file10.ts")), "auto-anchors on failed phase");
+		// Auto-scroll tails the newest row: the bottom is visible and the error stays
+		// discoverable through its auto-expanded phase when the user scrolls up.
+		assert.ok(plain.some((l) => l.includes("step-19")), "auto-anchor shows the newest phase at the bottom");
 		assert.ok(plain.some((l) => /↑ \d+ more/.test(l)), "top border displays ↑ N more");
-		assert.ok(plain.some((l) => /↓ \d+ more/.test(l)), "bottom border displays ↓ N more");
+		assert.ok(!plain.some((l) => /↓ \d+ more/.test(l)), "bottom border has no ↓ N more at the tail");
 
 		// Narrow width with both scroll labels still fits cleanly inside width.
 		const narrow = chat.render(44);
@@ -566,5 +567,47 @@ test("tall multi-phase turns cap viewport height with ↑/↓ N more borders and
 		plain = lines.map(stripAnsi);
 		assert.ok(plain.some((l) => /↑ \d+ more/.test(l)), "hold-scroll advanced offset past top");
 		assert.ok(!plain.some((l) => l.includes("file0.ts")), "hold-scroll moved past phase #0");
+	});
+});
+
+test("auto-scroll stays pinned to the newest row across inter-tool gaps after an early error", async () => {
+	await withEnvAsync(async () => {
+		const chat = new Container();
+		// Regression: an early failed tool used to steal the viewport in every inter-tool
+		// gap (no running tool), bouncing the user between the first and the last row.
+		chat.addChild(makeTool("edit", "gap-err", { path: "core/broken.rs" }, { text: "edit failed", isError: true, durationMs: 5 }));
+		chat.addChild(makeTool("edit", "gap-ok", { path: "core/broken.rs" }, { text: "ok", durationMs: 5, diff: "+a\n-b" }));
+		// Enough trailing collapsed phases that the error phase sits outside the 12-row viewport.
+		for (let i = 0; i < 13; i++) {
+			if (i % 2 === 0) {
+				chat.addChild(makeTool("read", `gap-r${i}`, { path: `core/file${i}.rs` }, { text: "ok", durationMs: 5 }));
+			} else {
+				chat.addChild(makeTool("bash", `gap-b${i}`, { command: `echo step-${i}` }, { text: "ok", durationMs: 5 }));
+			}
+		}
+		attachChatContainer(chat);
+
+		const width = 96;
+		// Inter-tool gap: nothing running, the turn mid-flight. Auto mode tails the bottom.
+		let lines = chat.render(width);
+		let plain = lines.map(stripAnsi);
+		assert.ok(plain.some((l) => /↑ \d+ more/.test(l)), "viewport is scrolled, not showing the head");
+		assert.ok(plain.some((l) => l.includes("step-11") || l.includes("file12.rs")), "newest rows stay visible in the gap");
+		assert.ok(!plain.some((l) => l.includes("✗") && l.includes("broken.rs")), "the early error does not steal the viewport");
+
+		// A running tool must not move the viewport either.
+		const running = makeTool("bash", "gap-run", { command: "echo live" });
+		chat.addChild(running);
+		lines = chat.render(width);
+		plain = lines.map(stripAnsi);
+		assert.ok(plain.some((l) => l.includes("echo live")), "running tool visible at the tail");
+		assert.ok(!plain.some((l) => /↓ \d+ more/.test(l)), "still pinned to the bottom while running");
+
+		// Completion of the turn keeps the tail pinned as well.
+		running.updateResult({ content: [{ type: "text", text: "done" }], isError: false, durationMs: 5 } as never, false);
+		lines = chat.render(width);
+		plain = lines.map(stripAnsi);
+		assert.ok(plain.some((l) => l.includes("echo live")), "finished last tool stays visible");
+		assert.ok(!plain.some((l) => /↓ \d+ more/.test(l)), "still pinned to the bottom after completion");
 	});
 });
