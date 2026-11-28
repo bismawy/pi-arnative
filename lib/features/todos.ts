@@ -473,9 +473,18 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (event, ctx) => {
 		const reload = (event as { reason?: string } | undefined)?.reason === "reload";
+		// Drop any pending hide timer from the previous session before its ctx goes stale.
+		cancelHide(store());
 		loadState(ctx, reload);
 		if (!reload) pruneCompletedTodos(todosDir(), { skipFile: stateFile(ctx) });
 		refresh(ctx, true);
+	});
+
+	pi.on("session_shutdown", () => {
+		const s = store();
+		cancelHide(s);
+		s.registered = false;
+		s.tui = undefined;
 	});
 
 	pi.registerCommand("todos", {

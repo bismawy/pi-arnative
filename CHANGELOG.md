@@ -6,6 +6,7 @@
 - **Smaller published package tarball.** Excluded `CHANGELOG.md` from `package.json` `files` so the published package ships runtime files, `README.md`, and `LICENSE` while release history stays in the repository (`package.json`, `test/single-entrypoint.test.ts`).
 
 ### Fixed
+- **Cancel todo auto-hide timer on `/reload` and session switch.** `lib/features/todos.ts` now clears its pending `hideTimer` on `session_shutdown` and `session_start` so Pi does not crash when the 30 s hide timer fires against a stale `ctx.ui` after `/reload` (`lib/features/todos.ts`, `test/todos-widget.test.ts`).
 - **Todos box opens on upcoming or recent tasks when idle.** `todoWindow()` now anchors on the first pending task when nothing is in progress, or the end of the list once every task is done, instead of resetting to the first completed row (`lib/todos.ts`, `test/todos.test.ts`).
 
 ## [0.17.0] - 2026-11-26
