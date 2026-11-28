@@ -106,6 +106,10 @@ export function recordTiming(toolCallId: string, durationMs: number): void {
 	TIMINGS.set(toolCallId, durationMs);
 }
 
+export function getToolTiming(toolCallId: string | undefined): number | undefined {
+	return toolCallId ? TIMINGS.get(toolCallId) : undefined;
+}
+
 // Running icon 󰔟 󱦠 󱦟: 500ms spin frames from a ticker that only runs while
 // a tool is active (idle = no wasteful re-renders).
 const FRAMES = ["󰔟", "󱦠", "󱦟"];
@@ -127,7 +131,7 @@ export function spinIcon(): string {
 }
 
 /** Tool duration: `2ms` under a second, `1.4s` above — the wording pi itself uses. */
-function fmtMs(ms: number | undefined): string {
+export function fmtMs(ms: number | undefined): string {
 	if (ms === undefined || !Number.isFinite(ms)) return "";
 	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
@@ -144,7 +148,7 @@ export class Lines {
 }
 const EMPTY = new Lines(() => []);
 
-const shortPath = (p: string): string => {
+export const shortPath = (p: string): string => {
 	const home = homedir();
 	return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 };

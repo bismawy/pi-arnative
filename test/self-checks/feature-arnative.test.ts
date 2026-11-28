@@ -8,7 +8,7 @@ import { animationsPickerText, animationRows } from "../../lib/spinner.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPrompt } from "../../lib/features/footer.ts";
 import { HEADER_PRESETS } from "../../lib/features/headers.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText } from "../../lib/list-picker.ts";
-import { MENU_CATEGORIES, menuRows, categoryMenus, MENU_TITLE, MENU_DESC, chatboxRows, chatboxSummary, autoCompactRows, modelHealRows, renderCacheRows, diffRows, payloadLimitRows, MENUS, arnativeCompletions, isArnativeThemeName, shouldApplyDefaultTheme, registerCommands, __test } from "../../lib/features/arnative.ts";
+import { MENU_CATEGORIES, menuRows, categoryMenus, MENU_TITLE, MENU_DESC, chatboxRows, chatboxSummary, autoCompactRows, modelHealRows, renderCacheRows, diffRows, toolLayoutRows, payloadLimitRows, MENUS, arnativeCompletions, isArnativeThemeName, shouldApplyDefaultTheme, registerCommands, __test } from "../../lib/features/arnative.ts";
 
 const { footersPickerText, HEADERS_PICKER_TEXT, CHATBOX_PICKER_TEXT } = __test;
 
@@ -24,14 +24,14 @@ test("lib/features/arnative.ts self-check", async () => {
 	assert(MENU_DESC === "Themes, headers, footers, chatbox, animations, auto-compact, render, payload, providers, usage, budget", `the menu description is the pinned string, got ${MENU_DESC}`);
 	// Every menu row is reachable and the description names them all, so a new screen cannot
 	// be added to MENUS and forgotten in the copy a user reads first.
-	assert(MENUS.length === 13, "thirteen settings screens");
+	assert(MENUS.length === 14, "fourteen settings screens");
 	{
 		const catRows = menuRows([...MENU_CATEGORIES]);
 		assert(catRows.map((r) => r.label).join(",") === "Appearance,Display,Models & Context,Spend", "root menu lists the four categories in order");
 		const totalGrouped = MENU_CATEGORIES.reduce((n, c) => n + categoryMenus(c.label).length, 0);
 		assert(totalGrouped === MENUS.length, "every menu item belongs to one of the four categories");
 		const display = categoryMenus("Display");
-		assert(display.map((m) => m.value).join(",") === "animations,diffs,render", "Display group lists Animations, Diffs, Render cache in order");
+		assert(display.map((m) => m.value).join(",") === "animations,diffs,tools,render", "Display group lists Animations, Diffs, Tool layout, Render cache in order");
 		const modelsCtx = categoryMenus("Models & Context");
 		assert(modelsCtx.map((m) => m.value).join(",") === "providers,heal,compact,payload", "Models & Context group lists Providers, Model heal, Auto-compact, Payload limit in order");
 		const heal = modelHealRows("Flags");
@@ -42,6 +42,8 @@ test("lib/features/arnative.ts self-check", async () => {
 		assert(rc.filter((r) => r.chosen).map((r) => r.label).join(",") === "On", "Render cache marks only the saved mode");
 		const dRows = diffRows();
 		assert(dRows.map((r) => r.label).join(",") === "Split,Unified", "Diffs rows: Split then Unified");
+		const tlRows = toolLayoutRows();
+		assert(tlRows.map((r) => r.label).join(",") === "Grouped,Classic", "Tool layout rows: Grouped then Classic");
 		const pl = payloadLimitRows("16 MB");
 		assert(pl.map((r) => r.label).join(",") === "Off,1 MB,4 MB,8 MB,16 MB,32 MB,Custom", "Payload limit rows list presets then Custom");
 		assert(pl.filter((r) => r.chosen).map((r) => r.label).join(",") === "16 MB", "Payload limit marks the active preset");
@@ -49,7 +51,7 @@ test("lib/features/arnative.ts self-check", async () => {
 		assert(plCustom.filter((r) => r.chosen).map((r) => r.label).join(",") === "Custom", "Payload limit marks Custom when a non-preset MB is active");
 		assert(plCustom[plCustom.length - 1]!.note!.includes("11 MB"), "Custom row displays the active custom MB");
 	}
-	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Diffs", "Auto-compact", "Render cache", "Payload limit", "Providers", "Usage", "Budget"]) {
+	for (const label of ["Themes", "Headers", "Footers", "Chatbox", "Animations", "Diffs", "Tool layout", "Auto-compact", "Render cache", "Payload limit", "Providers", "Usage", "Budget"]) {
 		assert(MENUS.some((m) => m.label === label), `MENUS carries the ${label} screen`);
 	}
 	assert(/^Settings - Arnative/.test(MENU_TITLE), "title follows `<setting> - <extension>`");

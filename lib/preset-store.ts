@@ -30,6 +30,8 @@ export const RENDER_CACHE_KEY = "renderCache";
 export const PAYLOAD_LIMIT_KEY = "payloadLimit";
 /** Expanded `edit` diff layout: `"Split"` (default) or `"Unified"`. */
 export const EDIT_DIFF_KEY = "editDiff";
+/** Tool transcript layout: `"Grouped"` (ADE phase progress box) or `"Classic"` (per-tool boxes). */
+export const TOOL_LAYOUT_KEY = "toolLayout";
 
 // Resolved per call, not at import: the self-check points getAgentDir() at a fixture dir.
 // Everything pi-arnative writes lives in one folder (agent dir/arnative); the config moved
@@ -102,7 +104,7 @@ export function loadNumber(key: string, range: { min: number; max: number }): nu
 /** Reading order of `config.json`: the presets in the order the settings menu shows them,
  *  then `layoutVersion`, then anything else (a key from another module or a newer version).
  *  Times a user edits the file by hand or reads it back. */
-const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "payloadLimit", "modelHeal", "renderCache", "editDiff"];
+const KEY_ORDER = ["headerPreset", "footerPreset", "footerCost", "chatboxPreset", "chatboxPrompt", "chatboxDialog", "budgetDay", "budgetMonth", "budgetEnforce", "spinnerPreset", "spinnerGradient", "layoutVersion", "autoCompact", "payloadLimit", "modelHeal", "renderCache", "editDiff", "toolLayout"];
 
 /** The record in {@link KEY_ORDER}; unknown keys keep the order they were written in. */
 function ordered(record: Record<string, unknown>): Record<string, unknown> {
