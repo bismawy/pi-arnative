@@ -14,7 +14,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 // Windows rejects a bare drive path in a dynamic import, so hand over a file URL.
-const file = pathToFileURL(join(root, "lib", "features", "autocompact.ts")).href;
+const file = pathToFileURL(join(root, "lib", "features", "auto-compact.ts")).href;
 
 async function limits(mb?: string, storedLimit?: string): Promise<{ trigger: number; target: number; compactInput: number; active: string }> {
 	const dir = mkdtempSync(join(tmpdir(), "arnative-bytewall-"));

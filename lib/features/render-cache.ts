@@ -18,7 +18,7 @@
  * - When every child is known and settled, the container checks child state, then
  *   reuses its cached `lines` and `mouseLayout` without rebuilding the combined array.
  * - Attaches at the `InteractiveMode.chatContainer` instance layer (not `Container.prototype`),
- *   so it never collides with `section-headers.ts` or `ui-render-tweaks.ts` prototype
+ *   so it never collides with `headers.ts` or `ui-render-tweaks.ts` prototype
  *   patches and sits outside `tools.ts` / `timestamps.ts` render wrappers.
  */
 import {
@@ -196,7 +196,7 @@ type MarkedWrap = AnyFn & { [INSTANCE_WRAP_KEY]?: true };
 
 /**
  * Wrap an instance method without touching the prototype chain, so prototype-level
- * patches from sibling extensions (`tools.ts`, `timestamps.ts`, `section-headers.ts`,
+ * patches from sibling extensions (`tools.ts`, `timestamps.ts`, `headers.ts`,
  * `ui-render-tweaks.ts`) continue to run and reinstall cleanly across `/reload`.
  */
 function wrapInstanceMethod(

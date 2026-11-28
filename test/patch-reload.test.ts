@@ -32,7 +32,7 @@ const sites: Site[] = [
 	},
 	{
 		name: "section header addChild",
-		module: "../lib/features/section-headers.ts",
+		module: "../lib/features/headers.ts",
 		proto: () => Object.getPrototypeOf(UserMessageComponent.prototype),
 		key: "addChild",
 	},

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { resetPresetCache } from "../lib/preset-store.ts";
-import registerAutoCompact from "../lib/features/autocompact.ts";
+import registerAutoCompact from "../lib/features/auto-compact.ts";
 import registerFooter from "../lib/features/footer.ts";
 
 const theme = { fg: (_c: string, t: string) => t, bold: (t: string) => t };

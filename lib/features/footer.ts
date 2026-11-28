@@ -17,7 +17,7 @@ import { markPatched, originalOf } from "../patch.ts";
 import { estimateCost, formatTokens, loadPriceTable, TOOL_PROVIDER, type PriceTable } from "../usage-store.ts";
 import { FOOTER_COST_KEY as FOOTER_COST_CONFIG_KEY, FOOTER_PRESET_KEY as FOOTER_PRESET_CONFIG_KEY, choiceSetting, flagSetting, loadSetting } from "../preset-store.ts";
 import { formatCost } from "./usage.ts";
-import { isByteLimitedModel, wireBytesSnapshot } from "./autocompact.ts";
+import { isByteLimitedModel, wireBytesSnapshot } from "./auto-compact.ts";
 import { budgetLevelNow } from "./budget.ts";
 import { activeSpinnerGradient, activeSpinnerPreset, applySpinnerPreset, setWorkingUi, spinnerPainter } from "../spinner.ts";
 import { getRuntime } from "../runtime.ts";

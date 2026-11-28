@@ -6,7 +6,7 @@ import { screenTitle } from "../../lib/box.ts";
 import { markedLabels, ROW_DIVIDER } from "../../lib/format.ts";
 import { animationsPickerText, animationRows } from "../../lib/spinner.ts";
 import { CHATBOX_DIALOGS, CHATBOX_PRESETS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPrompt } from "../../lib/features/footer.ts";
-import { HEADER_PRESETS } from "../../lib/features/section-headers.ts";
+import { HEADER_PRESETS } from "../../lib/features/headers.ts";
 import { LIST_LEGEND_LIVE, LIST_LEGEND_MOVE, LIST_LEGEND_ROOT, ListPicker, nameRows, rowText, type ListPickerText } from "../../lib/list-picker.ts";
 import { MENU_CATEGORIES, menuRows, categoryMenus, MENU_TITLE, MENU_DESC, chatboxRows, chatboxSummary, autoCompactRows, modelHealRows, renderCacheRows, diffRows, payloadLimitRows, MENUS, arnativeCompletions, isArnativeThemeName, shouldApplyDefaultTheme, registerCommands, __test } from "../../lib/features/arnative.ts";
 
