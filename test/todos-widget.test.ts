@@ -366,3 +366,52 @@ test("holding a counter row auto-scrolls until release", async () => {
 	await new Promise((resolve) => setTimeout(resolve, 150));
 	assert.deepEqual(component.render(80), afterRelease, "releasing stops auto-scroll and keeps box open");
 });
+
+test("session_shutdown cancels the pending auto-hide timer before ctx becomes stale", async () => {
+	let stale = false;
+	const guardedCtx = {
+		mode: "tui",
+		sessionManager: { getSessionId: () => "widget-shutdown-stale-session" },
+		get ui() {
+			if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+			return ctx.ui;
+		},
+	};
+	await handlers.get("session_start")!({ reason: "new" }, guardedCtx);
+	await registered!.execute("call-4", { action: "create", subject: "Finish before reload" }, undefined, undefined, guardedCtx);
+	await registered!.execute("call-5", { action: "update", id: 1, status: "completed" }, undefined, undefined, guardedCtx);
+
+	const shutdown = handlers.get("session_shutdown");
+	assert.ok(shutdown, "todos registers a session_shutdown handler");
+	await shutdown!(undefined, guardedCtx);
+	stale = true;
+
+	// Wait past PI_ARNATIVE_TODO_HIDE_MS (20ms): the canceled timer must never touch stale ctx.ui.
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.equal(getRuntime().todosWidget && (getRuntime().todosWidget as { hideTimer?: unknown }).hideTimer, undefined, "hideTimer stays cleared after shutdown");
+});
+
+test("session_start replaces a pending auto-hide timer instead of firing on a stale ctx", async () => {
+	let oldStale = false;
+	const oldCtx = {
+		mode: "tui",
+		sessionManager: { getSessionId: () => "widget-reload-stale-session" },
+		get ui() {
+			if (oldStale) throw new Error("This extension ctx is stale after session replacement or reload.");
+			return ctx.ui;
+		},
+	};
+	const newCtx = { ...ctx, sessionManager: { getSessionId: () => "widget-reload-stale-session" } };
+
+	await handlers.get("session_start")!({ reason: "new" }, oldCtx);
+	await registered!.execute("call-6", { action: "create", subject: "Finish before reload" }, undefined, undefined, oldCtx);
+	await registered!.execute("call-7", { action: "update", id: 1, status: "completed" }, undefined, undefined, oldCtx);
+
+	// Reload straight into a fresh ctx while the completed list's timer is still pending.
+	await handlers.get("session_start")!({ reason: "reload" }, newCtx);
+	oldStale = true;
+
+	// Wait past PI_ARNATIVE_TODO_HIDE_MS (20ms): the rescheduled timer uses newCtx and hides cleanly.
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	assert.equal(widgets.get("arnative-todos"), undefined, "the fresh session hides the finished box without touching oldCtx");
+});
