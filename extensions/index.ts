@@ -9,12 +9,12 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerLifecycleFeatures } from "../lib/runtime.ts";
 import registerArnative from "../lib/features/arnative.ts";
-import registerAutoCompact from "../lib/features/autocompact.ts";
+import registerAutoCompact from "../lib/features/auto-compact.ts";
 import registerBudget from "../lib/features/budget.ts";
 import registerFooter from "../lib/features/footer.ts";
 import registerModelHeal from "../lib/features/model-heal.ts";
 import registerRenderCache from "../lib/features/render-cache.ts";
-import registerSectionHeaders from "../lib/features/section-headers.ts";
+import registerSectionHeaders from "../lib/features/headers.ts";
 import registerTimestamps from "../lib/features/timestamps.ts";
 import registerTodos from "../lib/features/todos.ts";
 import registerTools from "../lib/features/tools.ts";

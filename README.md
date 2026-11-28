@@ -105,12 +105,12 @@ Settings from `/arnative` are saved in `~/.pi/agent/arnative/config.json`:
 | `extensions/index.ts` | Single Pi extension entry point composing all features |
 | `lib/runtime.ts` | Centralized reload-safe `RuntimeState` and single-listener lifecycle hub |
 | `lib/features/arnative.ts` | `/arnative` settings menu and live preview pickers |
-| `lib/features/section-headers.ts` | Tabbed header and resource box |
+| `lib/features/headers.ts` | Tabbed header and resource box |
 | `lib/features/footer.ts` | 3-row status grid, Minimal footer, and boxed editor |
 | `lib/features/tools.ts` | Rounded tool boxes, spinners, duration, and `[show]` / `[hide]` toggles |
 | `lib/features/todos.ts` | `todo` tool, boxed widget above editor, and `/todos` screen |
 | `lib/features/animations.ts` | Spinner preset picker and live preview |
-| `lib/features/autocompact.ts` | Smart and fixed-budget context compaction plus silent byte-wall shedding |
+| `lib/features/auto-compact.ts` | Smart and fixed-budget context compaction plus silent byte-wall shedding |
 | `lib/features/render-cache.ts` | Per-child and container transcript render cache for `chatContainer` |
 | `lib/features/budget.ts` | UTC day and rolling 30-day spend caps and footer warnings |
 | `lib/features/usage-export.ts` | Prometheus textfile metric export (`usage.prom`) |

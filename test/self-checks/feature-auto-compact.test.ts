@@ -5,11 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PAYLOAD_LIMIT_KEY, loadChoice, resetPresetCache, saveChoice } from "../../lib/preset-store.ts";
 import { setRenderCache } from "../../lib/features/render-cache.ts";
-import registerAutoCompact, { AUTO_COMPACT_CHOICES, AUTO_COMPACT_KEY, PAYLOAD_LIMIT_CONFIG_KEY, parsePayloadLimit, savedPayloadLimit, activePayloadLimit, setPayloadLimit, activeByteCeilings, smartPercent, activeAutoCompact, activeAutoCompactThreshold, setAutoCompact, freshAutoCompactState, isByteLimitedModel, isPayloadTooLargeError, jsonByteLength, autoCompactDecision, rearmAfterDip, shedMessagesForByteLimit, trimCompactionInput, wireBytesSnapshot, type ContentBlockLike, type MessageLike, __test } from "../../lib/features/autocompact.ts";
+import registerAutoCompact, { AUTO_COMPACT_CHOICES, AUTO_COMPACT_KEY, PAYLOAD_LIMIT_CONFIG_KEY, parsePayloadLimit, savedPayloadLimit, activePayloadLimit, setPayloadLimit, activeByteCeilings, smartPercent, activeAutoCompact, activeAutoCompactThreshold, setAutoCompact, freshAutoCompactState, isByteLimitedModel, isPayloadTooLargeError, jsonByteLength, autoCompactDecision, rearmAfterDip, shedMessagesForByteLimit, trimCompactionInput, wireBytesSnapshot, type ContentBlockLike, type MessageLike, __test } from "../../lib/features/auto-compact.ts";
 
 const { DEFAULT_OVERHEAD_BYTES, TRIMMED_TOOL_STUB, AUTO_COMPACT_CONFIG_KEY } = __test;
 
-test("lib/features/autocompact.ts self-check", async () => {
+test("lib/features/auto-compact.ts self-check", async () => {
 	// The real agent dir must not decide pass/fail, and the test must not touch it.
 	const fixture = mkdtempSync(join(tmpdir(), "arnative-autocompact-"));
 	process.env.PI_CODING_AGENT_DIR = fixture;

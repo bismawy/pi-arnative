@@ -29,7 +29,7 @@ import { CHATBOX_DIALOG_KEY, CHATBOX_PRESET_KEY, CHATBOX_PROMPT_KEY, EDIT_DIFF_K
 import { EDIT_DIFF_CHOICES, activeEditDiff, setEditDiff, type EditDiffMode } from "./tools.ts";
 import { CHATBOX_PRESETS, CHATBOX_PROMPTS, DEFAULT_CHATBOX_DIALOG, FOOTER_PRESETS, activeChatboxDialog, activeChatboxPreset, activeChatboxPrompt, activeFooterCost, activeFooterPreset, nextChatboxDialog, nextChatboxPrompt, setChatboxDialog, setChatboxPreset, setChatboxPrompt, setFooterCost, setFooterPreset, type ChatboxPreset } from "./footer.ts";
 import { activeBudgetDay, activeBudgetEnforce, activeBudgetMonth, openBudget } from "./budget.ts";
-import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset } from "./section-headers.ts";
+import { HEADER_PRESETS, activeHeaderPreset, setHeaderPreset } from "./headers.ts";
 import {
 	AUTO_COMPACT_CHOICES,
 	AUTO_COMPACT_KEY,
@@ -45,7 +45,7 @@ import {
 	setPayloadLimit,
 	type AutoCompactChoice,
 	type PayloadLimitPreset,
-} from "./autocompact.ts";
+} from "./auto-compact.ts";
 import { cancelManualHeal, healNow } from "./model-heal.ts";
 import { MODEL_HEAL_CHOICES, MODEL_HEAL_KEY, activeModelHeal, setModelHeal, type ModelHealChoice } from "../model-heal.ts";
 import {
@@ -397,7 +397,7 @@ export function autoCompactRows(opened: AutoCompactChoice): ListRow[] {
 }
 
 /** A plain (non-live) picker: the choice is committed by Enter, nothing previews. The
- *  trigger itself lives in `extensions/autocompact.ts` and fires on the next settle. */
+ *  trigger itself lives in `lib/features/auto-compact.ts` and fires on the next settle. */
 const openAutoCompact = (ctx: ExtensionCommandContext): Promise<boolean | void> => {
 	const opened = activeAutoCompact();
 	return openChoicePicker(ctx, {

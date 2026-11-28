@@ -1,5 +1,5 @@
 /**
- * Visual suite for extensions/section-headers.ts.
+ * Visual suite for lib/features/headers.ts.
  *
  * Moved out of the module's in-file self-check: the same assertions, but every one gets a
  * name in the `node --test` report, and 31% of the shipped file stops being test code.
@@ -35,7 +35,7 @@ import {
 	wrapCommaItems,
 	wrapPath,
 	type TabKey,
-} from "../lib/features/section-headers.ts";
+} from "../lib/features/headers.ts";
 import { setActiveTheme, stripAnsi } from "../lib/ansi.ts";
 import { capitalize, markedLabels } from "../lib/format.ts";
 import { HEADER_PRESET_KEY as HEADER_PRESET_CONFIG_KEY, loadChoice, resetPresetCache } from "../lib/preset-store.ts";
@@ -45,7 +45,7 @@ import { SHORTCUT_RELOAD } from "../lib/shortcuts.ts";
 // cross-module contract here (extensions/footer.ts registers the same key).
 const HEADER_PRESET_KEY = Symbol.for("pi-arnative.headerPreset");
 
-test("section-headers visual suite", () => {
+test("headers visual suite", () => {
 	assert(sectionNameOf("\x1b[33m[Skills]\x1b[39m\n  a, b") === "Skills", "header [Skills] detected");
 	assert(sectionNameOf("pi v0.87.1") === null, "non-section text is not detected");
 
