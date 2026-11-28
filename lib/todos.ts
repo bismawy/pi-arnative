@@ -197,18 +197,20 @@ export interface TodoWindow {
 }
 
 /**
- * The {@link LIST_ROWS} rows the expanded box shows. The window follows the in-progress task
- * and centres it, so the active work is always on screen; with no task in progress it starts
- * at the top. `top` overrides that start after a scroll; it is clamped to the list, so a click
- * past either end parks the window at the edge. `above`/`below` feed the `↑ n more` /
- * `↓ n more` rows.
+ * The {@link LIST_ROWS} rows the expanded box shows. The window centres on the in-progress task,
+ * or the first pending task when idle, or the end of the list once everything is done, so
+ * opening a long list lands on current or upcoming work instead of old completed rows. `top`
+ * overrides that start after a scroll; it is clamped to the list, so a click past either end
+ * parks the window at the edge. `above`/`below` feed the `↑ n more` / `↓ n more` rows.
  */
 export function todoWindow(state: TodoState, rows = LIST_ROWS, top: number | null = null): TodoWindow {
 	const total = state.tasks.length;
 	if (total <= rows) return { visible: state.tasks, above: 0, below: 0, start: 0 };
 	const active = state.tasks.findIndex((task) => task.status === "in_progress");
+	const pending = active === -1 ? state.tasks.findIndex((task) => task.status === "pending") : -1;
+	const anchor = active !== -1 ? active : pending !== -1 ? pending : total - 1;
 	const centre = Math.floor((rows - 1) / 2);
-	const follow = active === -1 ? 0 : Math.min(Math.max(active - centre, 0), total - rows);
+	const follow = Math.min(Math.max(anchor - centre, 0), total - rows);
 	const start = top === null ? follow : Math.min(Math.max(Math.trunc(top), 0), total - rows);
 	return { visible: state.tasks.slice(start, start + rows), above: start, below: total - start - rows, start };
 }

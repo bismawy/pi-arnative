@@ -116,6 +116,48 @@ test("the window scrolls without leaving the list", () => {
 	assert.equal(todoLayout(marked, state, false, 80).down, null, "a collapsed box has no counters");
 });
 
+test("idle lists focus on the first pending task or the latest completed tasks", () => {
+	// 50 completed, 5 pending (idle between tasks): lands at the tail so pending tasks are visible.
+	let tail = seeded(55);
+	for (let id = 1; id <= 50; id++) tail = patchTodo(tail, id, { status: "completed" })!;
+	const tailWin = todoWindow(tail, 9);
+	assert.deepEqual(
+		tailWin.visible.map((task) => task.id),
+		[47, 48, 49, 50, 51, 52, 53, 54, 55],
+		"idle tail shows recent done plus all remaining pending tasks",
+	);
+	assert.deepEqual([tailWin.above, tailWin.below], [46, 0]);
+
+	// 10 completed, 10 pending: centres on the first pending task (#11).
+	let mid = seeded(20);
+	for (let id = 1; id <= 10; id++) mid = patchTodo(mid, id, { status: "completed" })!;
+	const midWin = todoWindow(mid, 5);
+	assert.deepEqual(
+		midWin.visible.map((task) => task.id),
+		[9, 10, 11, 12, 13],
+		"idle mid-list centres on the first pending task",
+	);
+
+	// All 20 completed: lands on the most recent completed tasks, not task #1.
+	let done = seeded(20);
+	for (let id = 1; id <= 20; id++) done = patchTodo(done, id, { status: "completed" })!;
+	const doneWin = todoWindow(done, 5);
+	assert.deepEqual(
+		doneWin.visible.map((task) => task.id),
+		[16, 17, 18, 19, 20],
+		"finished list opens at the end",
+	);
+	assert.deepEqual([doneWin.above, doneWin.below], [15, 0]);
+
+	// Fresh list with all tasks pending still opens at the top.
+	const fresh = seeded(12);
+	assert.deepEqual(
+		todoWindow(fresh, 5).visible.map((task) => task.id),
+		[1, 2, 3, 4, 5],
+		"all-pending list starts at task #1",
+	);
+});
+
 test("a finished list folds to one row", () => {
 	let state = seeded(3, 2);
 	assert.equal(allDone(state), false, "a list with work left is not finished");

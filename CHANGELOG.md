@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Todos box opens on upcoming or recent tasks when idle.** `todoWindow()` now anchors on the first pending task when nothing is in progress, or the end of the list once every task is done, instead of resetting to the first completed row (`lib/todos.ts`, `test/todos.test.ts`).
+
 ## [0.17.0] - 2026-11-26
 
 ### Added
